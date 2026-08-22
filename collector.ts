@@ -194,6 +194,17 @@ export function providerOf(cmd: string[]): string | null {
   }
   return null;
 }
+// Claude/Codex retitle the terminal on idle (✅ …). Grok leaves
+// "🧠 Processing request." stuck after the turn, so title-based busy
+// is a lie. Grok's real signal is systemd-inhibit "agent turn in progress".
+export function titleLooksBusy(title: string): boolean {
+  return /Processing|🧠|⚙|⏳|…/.test(String(title || ""));
+}
+export function cmdIsTurnInhibitor(cmd: string[]): boolean {
+  const bin = cmd[0] || "";
+  if (!/(^|\/)systemd-inhibit$/.test(bin)) return false;
+  return cmd.some(a => /agent turn in progress/i.test(a));
+}
 function shortPath(p: string) { return p.startsWith(HOME) ? "~" + p.slice(HOME.length) : p; }
 
 async function liveSessions(pids: number[]) {
@@ -217,6 +228,23 @@ async function liveSessions(pids: number[]) {
       window: w ? { address: w.address, title: w.title, class: w.class, workspace: w.workspace?.id ?? null } : null,
       args: p.cmd.slice(1, 4).join(" ").slice(0, 60),
     });
+  }
+  const sessionPids = new Set(sessions.map((s: any) => s.pid as number));
+  const turnBusy = new Set<number>();
+  for (const pid of pids) {
+    if (!cmdIsTurnInhibitor(cmdByPid.get(pid) || [])) continue;
+    let q = info(pid);
+    while (q && q.pid > 1) {
+      if (sessionPids.has(q.pid)) { turnBusy.add(q.pid); break; }
+      q = info(q.ppid);
+    }
+  }
+  for (const s of sessions) {
+    const titleBusy = !!(s.window && titleLooksBusy(s.window.title));
+    // Grok's terminal title sticks on 🧠 after the turn. Trust the inhibitor.
+    s.busy = s.provider === "grok" ? turnBusy.has(s.pid) : (titleBusy || turnBusy.has(s.pid));
+    if (!s.busy && s.window && titleLooksBusy(s.window.title) && s.provider === "grok")
+      s.window = { ...s.window, title: "" };
   }
   sessions.sort((a, b) => b.startedAt - a.startedAt);
   return sessions;

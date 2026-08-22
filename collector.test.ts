@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
 const historyFixture = join(import.meta.dir, ".test-fixture");
 afterAll(() => rmSync(historyFixture, { recursive: true, force: true }));
 import { join } from "path";
-import { providerOf } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor } from "./collector.ts";
 
 const fixture = join(import.meta.dir, ".test-fixture-races");
 afterAll(() => rmSync(fixture, { recursive: true, force: true }));
@@ -21,6 +21,22 @@ describe("providerOf", () => {
   test("ignores the Ollama daemon but keeps chats", () => {
     expect(providerOf(["ollama", "serve"])).toBeNull();
     expect(providerOf(["/usr/bin/ollama", "run", "llama3"])).toBe("ollama");
+  });
+});
+
+describe("busy detection", () => {
+  test("titleLooksBusy matches processing titles and not idle checkmarks", () => {
+    expect(titleLooksBusy("🧠 Processing request.")).toBe(true);
+    expect(titleLooksBusy("⚙️ Processing request.")).toBe(true);
+    expect(titleLooksBusy("✅ All five PRs checked")).toBe(false);
+    expect(titleLooksBusy("wallpaper.Larry")).toBe(false);
+  });
+
+  test("cmdIsTurnInhibitor matches Grok's idle-inhibit, not other inhibitors", () => {
+    expect(cmdIsTurnInhibitor(["systemd-inhibit", "--what=idle", "--who=grok", "--why=agent turn in progress", "sleep", "infinity"])).toBe(true);
+    expect(cmdIsTurnInhibitor(["/usr/bin/systemd-inhibit", "--what=idle", "--who=grok", "--why=agent turn in progress", "sleep", "infinity"])).toBe(true);
+    expect(cmdIsTurnInhibitor(["systemd-inhibit", "--what=sleep", "--who=Omarchy", "--why=Lock screen before suspend"])).toBe(false);
+    expect(cmdIsTurnInhibitor(["grok", "--yolo"])).toBe(false);
   });
 });
 
