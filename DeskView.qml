@@ -15,11 +15,11 @@ Item {
   // so we leave a top strip free instead of drawing under the bar.
   property int topInset: Math.round(40 * Style.fontScale)
 
-  readonly property var snap: model.snap || ({})
+  readonly property var snap: (model && model.snap) ? model.snap : ({})
   readonly property var machine: snap.machine || ({})
   readonly property var ai: snap.ai || ({})
   readonly property var sessions: ai.sessions || []
-  readonly property var usage: ai.usage || ({})
+  readonly property var usage: (ai && ai.usage) ? ai.usage : ({})
   readonly property int pad: Style.spacing.xl
   readonly property int gap: Style.spacing.lg
   readonly property int radius: Math.max(Style.cornerRadius, 0)
@@ -374,11 +374,12 @@ Item {
               tone: view.model.green
             }
             RowLayout {
+              id: provRow
               Layout.fillWidth: true
               readonly property var ps: view.ai.providers || ({})
-              Tag { visible: ps.claude && ps.claude.present; text: "claude " + (ps.claude ? ps.claude.prompts : 0) + "p"; tone: view.model.providerColor("claude") }
-              Tag { visible: ps.codex && ps.codex.present; text: "codex " + (ps.codex ? ps.codex.threadCount : 0) + " threads"; tone: view.model.providerColor("codex") }
-              Tag { visible: ps.grok && ps.grok.present; text: "grok " + (ps.grok ? ps.grok.sessions : 0) + " sess"; tone: view.model.providerColor("grok") }
+              Tag { visible: !!(provRow.ps.claude && provRow.ps.claude.present); text: "claude " + (provRow.ps.claude ? provRow.ps.claude.prompts : 0) + "p"; tone: view.model.providerColor("claude") }
+              Tag { visible: !!(provRow.ps.codex && provRow.ps.codex.present); text: "codex " + (provRow.ps.codex ? provRow.ps.codex.threadCount : 0) + " threads"; tone: view.model.providerColor("codex") }
+              Tag { visible: !!(provRow.ps.grok && provRow.ps.grok.present); text: "grok " + (provRow.ps.grok ? provRow.ps.grok.sessions : 0) + " sess"; tone: view.model.providerColor("grok") }
               Item { Layout.fillWidth: true }
             }
           }
