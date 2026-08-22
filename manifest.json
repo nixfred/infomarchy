@@ -1,0 +1,18 @@
+{
+  "schemaVersion": 1,
+  "id": "nixfred.desk",
+  "name": "Desk",
+  "version": "0.1.0",
+  "author": "Fred Nix & Larry",
+  "license": "MIT",
+  "description": "Replaces the wallpaper with a live, clickable AI control room: running Claude Code / Codex / Grok / Gemini / opencode / Ollama sessions, a 7-day activity heatmap, subscription usage, recent prompts, and a machine-stats corner (CPU, RAM, disk, Wi-Fi speed, Cloudflare latency, GPU, battery). Theme-driven; SUPER summon via overlay.",
+  "kinds": ["service", "overlay"],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Desk.qml",
+    "overlay": "Overlay.qml"
+  },
+  "omarchy": {
+    "clonedFrom": "omarchy.background"
+  }
+}

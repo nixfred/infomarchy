@@ -1,0 +1,442 @@
+import QtQuick
+import QtQuick.Layouts
+import Quickshell
+import Quickshell.Io
+import qs.Commons
+
+// The dashboard itself. Hosted by Desk.qml (background layer) and Overlay.qml
+// (summoned fullscreen). Everything is sized from Style.* and colored from the
+// active theme via DeskModel, so it follows whatever Omarchy theme is set.
+Item {
+  id: view
+  required property DeskModel model
+  property bool interactive: true
+  // Room for the bar. The background layer ignores exclusion zones on purpose,
+  // so we leave a top strip free instead of drawing under the bar.
+  property int topInset: Math.round(40 * Style.fontScale)
+
+  readonly property var snap: model.snap || ({})
+  readonly property var machine: snap.machine || ({})
+  readonly property var ai: snap.ai || ({})
+  readonly property var sessions: ai.sessions || []
+  readonly property var usage: ai.usage || ({})
+  readonly property int pad: Style.spacing.xl
+  readonly property int gap: Style.spacing.lg
+  readonly property int radius: Math.max(Style.cornerRadius, 0)
+  readonly property color cardBg: Util.alpha(model.themeBackground, 0.62)
+  readonly property color cardBorder: Util.alpha(model.themeForeground, 0.14)
+  readonly property color textDim: Util.alpha(model.themeForeground, 0.62)
+  readonly property color textFaint: Util.alpha(model.themeForeground, 0.38)
+  readonly property string mono: Style.resolvedFontFamily
+
+  // ---- reusable pieces -------------------------------------------------------
+  component Card: Rectangle {
+    id: card
+    property string title: ""
+    property string hint: ""
+    default property alias content: body.data
+    color: view.cardBg
+    border.color: view.cardBorder
+    border.width: 1
+    radius: view.radius
+    implicitHeight: col.implicitHeight + view.pad * 2
+    // Swallow clicks on card chrome so the overlay's click-outside-to-close
+    // only fires on the real backdrop.
+    MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: function(m) { m.accepted = true } }
+    ColumnLayout {
+      id: col
+      anchors { fill: parent; margins: view.pad }
+      spacing: Style.spacing.md
+      RowLayout {
+        Layout.fillWidth: true
+        visible: card.title !== ""
+        Text { text: card.title; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; font.letterSpacing: 1.5; font.bold: true }
+        Item { Layout.fillWidth: true }
+        Text { text: card.hint; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+      }
+      Item { id: body; Layout.fillWidth: true; Layout.fillHeight: true; implicitHeight: childrenRect.height }
+    }
+  }
+
+  component Meter: Item {
+    property string label: ""
+    property string value: ""
+    property real fraction: 0
+    property color tone: Color.accent
+    implicitHeight: mrow.implicitHeight + bar.height + Style.spacing.xs
+    width: parent ? parent.width : 200
+    RowLayout {
+      id: mrow
+      width: parent.width
+      Text { text: label; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+      Item { Layout.fillWidth: true }
+      Text { text: value; color: model.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+    }
+    Rectangle {
+      id: bar
+      anchors { top: mrow.bottom; topMargin: Style.spacing.xs; left: parent.left; right: parent.right }
+      height: Math.max(3, Math.round(4 * Style.fontScale))
+      radius: height / 2
+      color: Util.alpha(model.themeForeground, 0.10)
+      Rectangle {
+        width: parent.width * Math.max(0, Math.min(1, fraction))
+        height: parent.height; radius: parent.radius; color: tone
+        Behavior on width { NumberAnimation { duration: 400; easing.type: Easing.OutCubic } }
+      }
+    }
+  }
+
+  component Tag: Rectangle {
+    property string text: ""
+    property color tone: Color.accent
+    color: Util.alpha(tone, 0.18)
+    border.color: Util.alpha(tone, 0.5)
+    border.width: 1
+    radius: view.radius
+    implicitWidth: tl.implicitWidth + Style.spacing.md * 2
+    implicitHeight: tl.implicitHeight + Style.spacing.xs * 2
+    Text { id: tl; anchors.centerIn: parent; text: parent.text; color: tone; font.family: view.mono; font.pixelSize: Style.font.caption; font.bold: true }
+  }
+
+  // ---- layout ----------------------------------------------------------------
+  Item {
+    anchors { fill: parent; topMargin: view.topInset + view.gap; leftMargin: view.gap * 2; rightMargin: view.gap * 2; bottomMargin: view.gap * 2 }
+
+    RowLayout {
+      anchors.fill: parent
+      spacing: view.gap
+
+      // LEFT COLUMN: sessions + heatmap + recent
+      ColumnLayout {
+        Layout.fillWidth: true
+        Layout.fillHeight: true
+        Layout.preferredWidth: 3
+        spacing: view.gap
+
+        // ---- live sessions ----
+        Card {
+          Layout.fillWidth: true
+          title: "LIVE AI SESSIONS"
+          hint: view.sessions.length + " running · " + (view.snap.host || "") + (view.model.error ? " · ⚠ " + view.model.error : "")
+          Flow {
+            width: parent.width
+            spacing: Style.spacing.md
+            Repeater {
+              model: view.sessions
+              delegate: Rectangle {
+                id: sc
+                required property var modelData
+                readonly property color tone: view.model.providerColor(modelData.provider)
+                readonly property bool busy: modelData.window && /Processing|🧠|⚙|⏳|…/.test(String(modelData.window.title || ""))
+                width: Math.round(250 * Style.fontScale); height: scol.implicitHeight + Style.spacing.lg * 2
+                color: hover.containsMouse ? Util.alpha(tone, 0.16) : Util.alpha(tone, 0.08)
+                border.color: Util.alpha(tone, hover.containsMouse ? 0.9 : 0.45); border.width: 1; radius: view.radius
+                ColumnLayout {
+                  id: scol
+                  anchors { fill: parent; margins: Style.spacing.lg }
+                  spacing: Style.spacing.xs
+                  RowLayout {
+                    Layout.fillWidth: true
+                    Rectangle { id: dot; width: 8; height: 8; radius: 4; color: sc.tone
+                      SequentialAnimation { running: sc.busy; loops: Animation.Infinite
+                        onRunningChanged: if (!running) dot.opacity = 1
+                        NumberAnimation { target: dot; property: "opacity"; from: 1; to: 0.2; duration: 700 }
+                        NumberAnimation { target: dot; property: "opacity"; from: 0.2; to: 1; duration: 700 } } }
+                    Text { text: view.model.providerLabel(sc.modelData.provider); color: sc.tone; font.family: view.mono; font.bold: true; font.pixelSize: Style.font.body }
+                    Item { Layout.fillWidth: true }
+                    Text { text: view.model.dur(sc.modelData.uptimeSec); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+                  }
+                  Text { Layout.fillWidth: true; text: sc.modelData.project || "/"; color: view.model.themeForeground; font.family: view.mono; font.pixelSize: Style.font.subtitle; elide: Text.ElideMiddle }
+                  Text { Layout.fillWidth: true; text: sc.modelData.cwd || ""; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideMiddle }
+                  Text { Layout.fillWidth: true; visible: !!sc.modelData.window; text: sc.modelData.window ? (sc.modelData.window.title || "") : ""; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+                  Text { Layout.fillWidth: true; text: "pid " + sc.modelData.pid + (sc.modelData.window ? "  ·  ws " + sc.modelData.window.workspace : "  ·  no window"); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+                }
+                MouseArea {
+                  id: hover; anchors.fill: parent; hoverEnabled: true; enabled: view.interactive
+                  cursorShape: sc.modelData.window ? Qt.PointingHandCursor : Qt.ArrowCursor
+                  acceptedButtons: Qt.LeftButton
+                  onClicked: if (sc.modelData.window) Quickshell.execDetached(["hyprctl", "dispatch", "focuswindow", "address:" + sc.modelData.window.address])
+                }
+              }
+            }
+            Text { visible: view.sessions.length === 0; text: view.model.ready ? "no agents running — go start something" : "collecting…"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.body }
+          }
+        }
+
+        // ---- heatmap ----
+        Card {
+          Layout.fillWidth: true
+          title: "ACTIVITY · LAST 7 DAYS"
+          hint: {
+            var c = view.ai.counts || {}; var parts = []
+            for (var k in c) parts.push(view.model.providerLabel(k) + " " + c[k].today + "/" + c[k].week)
+            return parts.length ? "today/week · " + parts.join(" · ") : ""
+          }
+          Item {
+            width: parent.width
+            implicitHeight: heat.height + Style.spacing.md + legend.implicitHeight
+            Canvas {
+              id: heat
+              width: parent.width
+              height: Math.round(7 * 16 * Style.fontScale)
+              property var cells: (view.ai.heatmap || {}).cells || []
+              property real startTs: (view.ai.heatmap || {}).start || 0
+              property int hoverIdx: -1
+              onCellsChanged: requestPaint()
+              Connections { target: view.model; function onGreenChanged() { heat.requestPaint() } function onThemeForegroundChanged() { heat.requestPaint() } }
+              onPaint: {
+                var ctx = getContext("2d"); ctx.reset()
+                var labelW = Math.round(34 * Style.fontScale)
+                var cw = (width - labelW) / 24, ch = height / 7
+                var maxN = 1
+                for (var i = 0; i < cells.length; i++) if (cells[i][0] > maxN) maxN = cells[i][0]
+                ctx.font = Style.font.caption + "px " + view.mono
+                ctx.textBaseline = "middle"
+                var days = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
+                for (var d = 0; d < 7; d++) {
+                  var dt = new Date(startTs + d * 86400000)
+                  ctx.fillStyle = Qt.rgba(view.textFaint.r, view.textFaint.g, view.textFaint.b, view.textFaint.a)
+                  ctx.fillText(days[dt.getDay()], 0, d * ch + ch / 2)
+                  for (var h = 0; h < 24; h++) {
+                    var idx = d * 24 + h
+                    var c = cells[idx] || [0, {}]
+                    var n = c[0], x = labelW + h * cw, y = d * ch
+                    var base = view.model.themeForeground
+                    ctx.fillStyle = Qt.rgba(base.r, base.g, base.b, 0.05)
+                    ctx.fillRect(x + 1, y + 1, cw - 2, ch - 2)
+                    if (n > 0) {
+                      // dominant provider colors the cell; intensity = count
+                      var best = "", bn = 0
+                      for (var k in c[1]) if (c[1][k] > bn) { bn = c[1][k]; best = k }
+                      var col = view.model.providerColor(best)
+                      var a = 0.25 + 0.75 * Math.min(1, n / maxN)
+                      ctx.fillStyle = Qt.rgba(col.r, col.g, col.b, a)
+                      ctx.fillRect(x + 1, y + 1, cw - 2, ch - 2)
+                    }
+                    if (idx === hoverIdx) { ctx.strokeStyle = Qt.rgba(base.r, base.g, base.b, 0.9); ctx.lineWidth = 1; ctx.strokeRect(x + 0.5, y + 0.5, cw - 1, ch - 1) }
+                  }
+                }
+                // "now" marker
+                var nowD = new Date(), nd = Math.floor((nowD.getTime() - startTs) / 86400000)
+                if (nd >= 0 && nd < 7) {
+                  var nx = labelW + (nowD.getHours() + nowD.getMinutes() / 60) * cw
+                  ctx.strokeStyle = Qt.rgba(view.model.red.r, view.model.red.g, view.model.red.b, 0.8)
+                  ctx.lineWidth = 1; ctx.beginPath(); ctx.moveTo(nx, nd * ch); ctx.lineTo(nx, nd * ch + ch); ctx.stroke()
+                }
+              }
+              MouseArea {
+                anchors.fill: parent; hoverEnabled: true; enabled: view.interactive
+                onPositionChanged: function(m) {
+                  var labelW = Math.round(34 * Style.fontScale)
+                  var cw = (heat.width - labelW) / 24, ch = heat.height / 7
+                  var h = Math.floor((m.x - labelW) / cw), d = Math.floor(m.y / ch)
+                  heat.hoverIdx = (h >= 0 && h < 24 && d >= 0 && d < 7) ? d * 24 + h : -1
+                  heat.requestPaint()
+                }
+                onExited: { heat.hoverIdx = -1; heat.requestPaint() }
+              }
+            }
+            RowLayout {
+              id: legend
+              anchors { top: heat.bottom; topMargin: Style.spacing.md; left: parent.left; right: parent.right }
+              spacing: Style.spacing.lg
+              Repeater {
+                model: ["claude", "codex", "grok", "gemini", "ollama"]
+                delegate: RowLayout { required property string modelData; spacing: Style.spacing.xs
+                  Rectangle { width: 8; height: 8; radius: 2; color: view.model.providerColor(modelData) }
+                  Text { text: view.model.providerLabel(modelData); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption } }
+              }
+              Item { Layout.fillWidth: true }
+              Text {
+                text: {
+                  if (heat.hoverIdx < 0) return "hover a cell · red tick = now"
+                  var c = heat.cells[heat.hoverIdx] || [0, {}]
+                  var d = Math.floor(heat.hoverIdx / 24), h = heat.hoverIdx % 24
+                  var dt = new Date(heat.startTs + d * 86400000)
+                  var parts = []; for (var k in c[1]) parts.push(view.model.providerLabel(k) + " " + c[1][k])
+                  return Qt.formatDate(dt, "ddd d MMM") + " " + (h < 10 ? "0" : "") + h + ":00 · " + c[0] + " prompts" + (parts.length ? " (" + parts.join(", ") + ")" : "")
+                }
+                color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption
+              }
+            }
+          }
+        }
+
+        // ---- recent prompts / task history ----
+        Card {
+          Layout.fillWidth: true
+          Layout.fillHeight: true
+          title: "RECENT TASKS · WHAT GOT ASKED"
+          hint: "newest first"
+          clip: true
+          ListView {
+            id: recentList
+            width: parent.width
+            height: parent.height > 0 ? parent.height : 300
+            model: view.ai.recent || []
+            spacing: Style.spacing.xs
+            clip: true
+            interactive: view.interactive
+            delegate: Item {
+              id: ri
+              required property var modelData
+              width: recentList.width
+              height: rrow.implicitHeight + Style.spacing.sm
+              RowLayout {
+                id: rrow; width: parent.width; spacing: Style.spacing.md
+                Text { text: view.model.ago(ri.modelData.ts); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; Layout.preferredWidth: Math.round(28 * Style.fontScale); horizontalAlignment: Text.AlignRight }
+                Tag { text: view.model.providerLabel(ri.modelData.provider); tone: view.model.providerColor(ri.modelData.provider) }
+                Text { text: (ri.modelData.project || "").replace(/^.*\//, "") ; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; Layout.preferredWidth: Math.round(110 * Style.fontScale); elide: Text.ElideLeft }
+                Text { Layout.fillWidth: true; text: ri.modelData.text || ""; color: view.model.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight; maximumLineCount: 1 }
+              }
+            }
+          }
+        }
+      }
+
+      // RIGHT COLUMN: usage + local AI + machine corner
+      ColumnLayout {
+        Layout.fillHeight: true
+        Layout.preferredWidth: Math.round(330 * Style.fontScale)
+        Layout.maximumWidth: Math.round(380 * Style.fontScale)
+        Layout.minimumWidth: Math.round(290 * Style.fontScale)
+        spacing: view.gap
+
+        // ---- subscription usage (from omarchy.agents cache when present) ----
+        Card {
+          Layout.fillWidth: true
+          title: "USAGE & LIMITS"
+          hint: {
+            var keys = Object.keys(view.usage); return keys.length ? "via omarchy agents" : "enable the Agents bar widget"
+          }
+          ColumnLayout {
+            width: parent.width
+            spacing: Style.spacing.md
+            Repeater {
+              model: Object.keys(view.usage).filter(function(k) { return view.usage[k] && view.usage[k].ready !== false })
+              delegate: ColumnLayout {
+                id: up
+                required property string modelData
+                readonly property var u: view.usage[modelData] || ({})
+                readonly property color tone: view.model.providerColor(modelData)
+                Layout.fillWidth: true
+                spacing: Style.spacing.xs
+                RowLayout {
+                  Layout.fillWidth: true
+                  Text { text: up.u.name || up.modelData; color: up.tone; font.family: view.mono; font.bold: true; font.pixelSize: Style.font.body }
+                  Text { text: up.u.tierLabel || ""; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+                  Item { Layout.fillWidth: true }
+                  Text { text: "today " + (up.u.todayPrompts || 0) + "p · " + view.model.tokens(up.u.todayTotalTokens) + " tok"; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
+                }
+                Repeater {
+                  model: up.u.limits || []
+                  delegate: Meter {
+                    required property var modelData
+                    Layout.fillWidth: true
+                    label: modelData.label || modelData.title || ""
+                    value: Math.round((modelData.percent || 0) * 100) + "%" + (modelData.resetsAt ? "  ↻ " + view.model.ago(Date.parse(modelData.resetsAt)).replace(/^/, "in ") : "")
+                    fraction: modelData.percent || 0
+                    tone: (modelData.percent || 0) > 0.85 ? view.model.red : (modelData.percent || 0) > 0.6 ? view.model.yellow : up.tone
+                  }
+                }
+              }
+            }
+            Text { visible: Object.keys(view.usage).length === 0; text: "no usage cache yet"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+          }
+        }
+
+        // ---- local AI ----
+        Card {
+          Layout.fillWidth: true
+          title: "LOCAL AI"
+          readonly property var ol: (view.ai.providers || {}).ollama || ({})
+          hint: ol.up ? "ollama up · " + (ol.modelCount || 0) + " models" : "ollama down"
+          ColumnLayout {
+            width: parent.width
+            spacing: Style.spacing.sm
+            Repeater {
+              model: ((view.ai.providers || {}).ollama || {}).loaded || []
+              delegate: RowLayout {
+                required property var modelData
+                Layout.fillWidth: true
+                Rectangle { width: 8; height: 8; radius: 4; color: view.model.green }
+                Text { text: modelData.name; color: view.model.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; Layout.fillWidth: true; elide: Text.ElideRight }
+                Text { text: "vram " + view.model.bytes(modelData.vram); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
+              }
+            }
+            Text { visible: !((((view.ai.providers || {}).ollama || {}).loaded || []).length); text: "no model loaded"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+            Meter {
+              visible: !!view.machine.gpu
+              Layout.fillWidth: true
+              label: view.machine.gpu ? "GPU " + String(view.machine.gpu.name).replace(/NVIDIA |GeForce |Laptop GPU/g, "") : "GPU"
+              value: view.machine.gpu ? view.machine.gpu.util + "% · " + view.model.bytes(view.machine.gpu.memUsed) + "/" + view.model.bytes(view.machine.gpu.memTotal) + " · " + view.machine.gpu.temp + "°" : ""
+              fraction: view.machine.gpu ? view.machine.gpu.memUsed / Math.max(1, view.machine.gpu.memTotal) : 0
+              tone: view.model.green
+            }
+            RowLayout {
+              Layout.fillWidth: true
+              readonly property var ps: view.ai.providers || ({})
+              Tag { visible: ps.claude && ps.claude.present; text: "claude " + (ps.claude ? ps.claude.prompts : 0) + "p"; tone: view.model.providerColor("claude") }
+              Tag { visible: ps.codex && ps.codex.present; text: "codex " + (ps.codex ? ps.codex.threadCount : 0) + " threads"; tone: view.model.providerColor("codex") }
+              Tag { visible: ps.grok && ps.grok.present; text: "grok " + (ps.grok ? ps.grok.sessions : 0) + " sess"; tone: view.model.providerColor("grok") }
+              Item { Layout.fillWidth: true }
+            }
+          }
+        }
+
+        Item { Layout.fillHeight: true }
+
+        // ---- machine corner (the boring stats) ----
+        Card {
+          Layout.fillWidth: true
+          title: "MACHINE"
+          hint: (view.snap.user ? view.snap.user + "@" : "") + (view.snap.host || "") + " · up " + view.model.dur(view.machine.uptime)
+          readonly property var net: view.machine.net || ({})
+          readonly property var mem: view.machine.mem || ({})
+          readonly property var cpu: view.machine.cpu || ({})
+          readonly property var ping: view.machine.ping || ({})
+          readonly property var disks: view.machine.disks || []
+          readonly property var bat: view.machine.battery
+          id: mc
+          ColumnLayout {
+            width: parent.width
+            spacing: Style.spacing.md
+            Meter { Layout.fillWidth: true; label: "CPU"; value: view.model.pct(mc.cpu.pct) + "  load " + ((mc.cpu.load || [0])[0] || 0).toFixed(2) + (view.machine.temp ? "  " + Math.round(view.machine.temp) + "°" : ""); fraction: (mc.cpu.pct || 0) / 100; tone: (mc.cpu.pct || 0) > 85 ? view.model.red : view.model.blue }
+            Meter { Layout.fillWidth: true; label: "RAM"; value: view.model.bytes(mc.mem.used) + " / " + view.model.bytes(mc.mem.total) + "  " + view.model.pct(mc.mem.pct); fraction: (mc.mem.pct || 0) / 100; tone: (mc.mem.pct || 0) > 90 ? view.model.red : view.model.green }
+            Repeater {
+              model: mc.disks
+              delegate: Meter { required property var modelData; Layout.fillWidth: true; label: "DISK " + modelData.mount; value: view.model.bytes(modelData.used) + " / " + view.model.bytes(modelData.size) + "  " + view.model.pct(modelData.pct); fraction: (modelData.pct || 0) / 100; tone: (modelData.pct || 0) > 90 ? view.model.red : view.model.yellow }
+            }
+            Meter {
+              Layout.fillWidth: true
+              label: mc.net.wireless ? "WIFI " + (mc.net.ssid || "") : "NET " + (mc.net.dev || "—")
+              value: (mc.net.signal !== null && mc.net.signal !== undefined ? mc.net.signal + " dBm · " : "") + (mc.net.addr || "")
+              // -30 dBm great … -90 dBm dead
+              fraction: mc.net.signal !== null && mc.net.signal !== undefined ? Math.max(0, Math.min(1, (Number(mc.net.signal) + 90) / 60)) : (mc.net.dev ? 1 : 0)
+              tone: mc.net.signal !== null && mc.net.signal !== undefined && Number(mc.net.signal) < -75 ? view.model.yellow : view.model.green
+            }
+            RowLayout {
+              Layout.fillWidth: true
+              spacing: Style.spacing.lg
+              Text { text: "↓ " + view.model.rate(mc.net.rxRate); color: view.model.green; font.family: view.mono; font.pixelSize: Style.font.subtitle; font.bold: true }
+              Text { text: "↑ " + view.model.rate(mc.net.txRate); color: view.model.green; font.family: view.mono; font.pixelSize: Style.font.subtitle; font.bold: true }
+              Item { Layout.fillWidth: true }
+              Text {
+                text: "⇄ " + (mc.ping.ok ? mc.ping.ms.toFixed(0) + " ms" : "timeout") + " cf"
+                color: !mc.ping.ok ? view.model.red : mc.ping.ms > 80 ? view.model.yellow : view.model.green
+                font.family: view.mono; font.pixelSize: Style.font.subtitle; font.bold: true
+              }
+            }
+            RowLayout {
+              Layout.fillWidth: true
+              visible: !!mc.bat
+              Text { text: "BAT"; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+              Item { Layout.fillWidth: true }
+              Text { text: mc.bat ? mc.bat.pct + "% · " + mc.bat.status : ""; color: mc.bat && mc.bat.pct < 20 && mc.bat.status !== "Charging" ? view.model.red : view.model.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+            }
+          }
+        }
+      }
+    }
+  }
+}
