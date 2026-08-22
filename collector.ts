@@ -25,7 +25,6 @@ const MIN_RATE_DT = 1;
 function read(p: string): string | null { try { return readFileSync(p, "utf8"); } catch { return null; } }
 function readJson(p: string): any { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; } }
 function ls(p: string): string[] { try { return readdirSync(p); } catch { return []; } }
-function mtime(p: string): number { try { return statSync(p).mtimeMs; } catch { return 0; } }
 async function run(cmd: string[], timeoutMs = 1500): Promise<string> {
   try {
     const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore" });
@@ -224,7 +223,15 @@ async function liveSessions(pids: number[]) {
 
 // ---------------------------------------------------------------- AI history
 const DAY = 86400000;
-function dayKey(ts: number) { const d = new Date(ts); return d.toISOString().slice(0, 10); }
+function safePrompt(value: unknown): string {
+  return String(value || "")
+    // Common token formats. Keep a small prefix so the redaction is still recognizable.
+    .replace(/\b(sk-(?:proj-|ant-)?|gh[opusr]_)[A-Za-z0-9_-]{12,}\b/gi, "$1[redacted]")
+    .replace(/\b(ntn_)[A-Za-z0-9_-]{12,}\b/gi, "$1[redacted]")
+    // Credentials pasted as assignments or natural-language "token/key: value" pairs.
+    .replace(/\b(api[_ -]?key|access[_ -]?token|auth[_ -]?token|password|passwd|secret)\b(\s*(?:is|=|:)\s*)["']?[^\s"']{8,}/gi, "$1$2[redacted]")
+    .slice(0, 140);
+}
 function heatmapInit() {
   // 7 days x 24 hours, local time, oldest first; each cell {total, byProvider}
   const cells: any[] = [];
@@ -255,7 +262,7 @@ function claudeHistory() {
     try {
       const e = JSON.parse(l); const ts = +e.timestamp; if (!ts) continue;
       bump(ts, "claude"); cnt("claude", ts);
-      recent.push({ provider: "claude", ts, project: shortPath(e.project || ""), text: String(e.display || "").slice(0, 140), session: e.sessionId });
+      recent.push({ provider: "claude", ts, project: shortPath(e.project || ""), text: safePrompt(e.display), session: e.sessionId });
     } catch {}
   }
   return { present: true, prompts: lines.length };
@@ -268,7 +275,7 @@ function codexHistory() {
   for (const l of hist.split("\n").filter(Boolean)) {
     try { const e = JSON.parse(l); const ts = (+e.ts || 0) * 1000; if (!ts) continue; prompts++;
       bump(ts, "codex"); cnt("codex", ts);
-      recent.push({ provider: "codex", ts, project: "", text: String(e.text || "").slice(0, 140), session: e.session_id });
+      recent.push({ provider: "codex", ts, project: "", text: safePrompt(e.text), session: e.session_id });
     } catch {}
   }
   const threads: any[] = [];
@@ -282,18 +289,24 @@ function grokHistory() {
   const base = join(HOME, ".grok");
   if (!existsSync(base)) return { present: false };
   const active = readJson(join(base, "active_sessions.json")) || [];
-  let sessions = 0;
+  const sessionIds = new Set<string>();
   for (const dir of ls(join(base, "sessions"))) {
     const full = join(base, "sessions", dir);
     try { if (!statSync(full).isDirectory()) continue; } catch { continue; }
     const project = shortPath(decodeURIComponent(dir));
-    for (const f of ls(full)) {
-      const ts = mtime(join(full, f)); if (!ts) continue; sessions++;
-      bump(ts, "grok"); cnt("grok", ts);
-      recent.push({ provider: "grok", ts, project, text: "session " + f.replace(/\.[^.]+$/, "").slice(0, 24), session: f });
+    const history = read(join(full, "prompt_history.jsonl")) || "";
+    for (const l of history.split("\n").filter(Boolean)) {
+      try {
+        const e = JSON.parse(l), ts = Date.parse(e.timestamp);
+        if (!Number.isFinite(ts)) continue;
+        const session = String(e.session_id || "");
+        if (session) sessionIds.add(session);
+        bump(ts, "grok"); cnt("grok", ts);
+        recent.push({ provider: "grok", ts, project, text: safePrompt(e.prompt), session });
+      } catch {}
     }
   }
-  return { present: true, sessions, active: active.map((a: any) => ({ pid: a.pid, cwd: shortPath(a.cwd || ""), openedAt: Date.parse(a.opened_at) })) };
+  return { present: true, sessions: sessionIds.size, active: active.map((a: any) => ({ pid: a.pid, cwd: shortPath(a.cwd || ""), openedAt: Date.parse(a.opened_at) })) };
 }
 async function ollamaState() {
   const host = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
