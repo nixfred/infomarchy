@@ -110,11 +110,21 @@ Scope {
         Behavior on opacity { NumberAnimation { duration: 300 } }
       }
 
-      // Right-click on empty desk = wallpaper switcher, like stock Omarchy.
+      // Empty-desk gestures: left double-click = wallpaper switcher (stock
+      // omarchy.background behavior, restored 2026-08-22), right single-click =
+      // wallpaper switcher (Infomarchy addition). Stock's right-double-click
+      // theme switcher is intentionally not mirrored: it would race the
+      // right single-click and open two menus.
       MouseArea {
         anchors.fill: parent
-        acceptedButtons: Qt.RightButton
-        onClicked: if (!bgSwitchProc.running) bgSwitchProc.running = true
+        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        onClicked: function(mouse) {
+          if (mouse.button === Qt.RightButton && !bgSwitchProc.running) bgSwitchProc.running = true
+        }
+        onDoubleClicked: function(mouse) {
+          if (mouse.button === Qt.LeftButton && !bgSwitchProc.running) bgSwitchProc.running = true
+          mouse.accepted = true
+        }
       }
 
       InfoView {
