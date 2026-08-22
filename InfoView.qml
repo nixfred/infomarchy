@@ -127,7 +127,9 @@ Item {
                 id: sc
                 required property var modelData
                 readonly property color tone: view.desk.providerColor(modelData.provider)
-                readonly property bool busy: modelData.window && /Processing|🧠|⚙|⏳|…/.test(String(modelData.window.title || ""))
+                // Prefer collector.busy (Grok's title sticks on 🧠 after the turn).
+                // Fall back to the title regex for snapshots from an older collector.
+                readonly property bool busy: modelData.busy === true || (modelData.busy !== false && modelData.window && /Processing|🧠|⚙|⏳|…/.test(String(modelData.window.title || "")))
                 width: Math.round(250 * Style.fontScale); height: scol.implicitHeight + Style.spacing.lg * 2
                 color: hover.containsMouse ? Util.alpha(tone, 0.16) : Util.alpha(tone, 0.08)
                 border.color: Util.alpha(tone, hover.containsMouse ? 0.9 : 0.45); border.width: 1; radius: view.radius
@@ -148,7 +150,7 @@ Item {
                   }
                   Text { Layout.fillWidth: true; text: sc.modelData.project || "/"; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.subtitle; elide: Text.ElideMiddle }
                   Text { Layout.fillWidth: true; text: sc.modelData.cwd || ""; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideMiddle }
-                  Text { Layout.fillWidth: true; visible: !!sc.modelData.window; text: sc.modelData.window ? (sc.modelData.window.title || "") : ""; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+                  Text { Layout.fillWidth: true; visible: !!(sc.modelData.window && sc.modelData.window.title); text: sc.modelData.window ? (sc.modelData.window.title || "") : ""; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
                   Text { Layout.fillWidth: true; text: "pid " + sc.modelData.pid + (sc.modelData.window ? "  ·  ws " + sc.modelData.window.workspace : "  ·  no window"); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
                 }
                 MouseArea {
