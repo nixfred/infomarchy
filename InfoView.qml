@@ -4,12 +4,12 @@ import Quickshell
 import Quickshell.Io
 import qs.Commons
 
-// The dashboard itself. Hosted by Desk.qml (background layer) and Overlay.qml
+// The dashboard itself. Hosted by Infomarchy.qml (background layer) and Overlay.qml
 // (summoned fullscreen). Everything is sized from Style.* and colored from the
-// active theme via DeskModel, so it follows whatever Omarchy theme is set.
+// active theme via InfoModel, so it follows whatever Omarchy theme is set.
 Item {
   id: view
-  required property DeskModel desk
+  required property InfoModel desk
   property bool interactive: true
   // Room for the bar. The background layer ignores exclusion zones on purpose,
   // so we leave a top strip free instead of drawing under the bar.

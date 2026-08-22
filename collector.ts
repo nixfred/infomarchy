@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-// Desk collector — one JSON snapshot of "what is AI doing on this machine"
+// Infomarchy collector — one JSON snapshot of "what is AI doing on this machine"
 // plus the boring machine stats. Runs under bun, prints JSON to stdout.
 // Never hardcodes a user, host or home path: everything derives from $HOME,
 // XDG_*, /proc and /sys. Missing tools/dirs degrade to nulls, never crash.
@@ -9,7 +9,7 @@ import { join, basename } from "path";
 
 const HOME = process.env.HOME || "/root";
 const XDG_STATE = process.env.XDG_STATE_HOME || join(HOME, ".local/state");
-const STATE_DIR = join(XDG_STATE, "omarchy-desk");
+const STATE_DIR = join(XDG_STATE, "infomarchy");
 const PREV_FILE = join(STATE_DIR, "prev.json");
 const now = Date.now();
 
