@@ -91,7 +91,7 @@ Any meter goes **red** when it's genuinely in trouble (RAM > 90%, disk > 90%, CP
 
 ### ⌨️ Two surfaces, one dashboard
 
-The wallpaper is interactive wherever no window covers it (right-click the empty desk still opens Omarchy's wallpaper switcher). When you're buried in terminals, **`SUPER + D`** summons the *same* dashboard as a fullscreen overlay on top of everything; `Esc` or a click on the backdrop dismisses it.
+The wallpaper is interactive wherever no window covers it (double-click or right-click the empty desk opens Omarchy's wallpaper switcher, as stock does). When you're buried in terminals, **`SUPER + D`** summons the *same* dashboard as a fullscreen overlay on top of everything; `Esc` or a click on the backdrop dismisses it.
 
 ## Install
 
