@@ -40,6 +40,8 @@ One card per running agent — **Claude Code, Codex, Grok, Gemini, opencode, aid
 
 Cards also show the repository branch, clean/changed state, ahead/behind counts, and merge conflicts. A **Needs You** strip calls out agents that appear blocked, waiting for input, or finished for review, plus repositories being shared by multiple live agents.
 
+**Click a Needs You signal → jump straight to that agent's terminal.** From the fullscreen overlay, Infomarchy closes itself after focusing the session.
+
 **Click a card → Infomarchy focuses the terminal window hosting that agent.** It walks the process tree up to the Hyprland client, so it works through `kitty`, `alacritty`, `ghostty`, tmux, whatever.
 
 </td>

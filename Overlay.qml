@@ -61,6 +61,7 @@ Scope {
           interactive: true
           topInset: Style.spacing.xl
           privacyMode: root.privacyMode
+          onNavigated: root.close()
         }
       }
     }

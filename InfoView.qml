@@ -12,6 +12,13 @@ Item {
   required property InfoModel desk
   property bool interactive: true
   property bool privacyMode: false
+  signal navigated()
+
+  function navigateTo(address) {
+    if (!address) return
+    view.desk.focusWindow(address)
+    view.navigated()
+  }
   // Room for the bar. The background layer ignores exclusion zones on purpose,
   // so we leave a top strip free instead of drawing under the bar.
   property int topInset: Math.round(40 * Style.fontScale)
@@ -130,6 +137,12 @@ Item {
                 required property var modelData
                 text: (modelData.attention === "blocked" ? "⚠ BLOCKED" : modelData.attention === "waiting" ? "? WAITING" : "✓ REVIEW") + " · " + view.desk.providerLabel(modelData.provider) + " · " + (view.privacyMode ? "private" : modelData.project)
                 tone: modelData.attention === "blocked" ? view.desk.red : modelData.attention === "waiting" ? view.desk.yellow : view.desk.green
+                MouseArea {
+                  anchors.fill: parent
+                  enabled: view.interactive && !!(parent.modelData.window && parent.modelData.window.address)
+                  cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+                  onClicked: view.navigateTo(parent.modelData.window.address)
+                }
               }
             }
             Repeater {
@@ -185,7 +198,7 @@ Item {
                   id: hover; anchors.fill: parent; hoverEnabled: true; enabled: view.interactive
                   cursorShape: sc.modelData.window ? Qt.PointingHandCursor : Qt.ArrowCursor
                   acceptedButtons: Qt.LeftButton
-                  onClicked: if (sc.modelData.window) view.desk.focusWindow(sc.modelData.window.address)
+                  onClicked: if (sc.modelData.window) view.navigateTo(sc.modelData.window.address)
                 }
               }
             }
