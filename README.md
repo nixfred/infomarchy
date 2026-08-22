@@ -161,8 +161,9 @@ No usernames, hostnames or absolute paths are hardcoded anywhere. The collector 
 ## Tuning
 
 ```bash
-omarchy-shell shell call nixfred.infomarchy refresh                   # refresh now
-quickshell ipc -p /usr/share/omarchy/shell call infomarchy setWallpaperOpacity 0.5   # 0 = solid theme bg
+omarchy-shell infomarchy refresh                                      # wallpaper collector now
+omarchy-shell shell call nixfred.infomarchy refresh                   # overlay collector (only while summoned)
+omarchy-shell infomarchy setWallpaperOpacity 0.5                      # 0 = solid theme bg
 ```
 
 | Knob | Where | Default |
