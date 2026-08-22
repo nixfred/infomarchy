@@ -84,7 +84,7 @@ Scope {
 
       DeskView {
         anchors.fill: parent
-        model: model
+        desk: model
         interactive: true
       }
     }

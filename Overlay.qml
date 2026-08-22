@@ -39,7 +39,7 @@ Scope {
         MouseArea { anchors.fill: parent; onClicked: root.close() }
         DeskView {
           anchors.fill: parent
-          model: model
+          desk: model
           interactive: true
           topInset: Style.spacing.xl
         }
