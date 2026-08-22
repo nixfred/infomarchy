@@ -18,7 +18,7 @@ Scope {
   // How much of the wallpaper survives under the glass. 0 = solid theme bg.
   property real wallpaperOpacity: 0.32
 
-  DeskModel { id: model; refreshMs: 4000 }
+  DeskModel { id: deskModel; refreshMs: 4000 }
 
   function imageUrl(path) { return path ? "file://" + path : "" }
   function refreshBackground() { if (!readlinkProc.running) readlinkProc.running = true }
@@ -46,7 +46,7 @@ Scope {
   }
   IpcHandler {
     target: "desk"
-    function refresh(): void { model.refresh() }
+    function refresh(): void { deskModel.refresh() }
     function setWallpaperOpacity(v: string): void { var n = Number(v); if (isFinite(n)) root.wallpaperOpacity = Math.max(0, Math.min(1, n)) }
   }
 
@@ -57,7 +57,7 @@ Scope {
       required property var modelData
       screen: modelData
       anchors { top: true; bottom: true; left: true; right: true }
-      color: model.themeBackground
+      color: deskModel.themeBackground
       WlrLayershell.namespace: "omarchy-background"
       WlrLayershell.layer: WlrLayer.Background
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
@@ -84,7 +84,7 @@ Scope {
 
       DeskView {
         anchors.fill: parent
-        desk: model
+        desk: deskModel
         interactive: true
       }
     }
