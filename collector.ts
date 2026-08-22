@@ -224,6 +224,7 @@ async function liveSessions(pids: number[]) {
 
 // ---------------------------------------------------------------- AI history
 const DAY = 86400000;
+function dayKey(ts: number) { const d = new Date(ts); return d.toISOString().slice(0, 10); }
 function heatmapInit() {
   // 7 days x 24 hours, local time, oldest first; each cell {total, byProvider}
   const cells: any[] = [];
@@ -231,19 +232,12 @@ function heatmapInit() {
   return cells;
 }
 const heat = heatmapInit();
-// Calendar days, not 6*86400000 ms — DST would otherwise shift the window by an hour.
-const start7 = (() => { const d = new Date(now); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - 6); return d.getTime(); })();
-function localDayIndex(ts: number): number {
-  const a = new Date(start7), b = new Date(ts);
-  const a0 = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
-  const b0 = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
-  return Math.round((b0 - a0) / DAY);
-}
+const start7 = (() => { const d = new Date(now); d.setHours(0, 0, 0, 0); return d.getTime() - 6 * DAY; })();
 function bump(ts: number, prov: string) {
   if (ts < start7 || ts > now + 60000) return;
-  const dayIdx = localDayIndex(ts);
+  const d = new Date(ts); const dayIdx = Math.floor((d.getTime() - start7) / DAY);
   if (dayIdx < 0 || dayIdx > 6) return;
-  const cell = heat[dayIdx * 24 + new Date(ts).getHours()]; cell.n++; cell.p[prov] = (cell.p[prov] || 0) + 1;
+  const cell = heat[dayIdx * 24 + d.getHours()]; cell.n++; cell.p[prov] = (cell.p[prov] || 0) + 1;
 }
 const recent: any[] = [];
 const todayStart = (() => { const d = new Date(now); d.setHours(0, 0, 0, 0); return d.getTime(); })();
