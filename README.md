@@ -38,6 +38,8 @@ Infomarchy puts all of it on the one surface you always have open and never use:
 
 One card per running agent — **Claude Code, Codex, Grok, Gemini, opencode, aider, Ollama chats** — detected straight from `/proc`, no agent-side hooks, nothing to configure. Each card shows the project, working directory, how long it's been up, the pid, the workspace it lives on, and the terminal's own title (so you read *"✅ Researched virt-manager plugins"* or *"⚙️ Processing request."* without switching to it). The dot **pulses while the agent is thinking**.
 
+Cards also show the repository branch, clean/changed state, ahead/behind counts, and merge conflicts. A **Needs You** strip calls out agents that appear blocked, waiting for input, or finished for review, plus repositories being shared by multiple live agents.
+
 **Click a card → Infomarchy focuses the terminal window hosting that agent.** It walks the process tree up to the Hyprland client, so it works through `kitty`, `alacritty`, `ghostty`, tmux, whatever.
 
 </td>
@@ -164,19 +166,22 @@ No usernames, hostnames or absolute paths are hardcoded anywhere. The collector 
 omarchy-shell infomarchy refresh                                      # wallpaper collector now
 omarchy-shell shell call nixfred.infomarchy refresh                   # overlay collector (only while summoned)
 omarchy-shell infomarchy setWallpaperOpacity 0.5                      # 0 = solid theme bg
+omarchy-shell infomarchy togglePrivacy                                # hide/reveal sensitive wallpaper details
+omarchy-shell infomarchy setPrivacy true                              # explicit on/off control
 ```
 
 | Knob | Where | Default |
 |---|---|---|
 | poll interval | `refreshMs` in `Infomarchy.qml` / `Overlay.qml` | 4000 / 3000 ms |
 | wallpaper dim | `wallpaperOpacity` in `Infomarchy.qml` | 0.32 |
+| privacy mode | `P` while the overlay is open, or wallpaper IPC above | off |
 | space left for the bar | `topInset` in `InfoView.qml` | 40 px × font scale |
 | provider colours | `providerColor()` in `InfoModel.qml` | theme ANSI roles |
 | add a provider | one regex in `PROVIDERS` in `collector.ts` | — |
 
 ## Privacy
 
-Everything stays on the machine — there is no network call except the ping to `1.1.1.1` and the local Ollama API. The **Recent tasks** card shows the text of your own recent prompts on your own desktop; if you screen-share, summon something over it or comment out that card in `InfoView.qml`.
+Everything stays on the machine — there is no network call except the ping to `1.1.1.1` and the local Ollama API. Recent task text is credential-redacted before it reaches QML. **Privacy mode** additionally hides prompts, project names, paths, terminal titles, username/hostname, SSID, and IP address; press `P` in the fullscreen overlay or use the wallpaper IPC commands above before screen sharing.
 
 ## FAQ
 

@@ -22,6 +22,7 @@ Scope {
   property string background: ""
   // How much of the wallpaper survives under the glass. 0 = solid theme bg.
   property real wallpaperOpacity: 0.32
+  property bool privacyMode: false
 
   InfoModel { id: infoModel; refreshMs: 4000 }
 
@@ -72,6 +73,8 @@ Scope {
     target: "infomarchy"
     function refresh(): void { infoModel.refresh() }
     function setWallpaperOpacity(v: string): void { var n = Number(v); if (isFinite(n)) root.wallpaperOpacity = Math.max(0, Math.min(1, n)) }
+    function setPrivacy(v: string): void { root.privacyMode = ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0 }
+    function togglePrivacy(): void { root.privacyMode = !root.privacyMode }
   }
 
   Variants {
@@ -118,6 +121,7 @@ Scope {
         anchors.fill: parent
         desk: infoModel
         interactive: true
+        privacyMode: root.privacyMode
       }
     }
   }
