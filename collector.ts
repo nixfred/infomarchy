@@ -10,8 +10,16 @@ import { join, basename } from "path";
 const HOME = process.env.HOME || "/root";
 const XDG_STATE = process.env.XDG_STATE_HOME || join(HOME, ".local/state");
 const STATE_DIR = join(XDG_STATE, "infomarchy");
-const PREV_FILE = join(STATE_DIR, "prev.json");
+// Background + overlay each spawn this process. Sharing one prev.json makes
+// CPU% and net rates explode when the two ticks land <1s apart (delta / tiny dt).
+function instanceId(): string {
+  const i = process.argv.indexOf("--id");
+  const raw = i >= 0 ? String(process.argv[i + 1] || "") : "bg";
+  return raw.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32) || "bg";
+}
+const PREV_FILE = join(STATE_DIR, `prev-${instanceId()}.json`);
 const now = Date.now();
+const MIN_RATE_DT = 1;
 
 // ---------------------------------------------------------------- helpers
 function read(p: string): string | null { try { return readFileSync(p, "utf8"); } catch { return null; } }
@@ -22,9 +30,13 @@ async function run(cmd: string[], timeoutMs = 1500): Promise<string> {
   try {
     const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore" });
     const t = setTimeout(() => { try { proc.kill(); } catch {} }, timeoutMs);
-    const out = await new Response(proc.stdout).text();
-    clearTimeout(t);
-    return out;
+    try {
+      const out = await new Response(proc.stdout).text();
+      await proc.exited;
+      return out;
+    } finally {
+      clearTimeout(t);
+    }
   } catch { return ""; }
 }
 async function fetchJson(url: string, ms = 600): Promise<any> {
@@ -41,8 +53,10 @@ function cpu() {
   const line = (read("/proc/stat") || "").split("\n")[0].split(/\s+/).slice(1).map(Number);
   const idle = line[3] + line[4], total = line.reduce((a, b) => a + b, 0);
   let pct: number | null = null;
-  if (prev.cpu && total > prev.cpu.total) {
+  if (prev.cpu && total > prev.cpu.total && dt >= MIN_RATE_DT) {
     pct = 100 * (1 - (idle - prev.cpu.idle) / (total - prev.cpu.total));
+  } else if (dt > 0 && dt < MIN_RATE_DT && typeof prev.cpu?.pct === "number") {
+    pct = prev.cpu.pct;
   }
   const load = (read("/proc/loadavg") || "0 0 0").split(" ").slice(0, 3).map(Number);
   const cores = (read("/proc/cpuinfo") || "").split("\n").filter(l => l.startsWith("processor")).length;
@@ -77,8 +91,10 @@ async function net() {
   const rx = +(read(`/sys/class/net/${dev}/statistics/rx_bytes`) || 0);
   const tx = +(read(`/sys/class/net/${dev}/statistics/tx_bytes`) || 0);
   let rxRate: number | null = null, txRate: number | null = null;
-  if (prev.net && prev.net.dev === dev && dt > 0) {
+  if (prev.net && prev.net.dev === dev && dt >= MIN_RATE_DT) {
     rxRate = Math.max(0, (rx - prev.net.rx) / dt); txRate = Math.max(0, (tx - prev.net.tx) / dt);
+  } else if (prev.net && prev.net.dev === dev && dt > 0 && dt < MIN_RATE_DT) {
+    rxRate = prev.net.rxRate ?? null; txRate = prev.net.txRate ?? null;
   }
   const wireless = existsSync(`/sys/class/net/${dev}/wireless`);
   let ssid: string | null = null, signal: number | null = null, freq: number | null = null, bitrate: string | null = null;
@@ -167,10 +183,12 @@ const PROVIDERS: [string, RegExp][] = [
   ["copilot", /(^|\/)copilot$/],
   ["ollama", /(^|\/)ollama$/],
 ];
-function providerOf(cmd: string[]): string | null {
+export function providerOf(cmd: string[]): string | null {
   for (const arg of cmd.slice(0, 3)) {
     for (const [name, re] of PROVIDERS) if (re.test(arg)) {
       if (name === "ollama" && !(cmd[1] === "run" || cmd[1] === "runner")) return null; // only chats/runners, not the daemon
+      // Codex app-server / mcp-server are long-lived daemons, not a desk session.
+      if (name === "codex" && cmd.some(a => a === "app-server" || a === "mcp-server")) return null;
       return name;
     }
   }
@@ -206,7 +224,6 @@ async function liveSessions(pids: number[]) {
 
 // ---------------------------------------------------------------- AI history
 const DAY = 86400000;
-function dayKey(ts: number) { const d = new Date(ts); return d.toISOString().slice(0, 10); }
 function heatmapInit() {
   // 7 days x 24 hours, local time, oldest first; each cell {total, byProvider}
   const cells: any[] = [];
@@ -214,12 +231,19 @@ function heatmapInit() {
   return cells;
 }
 const heat = heatmapInit();
-const start7 = (() => { const d = new Date(now); d.setHours(0, 0, 0, 0); return d.getTime() - 6 * DAY; })();
+// Calendar days, not 6*86400000 ms — DST would otherwise shift the window by an hour.
+const start7 = (() => { const d = new Date(now); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - 6); return d.getTime(); })();
+function localDayIndex(ts: number): number {
+  const a = new Date(start7), b = new Date(ts);
+  const a0 = Date.UTC(a.getFullYear(), a.getMonth(), a.getDate());
+  const b0 = Date.UTC(b.getFullYear(), b.getMonth(), b.getDate());
+  return Math.round((b0 - a0) / DAY);
+}
 function bump(ts: number, prov: string) {
   if (ts < start7 || ts > now + 60000) return;
-  const d = new Date(ts); const dayIdx = Math.floor((d.getTime() - start7) / DAY);
+  const dayIdx = localDayIndex(ts);
   if (dayIdx < 0 || dayIdx > 6) return;
-  const cell = heat[dayIdx * 24 + d.getHours()]; cell.n++; cell.p[prov] = (cell.p[prov] || 0) + 1;
+  const cell = heat[dayIdx * 24 + new Date(ts).getHours()]; cell.n++; cell.p[prov] = (cell.p[prov] || 0) + 1;
 }
 const recent: any[] = [];
 const todayStart = (() => { const d = new Date(now); d.setHours(0, 0, 0, 0); return d.getTime(); })();
@@ -307,31 +331,39 @@ function agentsUsage() {
 }
 
 // ---------------------------------------------------------------- main
-const pids = scanProcs();
-const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama] = await Promise.all([
-  Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(),
-]);
-const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory();
-recent.sort((a, b) => b.ts - a.ts);
+async function runCollector() {
+  const pids = scanProcs();
+  const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama] = await Promise.all([
+    Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(),
+  ]);
+  const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory();
+  recent.sort((a, b) => b.ts - a.ts);
 
-// Hyprland >= 0.56 takes Lua in `hyprctl dispatch`; older takes "dispatcher arg".
-let hyprLua = false;
-try { const v = JSON.parse(await run(["hyprctl", "version", "-j"], 800)); const m = String(v.tag || v.version || "").match(/(\d+)\.(\d+)/); hyprLua = !!m && (+m[1] > 0 || +m[2] >= 56); } catch {}
+  // Hyprland >= 0.56 takes Lua in `hyprctl dispatch`; older takes "dispatcher arg".
+  let hyprLua = false;
+  try { const v = JSON.parse(await run(["hyprctl", "version", "-j"], 800)); const m = String(v.tag || v.version || "").match(/(\d+)\.(\d+)/); hyprLua = !!m && (+m[1] > 0 || +m[2] >= 56); } catch {}
 
-const snapshot = {
-  ts: now, hyprLua, host: (read("/etc/hostname") || "").trim() || null, user: process.env.USER || null,
-  machine: {
-    cpu: { pct: cpuS.pct, load: cpuS.load, cores: cpuS.cores }, mem: memS, disks: diskS, net: netS, ping: pingS,
-    battery: battery(), gpu: gpuS, temp: temp(), uptime: uptime(),
-  },
-  ai: {
-    sessions, counts, providers: { claude, codex, grok, ollama }, usage: agentsUsage(),
-    heatmap: { start: start7, cells: heat.map(c => [c.n, c.p]) }, recent: recent.slice(0, 40),
-  },
-};
+  const snapshot = {
+    ts: now, hyprLua, host: (read("/etc/hostname") || "").trim() || null, user: process.env.USER || null,
+    machine: {
+      cpu: { pct: cpuS.pct, load: cpuS.load, cores: cpuS.cores }, mem: memS, disks: diskS, net: netS, ping: pingS,
+      battery: battery(), gpu: gpuS, temp: temp(), uptime: uptime(),
+    },
+    ai: {
+      sessions, counts, providers: { claude, codex, grok, ollama }, usage: agentsUsage(),
+      heatmap: { start: start7, cells: heat.map(c => [c.n, c.p]) }, recent: recent.slice(0, 40),
+    },
+  };
 
-try {
-  mkdirSync(STATE_DIR, { recursive: true });
-  writeFileSync(PREV_FILE, JSON.stringify({ ts: now, cpu: cpuS._raw, net: { dev: netS.dev, rx: netS.rx, tx: netS.tx } }));
-} catch {}
-console.log(JSON.stringify(snapshot));
+  try {
+    mkdirSync(STATE_DIR, { recursive: true });
+    writeFileSync(PREV_FILE, JSON.stringify({
+      ts: now,
+      cpu: { ...cpuS._raw, pct: cpuS.pct },
+      net: { dev: netS.dev, rx: netS.rx, tx: netS.tx, rxRate: netS.rxRate, txRate: netS.txRate },
+    }));
+  } catch {}
+  console.log(JSON.stringify(snapshot));
+}
+
+if (import.meta.main) await runCollector();
