@@ -121,6 +121,16 @@ Item {
     onTriggered: root.refresh()
   }
 
+  // Focus a Hyprland window by address, on both dispatch syntaxes.
+  function focusWindow(address) {
+    var addr = String(address || "").replace(/^0x/, "")
+    if (!addr) return
+    if (root.snap && root.snap.hyprLua)
+      Quickshell.execDetached(["hyprctl", "dispatch", 'hl.dsp.focus({ window = "address:0x' + addr + '" })'])
+    else
+      Quickshell.execDetached(["hyprctl", "dispatch", "focuswindow", "address:0x" + addr])
+  }
+
   // --- formatting helpers ----------------------------------------------------
   function bytes(n) {
     n = Number(n || 0)
@@ -149,6 +159,14 @@ Item {
     if (s < 3600) return Math.floor(s / 60) + "m"
     if (s < 86400) return Math.floor(s / 3600) + "h"
     return Math.floor(s / 86400) + "d"
+  }
+  function until(ts) {
+    if (!ts) return ""
+    var s = Math.max(0, (Number(ts) - Date.now()) / 1000)
+    if (s < 60) return "now"
+    if (s < 3600) return Math.floor(s / 60) + "m"
+    if (s < 86400) return Math.floor(s / 3600) + "h " + Math.floor(s % 3600 / 60) + "m"
+    return Math.floor(s / 86400) + "d " + Math.floor(s % 86400 / 3600) + "h"
   }
   function pct(v) { return (v === null || v === undefined) ? "—" : Math.round(Number(v)) + "%" }
   function tokens(n) {

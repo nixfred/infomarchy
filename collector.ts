@@ -64,6 +64,8 @@ async function disk() {
   for (const r of rows) {
     if (r.length < 4 || seen.has(r[0])) continue; seen.add(r[0]);
     const size = +r[1], used = +r[2];
+    // btrfs subvolumes (/ and /home on one pool) report identical numbers — show once
+    if (res.some(x => x.size === size && x.used === used)) continue;
     res.push({ mount: r[0], size, used, avail: +r[3], pct: size ? 100 * used / size : null });
   }
   return res;
@@ -312,8 +314,12 @@ const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama] = await Promise.a
 const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory();
 recent.sort((a, b) => b.ts - a.ts);
 
+// Hyprland >= 0.56 takes Lua in `hyprctl dispatch`; older takes "dispatcher arg".
+let hyprLua = false;
+try { const v = JSON.parse(await run(["hyprctl", "version", "-j"], 800)); const m = String(v.tag || v.version || "").match(/(\d+)\.(\d+)/); hyprLua = !!m && (+m[1] > 0 || +m[2] >= 56); } catch {}
+
 const snapshot = {
-  ts: now, host: (read("/etc/hostname") || "").trim() || null, user: process.env.USER || null,
+  ts: now, hyprLua, host: (read("/etc/hostname") || "").trim() || null, user: process.env.USER || null,
   machine: {
     cpu: { pct: cpuS.pct, load: cpuS.load, cores: cpuS.cores }, mem: memS, disks: diskS, net: netS, ping: pingS,
     battery: battery(), gpu: gpuS, temp: temp(), uptime: uptime(),

@@ -155,7 +155,7 @@ Item {
                   id: hover; anchors.fill: parent; hoverEnabled: true; enabled: view.interactive
                   cursorShape: sc.modelData.window ? Qt.PointingHandCursor : Qt.ArrowCursor
                   acceptedButtons: Qt.LeftButton
-                  onClicked: if (sc.modelData.window) Quickshell.execDetached(["hyprctl", "dispatch", "focuswindow", "address:" + sc.modelData.window.address])
+                  onClicked: if (sc.modelData.window) view.desk.focusWindow(sc.modelData.window.address)
                 }
               }
             }
@@ -334,7 +334,7 @@ Item {
                     required property var modelData
                     Layout.fillWidth: true
                     label: modelData.label || modelData.title || ""
-                    value: Math.round((modelData.percent || 0) * 100) + "%" + (modelData.resetsAt ? "  ↻ " + view.desk.ago(Date.parse(modelData.resetsAt)).replace(/^/, "in ") : "")
+                    value: Math.round((modelData.percent || 0) * 100) + "%" + (modelData.resetsAt ? "  ↻ " + view.desk.until(Date.parse(modelData.resetsAt)) : "")
                     fraction: modelData.percent || 0
                     tone: (modelData.percent || 0) > 0.85 ? view.desk.red : (modelData.percent || 0) > 0.6 ? view.desk.yellow : up.tone
                   }
