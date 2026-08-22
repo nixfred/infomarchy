@@ -14,7 +14,12 @@ Item {
   property var snap: ({})
   property bool ready: false
   property string error: ""
-  property string pluginDir: Qt.resolvedUrl(".").toString().replace(/^file:\/\//, "")
+  // Resolve the script itself so a missing trailing slash on a directory URL
+  // cannot produce ".../nixfred.infomarchicollector.ts".
+  property string collectorPath: Qt.resolvedUrl("collector.ts").toString().replace(/^file:\/\//, "")
+  // Wallpaper and overlay each run a collector; --id keeps their rate
+  // baselines apart (see collector.ts prev-${id}.json).
+  property string instance: "bg"
 
   // --- theme ---------------------------------------------------------------
   // Omarchy's Color singleton gives fg/bg/accent/urgent/muted. The ANSI roles
@@ -75,6 +80,8 @@ Item {
       case "gemini": return root.blue
       case "ollama": return root.green
       case "opencode": return root.blue
+      case "aider": return root.yellow
+      case "copilot": return root.magenta
       default: return Color.accent
     }
   }
@@ -86,6 +93,8 @@ Item {
       case "gemini": return "Gemini"
       case "ollama": return "Ollama"
       case "opencode": return "opencode"
+      case "aider": return "Aider"
+      case "copilot": return "Copilot"
       default: return String(p)
     }
   }
@@ -93,7 +102,8 @@ Item {
   // --- collector -----------------------------------------------------------
   Process {
     id: collector
-    command: ["bun", root.pluginDir + "collector.ts"]
+    property string lastStderr: ""
+    command: ["bun", root.collectorPath, "--id", root.instance]
     stdout: StdioCollector {
       onStreamFinished: {
         var t = String(text || "").trim()
@@ -108,7 +118,13 @@ Item {
       }
     }
     stderr: StdioCollector {
-      onStreamFinished: { var t = String(text || "").trim(); if (t) root.error = t.split("\n")[0] }
+      // bun / libraries may warn on stderr even when the snapshot is valid.
+      // Stash it; only promote to the desk error banner if the process fails.
+      onStreamFinished: { collector.lastStderr = String(text || "").trim() }
+    }
+    onExited: function(exitCode) {
+      if (exitCode !== 0 && collector.lastStderr)
+        root.error = collector.lastStderr.split("\n")[0]
     }
   }
   function refresh() { if (root.active && !collector.running) collector.running = true }
