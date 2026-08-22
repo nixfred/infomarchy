@@ -11,6 +11,7 @@ Item {
   id: view
   required property InfoModel desk
   property bool interactive: true
+  property bool privacyMode: false
   // Room for the bar. The background layer ignores exclusion zones on purpose,
   // so we leave a top strip free instead of drawing under the bar.
   property int topInset: Math.round(40 * Style.fontScale)
@@ -19,6 +20,8 @@ Item {
   readonly property var machine: snap.machine || ({})
   readonly property var ai: snap.ai || ({})
   readonly property var sessions: ai.sessions || []
+  readonly property var attention: ai.attention || []
+  readonly property var collisions: ai.collisions || []
   readonly property var usage: (ai && ai.usage) ? ai.usage : ({})
   readonly property int pad: Style.spacing.xl
   readonly property int gap: Style.spacing.lg
@@ -113,11 +116,35 @@ Item {
         Layout.preferredWidth: 3
         spacing: view.gap
 
+        Card {
+          Layout.fillWidth: true
+          visible: view.attention.length > 0 || view.collisions.length > 0 || view.privacyMode
+          title: "NEEDS YOU"
+          hint: view.privacyMode ? "PRIVACY MODE · sensitive details hidden" : view.attention.length + " signals · " + view.collisions.length + " shared repos"
+          Flow {
+            width: parent.width
+            spacing: Style.spacing.md
+            Repeater {
+              model: view.attention
+              delegate: Tag {
+                required property var modelData
+                text: (modelData.attention === "blocked" ? "⚠ BLOCKED" : modelData.attention === "waiting" ? "? WAITING" : "✓ REVIEW") + " · " + view.desk.providerLabel(modelData.provider) + " · " + (view.privacyMode ? "private" : modelData.project)
+                tone: modelData.attention === "blocked" ? view.desk.red : modelData.attention === "waiting" ? view.desk.yellow : view.desk.green
+              }
+            }
+            Repeater {
+              model: view.collisions
+              delegate: Tag { required property var modelData; text: "⚠ SHARED REPO · " + (view.privacyMode ? "private" : modelData.project) + " · " + modelData.agents.length + " agents"; tone: view.desk.yellow }
+            }
+            Tag { visible: view.privacyMode && view.attention.length === 0 && view.collisions.length === 0; text: "PRIVACY ON"; tone: view.desk.cyan }
+          }
+        }
+
         // ---- live sessions ----
         Card {
           Layout.fillWidth: true
           title: "LIVE AI SESSIONS"
-          hint: view.sessions.length + " running · " + (view.snap.host || "") + (view.desk.error ? " · ⚠ " + view.desk.error : "")
+          hint: view.sessions.length + " running · " + (view.privacyMode ? "private host" : (view.snap.host || "")) + (view.desk.error ? " · ⚠ " + view.desk.error : "")
           Flow {
             width: parent.width
             spacing: Style.spacing.md
@@ -148,9 +175,10 @@ Item {
                     Item { Layout.fillWidth: true }
                     Text { text: view.desk.dur(sc.modelData.uptimeSec); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
                   }
-                  Text { Layout.fillWidth: true; text: sc.modelData.project || "/"; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.subtitle; elide: Text.ElideMiddle }
-                  Text { Layout.fillWidth: true; text: sc.modelData.cwd || ""; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideMiddle }
-                  Text { Layout.fillWidth: true; visible: !!(sc.modelData.window && sc.modelData.window.title); text: sc.modelData.window ? (sc.modelData.window.title || "") : ""; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+                  Text { Layout.fillWidth: true; text: view.privacyMode ? "private project" : (sc.modelData.project || "/"); color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.subtitle; elide: Text.ElideMiddle }
+                  Text { Layout.fillWidth: true; text: view.privacyMode ? "path hidden" : (sc.modelData.cwd || ""); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideMiddle }
+                  Text { Layout.fillWidth: true; visible: !!(sc.modelData.window && sc.modelData.window.title); text: view.privacyMode ? "task hidden" : (sc.modelData.window ? (sc.modelData.window.title || "") : ""); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+                  Text { Layout.fillWidth: true; visible: !!sc.modelData.git; text: sc.modelData.git ? ("git " + sc.modelData.git.branch + (sc.modelData.git.dirty ? " · " + sc.modelData.git.dirty + " changed" : " · clean") + (sc.modelData.git.ahead ? " · ↑" + sc.modelData.git.ahead : "") + (sc.modelData.git.behind ? " · ↓" + sc.modelData.git.behind : "") + (sc.modelData.git.conflicts ? " · " + sc.modelData.git.conflicts + " conflicts" : "")) : ""; color: sc.modelData.git && sc.modelData.git.conflicts ? view.desk.red : sc.modelData.git && sc.modelData.git.dirty ? view.desk.yellow : view.desk.green; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
                   Text { Layout.fillWidth: true; text: "pid " + sc.modelData.pid + (sc.modelData.window ? "  ·  ws " + sc.modelData.window.workspace : "  ·  no window"); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
                 }
                 MouseArea {
@@ -275,7 +303,7 @@ Item {
           Layout.fillWidth: true
           Layout.fillHeight: true
           title: "RECENT TASKS · WHAT GOT ASKED"
-          hint: "newest first"
+          hint: view.privacyMode ? "hidden · press P in overlay to reveal" : "newest first"
           clip: true
           ListView {
             id: recentList
@@ -294,8 +322,8 @@ Item {
                 id: rrow; width: parent.width; spacing: Style.spacing.md
                 Text { text: view.desk.ago(ri.modelData.ts); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; Layout.preferredWidth: Math.round(28 * Style.fontScale); horizontalAlignment: Text.AlignRight }
                 Tag { text: view.desk.providerLabel(ri.modelData.provider); tone: view.desk.providerColor(ri.modelData.provider) }
-                Text { text: (ri.modelData.project || "").replace(/^.*\//, "") ; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; Layout.preferredWidth: Math.round(110 * Style.fontScale); elide: Text.ElideLeft }
-                Text { Layout.fillWidth: true; text: ri.modelData.text || ""; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight; maximumLineCount: 1 }
+                Text { text: view.privacyMode ? "private" : (ri.modelData.project || "").replace(/^.*\//, "") ; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; Layout.preferredWidth: Math.round(110 * Style.fontScale); elide: Text.ElideLeft }
+                Text { Layout.fillWidth: true; text: view.privacyMode ? "prompt hidden" : (ri.modelData.text || ""); color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight; maximumLineCount: 1 }
               }
             }
           }
@@ -399,7 +427,7 @@ Item {
         Card {
           Layout.fillWidth: true
           title: "MACHINE"
-          hint: (view.snap.user ? view.snap.user + "@" : "") + (view.snap.host || "") + " · up " + view.desk.dur(view.machine.uptime)
+          hint: (view.privacyMode ? "private host" : ((view.snap.user ? view.snap.user + "@" : "") + (view.snap.host || ""))) + " · up " + view.desk.dur(view.machine.uptime)
           readonly property var net: view.machine.net || ({})
           readonly property var mem: view.machine.mem || ({})
           readonly property var cpu: view.machine.cpu || ({})
@@ -418,8 +446,8 @@ Item {
             }
             Meter {
               Layout.fillWidth: true
-              label: mc.net.wireless ? "WIFI " + (mc.net.ssid || "") : "NET " + (mc.net.dev || "—")
-              value: (mc.net.signal !== null && mc.net.signal !== undefined ? mc.net.signal + " dBm · " : "") + (mc.net.addr || "")
+              label: mc.net.wireless ? "WIFI " + (view.privacyMode ? "private" : (mc.net.ssid || "")) : "NET " + (mc.net.dev || "—")
+              value: (mc.net.signal !== null && mc.net.signal !== undefined ? mc.net.signal + " dBm" : "") + (view.privacyMode ? "" : " · " + (mc.net.addr || ""))
               // -30 dBm great … -90 dBm dead
               fraction: mc.net.signal !== null && mc.net.signal !== undefined ? Math.max(0, Math.min(1, (Number(mc.net.signal) + 90) / 60)) : (mc.net.dev ? 1 : 0)
               tone: mc.net.signal !== null && mc.net.signal !== undefined && Number(mc.net.signal) < -75 ? view.desk.yellow : view.desk.green

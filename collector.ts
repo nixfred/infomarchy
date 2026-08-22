@@ -7,6 +7,7 @@
 import { readdirSync, readFileSync, statSync, existsSync, readlinkSync, mkdirSync, writeFileSync } from "fs";
 import { join, basename } from "path";
 import { localDayIndex, localDayStarts } from "./history-time";
+import { attentionState, parseGitStatus, repoCollisions } from "./ai-ops";
 
 const HOME = process.env.HOME || "/root";
 const XDG_STATE = process.env.XDG_STATE_HOME || join(HOME, ".local/state");
@@ -207,6 +208,15 @@ export function cmdIsTurnInhibitor(cmd: string[]): boolean {
 }
 function shortPath(p: string) { return p.startsWith(HOME) ? "~" + p.slice(HOME.length) : p; }
 
+async function repoState(cwd: string) {
+  if (!cwd) return { root: "", state: null };
+  const [root, status] = await Promise.all([
+    run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], 700),
+    run(["git", "-C", cwd, "status", "--porcelain=v2", "--branch"], 900),
+  ]);
+  return { root: root.trim(), state: parseGitStatus(status) };
+}
+
 async function liveSessions(pids: number[]) {
   let clients: any[] = [];
   try { clients = JSON.parse(await run(["hyprctl", "clients", "-j"], 1000)) || []; } catch {}
@@ -224,6 +234,7 @@ async function liveSessions(pids: number[]) {
     while (q && q.pid > 1) { if (winByPid.has(q.pid)) { w = winByPid.get(q.pid); break; } q = info(q.ppid); }
     sessions.push({
       provider: prov, pid: p.pid, cwd: shortPath(p.cwd), project: basename(p.cwd || "") || "/",
+      _cwd: p.cwd,
       startedAt: p.start, uptimeSec: Math.max(0, (now - p.start) / 1000),
       window: w ? { address: w.address, title: w.title, class: w.class, workspace: w.workspace?.id ?? null } : null,
       args: p.cmd.slice(1, 4).join(" ").slice(0, 60),
@@ -246,6 +257,15 @@ async function liveSessions(pids: number[]) {
     if (!s.busy && s.window && titleLooksBusy(s.window.title) && s.provider === "grok")
       s.window = { ...s.window, title: "" };
   }
+  const repos = new Map<string, Promise<{ root: string; state: any }>>();
+  for (const session of sessions) if (session._cwd && !repos.has(session._cwd)) repos.set(session._cwd, repoState(session._cwd));
+  await Promise.all(sessions.map(async session => {
+    const repo = session._cwd ? await repos.get(session._cwd) : null;
+    session.repoRoot = repo?.root ? shortPath(repo.root) : "";
+    session.git = repo?.state || null;
+    session.attention = attentionState(session.window?.title, session.git?.conflicts || 0);
+    delete session._cwd;
+  }));
   sessions.sort((a, b) => b.startedAt - a.startedAt);
   return sessions;
 }
@@ -386,7 +406,10 @@ async function runCollector() {
       battery: battery(), gpu: gpuS, temp: temp(), uptime: uptime(),
     },
     ai: {
-      sessions, counts, providers: { claude, codex, grok, ollama }, usage: agentsUsage(),
+      sessions,
+      attention: sessions.filter((s: any) => s.attention),
+      collisions: repoCollisions(sessions),
+      counts, providers: { claude, codex, grok, ollama }, usage: agentsUsage(),
       heatmap: { start: start7, days: heatDays, cells: heat.map(c => [c.n, c.p]) }, recent: recent.slice(0, 40),
     },
   };

@@ -11,6 +11,7 @@ import qs.Ui
 Scope {
   id: root
   property bool opened: false
+  property bool privacyMode: false
 
   InfoModel { id: infoModel; refreshMs: 3000; active: root.opened; instance: "overlay" }
 
@@ -49,6 +50,7 @@ Scope {
         color: Util.alpha(infoModel.themeBackground, 0.88)
         focus: root.opened
         Keys.onEscapePressed: root.close()
+        Keys.onPressed: function(event) { if (event.key === Qt.Key_P && !(event.modifiers & Qt.ControlModifier)) { root.privacyMode = !root.privacyMode; event.accepted = true } }
         // Exclusive keyboard focus on the layer is not enough — Qt still
         // needs an item with activeFocus or Esc never fires.
         onVisibleChanged: if (visible) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
@@ -58,6 +60,7 @@ Scope {
           desk: infoModel
           interactive: true
           topInset: Style.spacing.xl
+          privacyMode: root.privacyMode
         }
       }
     }
