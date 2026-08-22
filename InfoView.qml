@@ -181,7 +181,9 @@ Item {
               height: Math.round(7 * 16 * Style.fontScale)
               property var cells: (view.ai.heatmap || {}).cells || []
               property real startTs: (view.ai.heatmap || {}).start || 0
+              property var days: (view.ai.heatmap || {}).days || []
               property int hoverIdx: -1
+              function dayTs(index) { return days[index] || (startTs + index * 86400000) }
               onCellsChanged: requestPaint()
               Connections { target: view.desk; function onGreenChanged() { heat.requestPaint() } function onThemeForegroundChanged() { heat.requestPaint() } }
               onPaint: {
@@ -194,7 +196,7 @@ Item {
                 ctx.textBaseline = "middle"
                 var days = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
                 for (var d = 0; d < 7; d++) {
-                  var dt = new Date(startTs + d * 86400000)
+                  var dt = new Date(dayTs(d))
                   ctx.fillStyle = Qt.rgba(view.textFaint.r, view.textFaint.g, view.textFaint.b, view.textFaint.a)
                   ctx.fillText(days[dt.getDay()], 0, d * ch + ch / 2)
                   for (var h = 0; h < 24; h++) {
@@ -217,7 +219,11 @@ Item {
                   }
                 }
                 // "now" marker
-                var nowD = new Date(), nd = Math.floor((nowD.getTime() - startTs) / 86400000)
+                var nowD = new Date(), nd = -1
+                for (var di = 0; di < 7; di++) {
+                  var markerDay = new Date(dayTs(di))
+                  if (markerDay.getFullYear() === nowD.getFullYear() && markerDay.getMonth() === nowD.getMonth() && markerDay.getDate() === nowD.getDate()) { nd = di; break }
+                }
                 if (nd >= 0 && nd < 7) {
                   var nx = labelW + (nowD.getHours() + nowD.getMinutes() / 60) * cw
                   ctx.strokeStyle = Qt.rgba(view.desk.red.r, view.desk.red.g, view.desk.red.b, 0.8)
@@ -252,7 +258,7 @@ Item {
                   if (heat.hoverIdx < 0) return "hover a cell · red tick = now"
                   var c = heat.cells[heat.hoverIdx] || [0, {}]
                   var d = Math.floor(heat.hoverIdx / 24), h = heat.hoverIdx % 24
-                  var dt = new Date(heat.startTs + d * 86400000)
+                  var dt = new Date(heat.dayTs(d))
                   var parts = []; for (var k in c[1]) parts.push(view.desk.providerLabel(k) + " " + c[1][k])
                   return Qt.formatDate(dt, "ddd d MMM") + " " + (h < 10 ? "0" : "") + h + ":00 · " + c[0] + " prompts" + (parts.length ? " (" + parts.join(", ") + ")" : "")
                 }

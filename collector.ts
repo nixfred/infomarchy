@@ -6,6 +6,7 @@
 
 import { readdirSync, readFileSync, statSync, existsSync, readlinkSync, mkdirSync, writeFileSync } from "fs";
 import { join, basename } from "path";
+import { localDayIndex, localDayStarts } from "./history-time";
 
 const HOME = process.env.HOME || "/root";
 const XDG_STATE = process.env.XDG_STATE_HOME || join(HOME, ".local/state");
@@ -205,8 +206,6 @@ async function liveSessions(pids: number[]) {
 }
 
 // ---------------------------------------------------------------- AI history
-const DAY = 86400000;
-function dayKey(ts: number) { const d = new Date(ts); return d.toISOString().slice(0, 10); }
 function heatmapInit() {
   // 7 days x 24 hours, local time, oldest first; each cell {total, byProvider}
   const cells: any[] = [];
@@ -214,10 +213,11 @@ function heatmapInit() {
   return cells;
 }
 const heat = heatmapInit();
-const start7 = (() => { const d = new Date(now); d.setHours(0, 0, 0, 0); return d.getTime() - 6 * DAY; })();
+const heatDays = localDayStarts(now, 7);
+const start7 = heatDays[0];
 function bump(ts: number, prov: string) {
   if (ts < start7 || ts > now + 60000) return;
-  const d = new Date(ts); const dayIdx = Math.floor((d.getTime() - start7) / DAY);
+  const d = new Date(ts); const dayIdx = localDayIndex(ts, heatDays);
   if (dayIdx < 0 || dayIdx > 6) return;
   const cell = heat[dayIdx * 24 + d.getHours()]; cell.n++; cell.p[prov] = (cell.p[prov] || 0) + 1;
 }
@@ -326,7 +326,7 @@ const snapshot = {
   },
   ai: {
     sessions, counts, providers: { claude, codex, grok, ollama }, usage: agentsUsage(),
-    heatmap: { start: start7, cells: heat.map(c => [c.n, c.p]) }, recent: recent.slice(0, 40),
+    heatmap: { start: start7, days: heatDays, cells: heat.map(c => [c.n, c.p]) }, recent: recent.slice(0, 40),
   },
 };
 
