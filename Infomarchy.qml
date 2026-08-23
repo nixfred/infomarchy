@@ -109,7 +109,9 @@ Scope {
         fillMode: Image.PreserveAspectCrop
         asynchronous: true
         cache: true
-        opacity: root.wallpaperOpacity
+        // Dimming belongs to the dashboard. When SUPER+I hides it, restore the
+        // wallpaper to full brightness instead of leaving an invisible shade.
+        opacity: root.dashboardVisible ? root.wallpaperOpacity : 1.0
         Behavior on opacity { NumberAnimation { duration: 300 } }
       }
 
