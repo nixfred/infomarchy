@@ -235,7 +235,7 @@ Item {
                 var cw = (width - labelW) / 24, ch = height / 7
                 var maxN = 1
                 for (var i = 0; i < cells.length; i++) if (cells[i][0] > maxN) maxN = cells[i][0]
-                ctx.font = Style.font.caption + "px " + view.mono
+                ctx.font = Style.font.caption + "px \"" + view.mono + "\""
                 ctx.textBaseline = "middle"
                 var days = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"]
                 for (var d = 0; d < 7; d++) {
