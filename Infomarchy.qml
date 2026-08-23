@@ -23,6 +23,7 @@ Scope {
   // How much of the wallpaper survives under the glass. 0 = solid theme bg.
   property real wallpaperOpacity: 0.32
   property bool privacyMode: false
+  property bool dashboardVisible: true
 
   InfoModel { id: infoModel; refreshMs: 4000 }
 
@@ -75,6 +76,8 @@ Scope {
     function setWallpaperOpacity(v: string): void { var n = Number(v); if (isFinite(n)) root.wallpaperOpacity = Math.max(0, Math.min(1, n)) }
     function setPrivacy(v: string): void { root.privacyMode = ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0 }
     function togglePrivacy(): void { root.privacyMode = !root.privacyMode }
+    function setDashboardVisible(v: string): void { root.dashboardVisible = ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0 }
+    function toggleDashboard(): void { root.dashboardVisible = !root.dashboardVisible }
   }
 
   Variants {
@@ -132,6 +135,7 @@ Scope {
         desk: infoModel
         interactive: true
         privacyMode: root.privacyMode
+        visible: root.dashboardVisible
       }
     }
   }

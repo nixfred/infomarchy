@@ -102,10 +102,11 @@ omarchy-restart-shell    # first time only: services load at shell start
 
 The plugin declares itself as a clone of `omarchy.background`, so Omarchy hands it the wallpaper role. Your chosen wallpaper is still there — dimmed to 32% behind the glass — and `omarchy theme bg set …` keeps working.
 
-Bind the overlay in `~/.config/hypr/bindings.lua` (pick any free chord):
+Bind the fullscreen overlay and wallpaper-dashboard toggle in `~/.config/hypr/bindings.lua` (pick any free chords):
 
 ```lua
 o.bind("SUPER + D", "Infomarchy: AI info desk", "omarchy-shell shell toggle nixfred.infomarchy '{}'")
+o.bind("SUPER + I", "Infomarchy: toggle wallpaper dashboard", "omarchy-shell infomarchy toggleDashboard")
 ```
 
 <details>
@@ -170,6 +171,8 @@ omarchy-shell shell call nixfred.infomarchy refresh                   # overlay 
 omarchy-shell infomarchy setWallpaperOpacity 0.5                      # 0 = solid theme bg
 omarchy-shell infomarchy togglePrivacy                                # hide/reveal sensitive wallpaper details
 omarchy-shell infomarchy setPrivacy true                              # explicit on/off control
+omarchy-shell infomarchy toggleDashboard                              # hide/show cards; keep wallpaper
+omarchy-shell infomarchy setDashboardVisible true                     # explicit on/off control
 ```
 
 | Knob | Where | Default |
@@ -177,6 +180,7 @@ omarchy-shell infomarchy setPrivacy true                              # explicit
 | poll interval | `refreshMs` in `Infomarchy.qml` / `Overlay.qml` | 4000 / 3000 ms |
 | wallpaper dim | `wallpaperOpacity` in `Infomarchy.qml` | 0.32 |
 | privacy mode | `P` while the overlay is open, or wallpaper IPC above | off |
+| wallpaper dashboard | `SUPER+I` or wallpaper IPC above | visible |
 | space left for the bar | `topInset` in `InfoView.qml` | 40 px × font scale |
 | provider colours | `providerColor()` in `InfoModel.qml` | theme ANSI roles |
 | add a provider | one regex in `PROVIDERS` in `collector.ts` | — |
