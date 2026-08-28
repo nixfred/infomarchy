@@ -4,7 +4,12 @@
 // Never hardcodes a user, host or home path: everything derives from $HOME,
 // XDG_*, /proc and /sys. Missing tools/dirs degrade to nulls, never crash.
 
-import { readdirSync, readFileSync, statSync, existsSync, readlinkSync, mkdirSync, writeFileSync } from "fs";
+import {
+  chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync,
+  mkdirSync, openSync, readlinkSync, readdirSync, readSync, renameSync,
+  unlinkSync, writeSync,
+} from "fs";
+import { randomUUID } from "crypto";
 import { join, basename } from "path";
 import { Database } from "bun:sqlite";
 import { localDayIndex, localDayStarts } from "./history-time";
@@ -28,18 +33,98 @@ const MAX_COMMAND_BYTES = 1024 * 1024;
 const MAX_HTTP_BYTES = 1024 * 1024;
 const MAX_COLLECTION_ITEMS = 256;
 const MAX_MODELS = 128;
+const MAX_JSON_NODES = 50_000;
+const MAX_JSON_DEPTH = 24;
+const MAX_SNAPSHOT_BYTES = 1536 * 1024;
+const OUTPUT_FRAME_CHARS = 12 * 1024;
 const currentAgentRaw: Record<string, number> = {};
 
 // ---------------------------------------------------------------- helpers
-function read(p: string, maxBytes = MAX_FILE_BYTES): string | null {
+export function readRegularFileLimited(p: string, maxBytes = MAX_FILE_BYTES, maxMs = 75): string | null {
+  let fd = -1;
   try {
-    const size = statSync(p).size;
-    if (size > maxBytes) return null;
-    return readFileSync(p, "utf8");
+    fd = openSync(p, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const opened = fstatSync(fd);
+    // FIFOs, sockets and devices are rejected before reading. procfs/sysfs
+    // pseudo-files report as regular files and are safe with O_NONBLOCK.
+    if (!opened.isFile() || opened.size > maxBytes) return null;
+    const started = performance.now();
+    const chunks: Buffer[] = [];
+    let total = 0;
+    while (true) {
+      if (performance.now() - started > maxMs) return null;
+      const room = maxBytes - total;
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, room + 1));
+      const bytes = readSync(fd, buffer, 0, buffer.byteLength, null);
+      if (bytes === 0) break;
+      total += bytes;
+      if (total > maxBytes) return null;
+      chunks.push(buffer.subarray(0, bytes));
+    }
+    return Buffer.concat(chunks, total).toString("utf8");
+  } catch { return null; }
+  finally { if (fd >= 0) try { closeSync(fd); } catch {} }
+}
+function read(p: string, maxBytes = MAX_FILE_BYTES): string | null {
+  return readRegularFileLimited(p, maxBytes);
+}
+export function structureWithinBudget(value: unknown, maxNodes = MAX_JSON_NODES, maxDepth = MAX_JSON_DEPTH): boolean {
+  const stack: Array<{ value: any; depth: number }> = [{ value, depth: 0 }];
+  let nodes = 0;
+  while (stack.length) {
+    const item = stack.pop()!;
+    if (++nodes > maxNodes || item.depth > maxDepth) return false;
+    if (!item.value || typeof item.value !== "object") continue;
+    const values = Array.isArray(item.value) ? item.value : Object.values(item.value);
+    if (values.length > MAX_COLLECTION_ITEMS * 8) return false;
+    for (const child of values) stack.push({ value: child, depth: item.depth + 1 });
+  }
+  return true;
+}
+export function parseJsonBounded(text: string, maxNodes = MAX_JSON_NODES, maxDepth = MAX_JSON_DEPTH): any {
+  try {
+    const value = JSON.parse(text);
+    return structureWithinBudget(value, maxNodes, maxDepth) ? value : null;
   } catch { return null; }
 }
-function readJson(p: string): any { try { const text = read(p); return text === null ? null : JSON.parse(text); } catch { return null; } }
+function readJson(p: string): any {
+  const text = read(p);
+  return text === null ? null : parseJsonBounded(text);
+}
 function ls(p: string): string[] { try { return readdirSync(p); } catch { return []; } }
+
+function ensurePrivateStateDir(path: string): boolean {
+  try {
+    mkdirSync(path, { recursive: true, mode: 0o700 });
+    let state = lstatSync(path);
+    const uid = typeof process.getuid === "function" ? process.getuid() : state.uid;
+    if (state.isSymbolicLink() || !state.isDirectory() || state.uid !== uid) return false;
+    if ((state.mode & 0o077) !== 0) chmodSync(path, 0o700);
+    state = lstatSync(path);
+    return !state.isSymbolicLink() && state.isDirectory() && state.uid === uid && (state.mode & 0o077) === 0;
+  } catch { return false; }
+}
+export function writePrivateStateFile(directory: string, name: string, text: string): boolean {
+  if (!/^[A-Za-z0-9_.-]{1,96}$/.test(name) || Buffer.byteLength(text) > MAX_FILE_BYTES) return false;
+  if (!ensurePrivateStateDir(directory)) return false;
+  const temporary = join(directory, `.${name}.${process.pid}.${randomUUID()}.tmp`);
+  let fd = -1;
+  try {
+    fd = openSync(temporary, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
+    const data = Buffer.from(text, "utf8");
+    let offset = 0;
+    while (offset < data.byteLength) offset += writeSync(fd, data, offset, data.byteLength - offset);
+    fsyncSync(fd);
+    closeSync(fd); fd = -1;
+    // rename replaces a hostile destination symlink itself; it never follows it.
+    renameSync(temporary, join(directory, name));
+    return true;
+  } catch { return false; }
+  finally {
+    if (fd >= 0) try { closeSync(fd); } catch {}
+    try { unlinkSync(temporary); } catch {}
+  }
+}
 async function boundedStream(stream: ReadableStream<Uint8Array> | null, limit: number): Promise<string | null> {
   if (!stream) return "";
   const reader = stream.getReader();
@@ -79,7 +164,7 @@ async function fetchJson(url: string, ms = 600): Promise<any> {
     if (!r.ok) return null;
     const text = await boundedStream(r.body, MAX_HTTP_BYTES);
     if (text === null) return null;
-    const payload = JSON.parse(text);
+    const payload = parseJsonBounded(text);
     return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
   } catch { return null; }
 }
@@ -124,7 +209,8 @@ async function externalIp() {
   if (process.env.INFOMARCHY_SKIP_EXTERNAL_IP === "1") return { address: cached.address || null, checkedAt: now };
   try {
     const response = await fetch("https://1.1.1.1/cdn-cgi/trace", { signal: AbortSignal.timeout(1200) });
-    const address = response.ok ? parseExternalIpTrace(await response.text()) : null;
+    const trace = response.ok ? await boundedStream(response.body, 16 * 1024) : null;
+    const address = trace === null ? null : parseExternalIpTrace(trace);
     return { address, checkedAt: now };
   } catch {
     return { address: cached.address || null, checkedAt: now };
@@ -171,7 +257,7 @@ async function disk() {
 }
 async function net() {
   const route = await run(["ip", "-j", "route", "get", "1.1.1.1"], 800);
-  let dev = ""; try { dev = JSON.parse(route)[0]?.dev || ""; } catch {}
+  let dev = ""; try { dev = parseJsonBounded(route, 2048, 12)?.[0]?.dev || ""; } catch {}
   if (!dev) return { dev: null };
   const rx = +(read(`/sys/class/net/${dev}/statistics/rx_bytes`) || 0);
   const tx = +(read(`/sys/class/net/${dev}/statistics/tx_bytes`) || 0);
@@ -195,7 +281,7 @@ async function net() {
     }
   }
   const ip = await run(["ip", "-j", "-4", "addr", "show", dev], 800);
-  let addr: string | null = null; try { addr = JSON.parse(ip)[0]?.addr_info?.[0]?.local || null; } catch {}
+  let addr: string | null = null; try { addr = parseJsonBounded(ip, 4096, 12)?.[0]?.addr_info?.[0]?.local || null; } catch {}
   return { dev, wireless, ssid, signal, freq, bitrate, addr, rx, tx, rxRate, txRate };
 }
 async function ping() {
@@ -544,7 +630,7 @@ async function repoState(cwd: string) {
 
 async function liveSessions(pids: number[]) {
   let clients: any[] = [];
-  try { clients = JSON.parse(await run(["hyprctl", "clients", "-j"], 1000)) || []; } catch {}
+  try { clients = parseJsonBounded(await run(["hyprctl", "clients", "-j"], 1000), 50_000, 16) || []; } catch {}
   const winByPid = new Map<number, any>(clients.map((c: any) => [c.pid, c]));
   const sessions: any[] = [];
   const gpuByPid = await gpuMemoryByPid();
@@ -653,7 +739,7 @@ function claudeHistory() {
   const lines = txt.split("\n").filter(Boolean);
   for (const l of lines) {
     try {
-      const e = JSON.parse(l); const ts = +e.timestamp; if (!ts) continue;
+      const e = parseJsonBounded(l, 2048, 12); const ts = +e?.timestamp; if (!ts) continue;
       bump(ts, "claude"); cnt("claude", ts);
       recent.push({ provider: "claude", ts, project: shortPath(e.project || ""), text: safePrompt(e.display), session: e.sessionId });
     } catch {}
@@ -666,14 +752,14 @@ function codexHistory() {
   const hist = read(join(base, "history.jsonl")) || "";
   let prompts = 0;
   for (const l of hist.split("\n").filter(Boolean)) {
-    try { const e = JSON.parse(l); const ts = (+e.ts || 0) * 1000; if (!ts) continue; prompts++;
+    try { const e = parseJsonBounded(l, 2048, 12); const ts = (+e?.ts || 0) * 1000; if (!ts) continue; prompts++;
       bump(ts, "codex"); cnt("codex", ts);
       recent.push({ provider: "codex", ts, project: "", text: safePrompt(e.text), session: e.session_id });
     } catch {}
   }
   const threads: any[] = [];
   for (const l of (read(join(base, "session_index.jsonl")) || "").split("\n").filter(Boolean)) {
-    try { const e = JSON.parse(l); threads.push({ id: e.id, name: e.thread_name, updatedAt: Date.parse(e.updated_at) }); } catch {}
+    try { const e = parseJsonBounded(l, 2048, 12); if (e) threads.push({ id: e.id, name: e.thread_name, updatedAt: Date.parse(e.updated_at) }); } catch {}
   }
   threads.sort((a, b) => b.updatedAt - a.updatedAt);
   return { present: true, prompts, threads: threads.slice(0, 8), threadCount: threads.length };
@@ -685,12 +771,12 @@ function grokHistory() {
   const sessionIds = new Set<string>();
   for (const dir of ls(join(base, "sessions"))) {
     const full = join(base, "sessions", dir);
-    try { if (!statSync(full).isDirectory()) continue; } catch { continue; }
+    try { const state = lstatSync(full); if (state.isSymbolicLink() || !state.isDirectory()) continue; } catch { continue; }
     const project = shortPath(decodeURIComponent(dir));
     const history = read(join(full, "prompt_history.jsonl")) || "";
     for (const l of history.split("\n").filter(Boolean)) {
       try {
-        const e = JSON.parse(l), ts = Date.parse(e.timestamp);
+        const e = parseJsonBounded(l, 2048, 12), ts = Date.parse(e?.timestamp);
         if (!Number.isFinite(ts)) continue;
         const session = String(e.session_id || "");
         if (session) sessionIds.add(session);
@@ -772,7 +858,107 @@ function agentsUsage() {
 }
 
 // ---------------------------------------------------------------- main
+export function frameSnapshot(value: unknown): string {
+  if (!structureWithinBudget(value, MAX_JSON_NODES, MAX_JSON_DEPTH)) throw new Error("snapshot structure exceeded budget");
+  const payload = JSON.stringify(sanitizeForUi(value));
+  if (Buffer.byteLength(payload, "utf8") > MAX_SNAPSHOT_BYTES) throw new Error("snapshot exceeded byte budget");
+  const lines: string[] = [];
+  for (let offset = 0; offset < payload.length; offset += OUTPUT_FRAME_CHARS) {
+    lines.push(JSON.stringify({ v: 1, type: "chunk", data: payload.slice(offset, offset + OUTPUT_FRAME_CHARS) }));
+  }
+  lines.push(JSON.stringify({ v: 1, type: "end", chars: payload.length }));
+  return lines.join("\n") + "\n";
+}
+
+function protocolError(message: string): string {
+  return JSON.stringify({ v: 1, type: "error", message: uiString(message, 160) }) + "\n";
+}
+
+function demoSnapshot(stamp = Date.now()) {
+  const dayStarts = localDayStarts(stamp, 7);
+  const cells = Array.from({ length: 168 }, (_, index) => {
+    const hour = index % 24;
+    const day = Math.floor(index / 24);
+    const n = ((hour + day * 3) % 11 === 0) ? 7 : ((hour + day) % 5 === 0 ? 3 : (hour > 8 && hour < 19 ? 1 : 0));
+    return [n, n ? (index % 3 === 0 ? { claude: n } : index % 3 === 1 ? { codex: n } : { opencode: n }) : {}];
+  });
+  const sessions = [
+    {
+      provider: "codex", pid: 42421, cwd: "~/Code/atlas", project: "atlas", startedAt: stamp - 38 * 60_000,
+      uptimeSec: 38 * 60, session: "demo-codex-session", sessionIds: ["demo-codex-session"], busy: true,
+      topic: "Hardening atomic state persistence", topicAt: stamp - 90_000,
+      window: { address: "0xd001", title: "Implementing bounded snapshot transport", class: "com.mitchellh.ghostty", workspace: 2 },
+      resources: { cpuPct: 18.4, rss: 912_261_120, processes: 7, gpuMemory: null },
+      repoRoot: "~/Code/atlas", git: { branch: "release/dashboard", dirty: 4, ahead: 2, behind: 0, conflicts: 0 }, attention: null,
+    },
+    {
+      provider: "claude", pid: 42463, cwd: "~/Code/orbit", project: "orbit", startedAt: stamp - 74 * 60_000,
+      uptimeSec: 74 * 60, session: "demo-claude-session", sessionIds: ["demo-claude-session"], busy: false,
+      topic: "Reviewing plugin submission checks", topicAt: stamp - 4 * 60_000,
+      window: { address: "0xd002", title: "Waiting for marketplace review", class: "kitty", workspace: 4 },
+      resources: { cpuPct: 2.1, rss: 604_241_920, processes: 5, gpuMemory: null },
+      repoRoot: "~/Code/orbit", git: { branch: "main", dirty: 0, ahead: 0, behind: 0, conflicts: 0 }, attention: "waiting",
+    },
+    {
+      provider: "opencode", pid: 42511, cwd: "~/Code/beacon", project: "beacon", startedAt: stamp - 16 * 60_000,
+      uptimeSec: 16 * 60, session: "demo-opencode-session", sessionIds: ["demo-opencode-session"], busy: true,
+      topic: "Building interactive model controls", topicAt: stamp - 45_000,
+      window: { address: "0xd003", title: "Local AI model controls", class: "Alacritty", workspace: 6 },
+      resources: { cpuPct: 9.7, rss: 486_539_264, processes: 4, gpuMemory: 1_288_490_188 },
+      repoRoot: "~/Code/beacon", git: { branch: "feat/local-ai", dirty: 2, ahead: 1, behind: 0, conflicts: 0 }, attention: null,
+    },
+  ];
+  const promptSeeds = [
+    ["codex", "atlas", "Verify atomic state writes and output limits", "demo-codex-session"],
+    ["claude", "orbit", "Review the marketplace submission checklist", "demo-claude-session"],
+    ["opencode", "beacon", "Add selectable local model controls", "demo-opencode-session"],
+    ["codex", "atlas", "Make activity details follow the pointer", "closed-demo-session"],
+    ["claude", "orbit", "Audit desktop layout at 1920 by 1080", "closed-demo-session-2"],
+    ["opencode", "beacon", "Test prompt search and smooth scrolling", "closed-demo-session-3"],
+    ["codex", "atlas", "Summarize each live session topic", "demo-codex-session"],
+    ["claude", "orbit", "Keep every dashboard module removable", "demo-claude-session"],
+    ["opencode", "beacon", "Persist the right column card order", "demo-opencode-session"],
+    ["codex", "atlas", "Show cached external connectivity data", "closed-demo-session-4"],
+  ];
+  const recent = promptSeeds.map((entry, index) => ({
+    provider: entry[0], project: `~/Code/${entry[1]}`, text: entry[2], session: entry[3], ts: stamp - index * 7 * 60_000,
+    activityCell: activityCellIndex(stamp - index * 7 * 60_000, dayStarts),
+    live: index < 3 || index === 6 || index === 7 || index === 8,
+    window: index % 3 === 0 ? { address: "0xd001", workspace: 2 } : index % 3 === 1 ? { address: "0xd002", workspace: 4 } : { address: "0xd003", workspace: 6 },
+  }));
+  return {
+    ts: stamp, hyprLua: true, host: "omarchy-demo", user: "alex",
+    machine: {
+      cpu: { pct: 27.4, load: [1.18, 0.92, 0.76], cores: 16 },
+      mem: { total: 34_359_738_368, used: 15_246_073_856, pct: 44.4, swapTotal: 8_589_934_592, swapUsed: 0 },
+      disks: [{ mount: "/", size: 1_999_844_147_200, used: 816_043_786_240, avail: 1_183_800_360_960, pct: 40.8 }],
+      net: { dev: "wlan0", wireless: true, ssid: "Omarchy Lab", signal: -47, addr: "192.0.2.15", rxRate: 2_420_000, txRate: 386_000 },
+      ping: { host: "1.1.1.1", label: "cloudflare", ms: 18.6, ok: true }, battery: null,
+      gpu: { name: "NVIDIA RTX 4070", util: 31, memUsed: 3_006_477_312, memTotal: 12_884_901_888, temp: 49 },
+      temp: 52, uptime: 186_300, externalIp: "203.0.113.42",
+    },
+    ai: {
+      sessions, workspaces: workspaceGroups(sessions), attention: [sessions[1]], collisions: [],
+      counts: { claude: { today: 18, week: 96, total: 640 }, codex: { today: 27, week: 144, total: 1102 }, opencode: { today: 11, week: 51, total: 214 } },
+      providers: {
+        claude: { present: true, prompts: 640 }, codex: { present: true, prompts: 1102, threadCount: 37 },
+        grok: { present: true, sessions: 9 }, opencode: { present: true, prompts: 214, sessions: 12 },
+        ollama: { present: true, up: true, loaded: [{ name: "qwen3:8b", vram: 6_442_450_944 }], models: ["qwen3:8b", "gemma3:4b"], modelCount: 2 },
+      },
+      usage: {
+        claude: { name: "Claude", ready: true, tierLabel: "Max", todayPrompts: 18, todayTotalTokens: 184_000, limits: [{ label: "SESSION", percent: 0.46, resetsAt: new Date(stamp + 2.1 * 3600_000).toISOString() }, { label: "WEEKLY", percent: 0.61, resetsAt: new Date(stamp + 3.4 * 86400_000).toISOString() }] },
+        codex: { name: "Codex", ready: true, tierLabel: "Pro", todayPrompts: 27, todayTotalTokens: 311_000, limits: [{ label: "5-HOUR", percent: 0.38, resetsAt: new Date(stamp + 3.2 * 3600_000).toISOString() }, { label: "7-DAY", percent: 0.54, resetsAt: new Date(stamp + 4.2 * 86400_000).toISOString() }] },
+      },
+      heatmap: { start: dayStarts[0], days: dayStarts, cells }, recent, recentTruncated: false,
+    },
+  };
+}
+
 async function runCollector() {
+  if (process.argv.includes("--demo")) {
+    process.stdout.write(frameSnapshot(demoSnapshot()));
+    return;
+  }
   const pids = scanProcs();
   const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama, externalIpS] = await Promise.all([
     Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(), externalIp(),
@@ -791,7 +977,7 @@ async function runCollector() {
 
   // Hyprland >= 0.56 takes Lua in `hyprctl dispatch`; older takes "dispatcher arg".
   let hyprLua = false;
-  try { const v = JSON.parse(await run(["hyprctl", "version", "-j"], 800)); const m = String(v.tag || v.version || "").match(/(\d+)\.(\d+)/); hyprLua = !!m && (+m[1] > 0 || +m[2] >= 56); } catch {}
+  try { const v = parseJsonBounded(await run(["hyprctl", "version", "-j"], 800), 2048, 12) || {}; const m = String(v.tag || v.version || "").match(/(\d+)\.(\d+)/); hyprLua = !!m && (+m[1] > 0 || +m[2] >= 56); } catch {}
 
   const snapshot = {
     ts: now, hyprLua, host: (read("/etc/hostname") || "").trim() || null, user: process.env.USER || null,
@@ -811,8 +997,7 @@ async function runCollector() {
   };
 
   try {
-    mkdirSync(STATE_DIR, { recursive: true });
-    writeFileSync(PREV_FILE, JSON.stringify({
+    writePrivateStateFile(STATE_DIR, basename(PREV_FILE), JSON.stringify({
       ts: now,
       cpu: { ...cpuS._raw, pct: cpuS.pct },
       net: { dev: netS.dev, rx: netS.rx, tx: netS.tx, rxRate: netS.rxRate, txRate: netS.txRate },
@@ -821,7 +1006,10 @@ async function runCollector() {
       topicSummaries,
     }));
   } catch {}
-  console.log(JSON.stringify(sanitizeForUi(snapshot)));
+  process.stdout.write(frameSnapshot(snapshot));
 }
 
-if (import.meta.main) await runCollector();
+if (import.meta.main) {
+  try { await runCollector(); }
+  catch { process.stdout.write(protocolError("collector failed safely")); }
+}

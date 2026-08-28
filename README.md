@@ -15,8 +15,10 @@
 </p>
 
 <p align="center">
-  <img src="preview.png" alt="Infomarchy in privacy mode on an empty 1080p Omarchy desktop: live AI sessions, 7-day heatmap, usage limits, local AI, and machine stats" width="100%">
+  <img src="preview.png" alt="Infomarchy with sanitized demo data on an empty 1080p Omarchy desktop: live AI sessions, 7-day heatmap, recent tasks, usage limits, local AI, and machine stats" width="100%">
 </p>
+
+The public preview is the real plugin rendered on an empty Omarchy desktop using Infomarchy's explicit, transient demo-data mode. It contains no live prompt, hostname, username, network, path, process, or session data.
 
 > **Want to see the plain desktop?** Press **`SUPER + I`** to hide the Infomarchy cards and reveal your wallpaper. Press **`SUPER + I`** again to bring the dashboard back. Add the one-time key binding shown under [Install](#install).
 
@@ -180,7 +182,7 @@ The screenshots above are the **Last Call** theme. A theme gallery is on the roa
                                      (clonedFrom omarchy.background)               WlrLayer.Overlay
 ```
 
-- **`collector.ts`** builds one snapshot. It reads `argv` for every pid (cheap), then lazily `stat`s only agent processes and their ancestors, so a 1 000-process box costs ~0.2 s warm. Throughput and CPU % come from deltas against the previous run (`$XDG_STATE_HOME/infomarchy/prev-<instance>.json`). It never parses the multi-hundred-MB Claude/Codex session transcripts — only the small history/index files and OpenCode's local SQLite history.
+- **`collector.ts`** builds one snapshot. It reads `argv` for every pid (cheap), then lazily opens only agent processes and their ancestors, so a 1 000-process box costs ~0.2 s warm. Local files are opened once with no-follow/nonblocking semantics, must be regular files, and are read under byte/time limits. Rate baselines use private, atomic state files under `$XDG_STATE_HOME/infomarchy/prev-<instance>.json`. It never parses the multi-hundred-MB Claude/Codex session transcripts — only the small history/index files and OpenCode's local SQLite history.
 - **`resume-session.ts`** maps each supported provider to its installed CLI resume syntax and launches it through `xdg-terminal-exec`. Provider, ID, and project are separate process arguments; prompt text is never executed.
 - **`InfoModel.qml`** owns the timer, the parse, the theme colours, and helpers (`focusWindow`, formatting).
 - **`InfoView.qml`** is pure presentation, hosted twice: on the **background** layer by `Infomarchy.qml`, and on the **overlay** layer by `Overlay.qml`. The background host keeps the `background` IPC target so Omarchy's wallpaper tooling is unaffected.
@@ -199,6 +201,8 @@ omarchy-shell infomarchy toggleDashboard                              # hide/sho
 omarchy-shell infomarchy setDashboardVisible true                     # explicit on/off control
 omarchy-shell infomarchy toggleSection machine                        # remove/restore one dashboard card
 omarchy-shell infomarchy setSection recent true                       # explicit section visibility
+omarchy-shell infomarchy setDemo true                                 # sanitized screenshot data; transient
+omarchy-shell infomarchy setDemo false                                # return to live local data
 ```
 
 | Knob | Where | Default |
@@ -212,7 +216,7 @@ omarchy-shell infomarchy setSection recent true                       # explicit
 
 ## Data handling
 
-Prompt and session data stays on the machine. Network checks are limited to the existing ping to `1.1.1.1`, the local Ollama API, and a Cloudflare trace request for the public IP at most once every 15 minutes per dashboard surface. Recent task text is credential-redacted before it reaches QML. Infomarchy has no screen-level privacy masking: prompts, projects, paths, host/network details, and session topics remain visible.
+Prompt and session data stays on the machine. Network checks are limited to the existing ping to `1.1.1.1`, the local Ollama API, and a Cloudflare trace request for the public IP at most once every 15 minutes per dashboard surface. Recent task text is credential-redacted before it reaches QML. Collector JSON is depth/node/byte bounded and streamed to QML in capped frames. Infomarchy has no screen-level privacy masking: prompts, projects, paths, host/network details, and session topics remain visible. The explicit `setDemo true` screenshot mode replaces the whole snapshot with documentation-only sample data and resets off whenever the shell restarts.
 
 ## FAQ
 

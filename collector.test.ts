@@ -1,13 +1,20 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { Database } from "bun:sqlite";
 const historyFixture = join(import.meta.dir, ".test-fixture");
 afterAll(() => rmSync(historyFixture, { recursive: true, force: true }));
 import { join } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, writePrivateStateFile } from "./collector.ts";
 
 const fixture = join(import.meta.dir, ".test-fixture-races");
 afterAll(() => rmSync(fixture, { recursive: true, force: true }));
+
+function decodeFrames(output: string): any {
+  const frames = output.trim().split("\n").map(line => JSON.parse(line));
+  const payload = frames.filter(frame => frame.type === "chunk").map(frame => frame.data).join("");
+  expect(frames.at(-1)).toMatchObject({ v: 1, type: "end", chars: payload.length });
+  return JSON.parse(payload);
+}
 
 describe("providerOf", () => {
   test("treats an interactive Codex CLI as a session", () => {
@@ -161,6 +168,49 @@ describe("live session topics", () => {
   });
 });
 
+describe("collector security boundaries", () => {
+  test("reads one opened regular file with byte and no-follow limits", () => {
+    const root = join(fixture, "safe-read");
+    mkdirSync(root, { recursive: true });
+    const target = join(root, "target.txt");
+    const link = join(root, "link.txt");
+    writeFileSync(target, "bounded content");
+    symlinkSync(target, link);
+    expect(readRegularFileLimited(target, 64)).toBe("bounded content");
+    expect(readRegularFileLimited(target, 4)).toBeNull();
+    expect(readRegularFileLimited(link, 64)).toBeNull();
+    expect(readRegularFileLimited(root, 64)).toBeNull();
+  });
+
+  test("writes state atomically without following a destination symlink", () => {
+    const root = join(fixture, "atomic-state");
+    const state = join(root, "state");
+    const victim = join(root, "victim.txt");
+    mkdirSync(state, { recursive: true });
+    writeFileSync(victim, "do not overwrite");
+    symlinkSync(victim, join(state, "prev-bg.json"));
+    expect(writePrivateStateFile(state, "prev-bg.json", "{\"safe\":true}")).toBe(true);
+    expect(readFileSync(victim, "utf8")).toBe("do not overwrite");
+    expect(readFileSync(join(state, "prev-bg.json"), "utf8")).toBe("{\"safe\":true}");
+    expect(lstatSync(join(state, "prev-bg.json")).isSymbolicLink()).toBe(false);
+    expect(lstatSync(state).mode & 0o077).toBe(0);
+  });
+
+  test("rejects excessive JSON depth and node counts", () => {
+    expect(parseJsonBounded("[".repeat(20) + "0" + "]".repeat(20), 100, 8)).toBeNull();
+    expect(parseJsonBounded(JSON.stringify(Array.from({ length: 50 }, (_, i) => i)), 10, 8)).toBeNull();
+    expect(parseJsonBounded('{"ok":[1,2,3]}', 10, 8)).toEqual({ ok: [1, 2, 3] });
+  });
+
+  test("frames snapshots into bounded streaming records", () => {
+    const framed = frameSnapshot({ value: "x".repeat(50_000), nested: { ok: true } });
+    const lines = framed.trim().split("\n").map(line => JSON.parse(line));
+    expect(lines.every(line => JSON.stringify(line).length < 65_536)).toBe(true);
+    expect(lines.at(-1)).toMatchObject({ v: 1, type: "end" });
+    expect(decodeFrames(framed)).toEqual({ value: "x".repeat(512), nested: { ok: true } });
+  });
+});
+
 describe("prev.json instance files", () => {
   test(" --id writes separate rate-delta files so overlay and wallpaper do not clobber each other", async () => {
     const state = join(fixture, "state");
@@ -175,7 +225,7 @@ describe("prev.json instance files", () => {
       });
       const output = await new Response(proc.stdout).text();
       expect(await proc.exited).toBe(0);
-      JSON.parse(output);
+      decodeFrames(output);
     }
 
     await collect("bg");
@@ -203,7 +253,7 @@ describe("history collection", () => {
     });
     const output = await new Response(proc.stdout).text();
     expect(await proc.exited).toBe(0);
-    const snap = JSON.parse(output);
+    const snap = decodeFrames(output);
 
     expect(snap.ai.providers.grok.sessions).toBe(2);
     expect(snap.ai.counts.grok.today).toBe(3);
@@ -237,7 +287,7 @@ describe("history collection", () => {
     });
     const output = await new Response(proc.stdout).text();
     expect(await proc.exited).toBe(0);
-    const snap = JSON.parse(output);
+    const snap = decodeFrames(output);
 
     expect(snap.ai.providers.opencode).toEqual({ present: true, prompts: 1, sessions: 1 });
     expect(snap.ai.recent[0]).toMatchObject({

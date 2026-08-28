@@ -254,7 +254,7 @@ Item {
     radius: view.radius
     implicitWidth: sectionLabel.implicitWidth + Style.spacing.lg * 2
     implicitHeight: sectionLabel.implicitHeight + Style.spacing.xs * 2
-    Text {
+    PlainText {
       id: sectionLabel
       anchors.centerIn: parent
       text: (parent.selected ? "● " : "○ ") + parent.section.label
@@ -527,7 +527,7 @@ Item {
                 color: Util.alpha(view.desk.themeBackground, 0.96)
                 border.color: Util.alpha(view.desk.themeForeground, 0.55)
                 border.width: 1
-                Text {
+                PlainText {
                   id: heatTooltipText
                   anchors.centerIn: parent
                   width: Math.min(implicitWidth, heat.width - Style.spacing.xl * 2)
@@ -607,7 +607,7 @@ Item {
             color: Util.alpha(view.desk.themeForeground, promptSearchInput.activeFocus ? 0.10 : 0.045)
             border.color: Util.alpha(promptSearchInput.activeFocus ? view.desk.cyan : view.desk.themeForeground, promptSearchInput.activeFocus ? 0.65 : 0.14)
             border.width: 1
-            Text { anchors { left: parent.left; leftMargin: Style.spacing.md; verticalCenter: parent.verticalCenter } text: "⌕"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.body }
+            PlainText { anchors { left: parent.left; leftMargin: Style.spacing.md; verticalCenter: parent.verticalCenter } text: "⌕"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.body }
             TextInput {
               id: promptSearchInput
               anchors { left: parent.left; leftMargin: Style.spacing.xl * 2; right: clearSearch.left; rightMargin: Style.spacing.sm; verticalCenter: parent.verticalCenter }
@@ -618,9 +618,9 @@ Item {
               font.pixelSize: Style.font.bodySmall
               clip: true
               onTextChanged: view.promptSearch = text
-              Text { visible: !parent.text && !parent.activeFocus; text: "search prompt, project, or provider…"; color: view.textFaint; font: parent.font }
+              PlainText { visible: !parent.text && !parent.activeFocus; text: "search prompt, project, or provider…"; color: view.textFaint; font: parent.font }
             }
-            Text {
+            PlainText {
               id: clearSearch
               anchors { right: parent.right; rightMargin: Style.spacing.md; verticalCenter: parent.verticalCenter }
               visible: view.promptSearch !== ""
@@ -750,7 +750,7 @@ Item {
               onPositionChanged: function(mouse) { if (pressed) recentScrollTrack.seek(mouse.y) }
             }
           }
-          Text {
+          PlainText {
             anchors.centerIn: parent
             visible: view.activityFilterActive && view.visibleRecentTasks.length === 0
             text: "no prompts in this filter"
@@ -918,9 +918,9 @@ Item {
             }
             RowLayout {
               Layout.fillWidth: true
-              Text { text: "WAN"; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+              PlainText { text: "WAN"; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
               Item { Layout.fillWidth: true }
-              Text { text: view.machine.externalIp || "unavailable"; color: view.machine.externalIp ? view.desk.cyan : view.textFaint; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideMiddle }
+              PlainText { text: view.machine.externalIp || "unavailable"; color: view.machine.externalIp ? view.desk.cyan : view.textFaint; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideMiddle }
             }
             RowLayout {
               Layout.fillWidth: true
@@ -971,19 +971,19 @@ Item {
       RowLayout {
         Layout.fillWidth: true
         Rectangle { width: 9; height: 9; radius: 5; color: sessionInspector.tone }
-        Text { text: view.desk.providerLabel(sessionInspector.session.provider) + " SESSION"; color: sessionInspector.tone; font.family: view.mono; font.pixelSize: Style.font.subtitle; font.bold: true }
+        PlainText { text: view.desk.providerLabel(sessionInspector.session.provider) + " SESSION"; color: sessionInspector.tone; font.family: view.mono; font.pixelSize: Style.font.subtitle; font.bold: true }
         Item { Layout.fillWidth: true }
-        Text { text: view.desk.dur(sessionInspector.session.uptimeSec) + " · pid " + (sessionInspector.session.pid || "—"); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
+        PlainText { text: view.desk.dur(sessionInspector.session.uptimeSec) + " · pid " + (sessionInspector.session.pid || "—"); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
         Tag {
           text: "CLOSE"
           tone: view.textDim
           MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.inspectedSession = null }
         }
       }
-      Text { Layout.fillWidth: true; text: sessionInspector.session.cwd || "unknown project"; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.subtitle; elide: Text.ElideMiddle }
-      Text { Layout.fillWidth: true; text: (sessionInspector.session.window || {}).title || "no window title"; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
-      Text { Layout.fillWidth: true; text: "CPU " + (sessionInspector.session.resources && sessionInspector.session.resources.cpuPct !== null ? sessionInspector.session.resources.cpuPct.toFixed(1) + "%" : "—") + "   ·   RAM " + view.desk.bytes((sessionInspector.session.resources || {}).rss) + "   ·   " + ((sessionInspector.session.resources || {}).processes || 0) + " PROCESSES" + ((sessionInspector.session.resources || {}).gpuMemory ? "   ·   GPU " + view.desk.bytes(sessionInspector.session.resources.gpuMemory) : ""); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
-      Text {
+      PlainText { Layout.fillWidth: true; text: sessionInspector.session.cwd || "unknown project"; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.subtitle; elide: Text.ElideMiddle }
+      PlainText { Layout.fillWidth: true; text: (sessionInspector.session.window || {}).title || "no window title"; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
+      PlainText { Layout.fillWidth: true; text: "CPU " + (sessionInspector.session.resources && sessionInspector.session.resources.cpuPct !== null ? sessionInspector.session.resources.cpuPct.toFixed(1) + "%" : "—") + "   ·   RAM " + view.desk.bytes((sessionInspector.session.resources || {}).rss) + "   ·   " + ((sessionInspector.session.resources || {}).processes || 0) + " PROCESSES" + ((sessionInspector.session.resources || {}).gpuMemory ? "   ·   GPU " + view.desk.bytes(sessionInspector.session.resources.gpuMemory) : ""); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+      PlainText {
         Layout.fillWidth: true
         text: {
           var s = sessionInspector.session, w = s.window || {}, g = s.git || null
@@ -999,7 +999,7 @@ Item {
         Layout.fillWidth: true
         visible: !!(sessionInspector.session.window && sessionInspector.session.window.address)
         spacing: Style.spacing.xs
-        Text { text: "MOVE TO WORKSPACE"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; font.bold: true }
+        PlainText { text: "MOVE TO WORKSPACE"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; font.bold: true }
         Flow {
           Layout.fillWidth: true
           spacing: Style.spacing.xs
@@ -1047,7 +1047,7 @@ Item {
           MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.previewsEnabled = !view.previewsEnabled }
         }
         Item { Layout.fillWidth: true }
-        Text { text: "right-click another card to inspect"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+        PlainText { text: "right-click another card to inspect"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
       }
     }
   }
@@ -1071,11 +1071,11 @@ Item {
       spacing: Style.spacing.md
       RowLayout {
         Layout.fillWidth: true
-        Text { text: view.desk.providerLabel(promptDrawer.prompt.provider) + " PROMPT ACTIONS"; color: view.desk.providerColor(promptDrawer.prompt.provider); font.family: view.mono; font.pixelSize: Style.font.subtitle; font.bold: true }
+        PlainText { text: view.desk.providerLabel(promptDrawer.prompt.provider) + " PROMPT ACTIONS"; color: view.desk.providerColor(promptDrawer.prompt.provider); font.family: view.mono; font.pixelSize: Style.font.subtitle; font.bold: true }
         Item { Layout.fillWidth: true }
         Tag { text: "CLOSE"; tone: view.textDim; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.selectedPrompt = null } }
       }
-      Text { Layout.fillWidth: true; text: promptDrawer.prompt.text || ""; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.body; wrapMode: Text.Wrap }
+      PlainText { Layout.fillWidth: true; text: promptDrawer.prompt.text || ""; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.body; wrapMode: Text.Wrap }
       RowLayout {
         spacing: Style.spacing.sm
         Tag { text: "COPY PROMPT"; tone: view.desk.cyan; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.desk.copyText(promptDrawer.prompt.text) } }
@@ -1083,10 +1083,10 @@ Item {
         Tag { visible: view.desk.canOpenProject(promptDrawer.prompt.project); text: "OPEN PROJECT"; tone: view.desk.green; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.desk.openProject(promptDrawer.prompt.project) } }
         Item { Layout.fillWidth: true }
       }
-      Text { visible: promptDrawer.group.length > 1; text: "SAME SESSION · " + promptDrawer.group.length + " RECENT PROMPTS"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; font.bold: true }
+      PlainText { visible: promptDrawer.group.length > 1; text: "SAME SESSION · " + promptDrawer.group.length + " RECENT PROMPTS"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; font.bold: true }
       Repeater {
         model: promptDrawer.group
-        delegate: Text { required property var modelData; Layout.fillWidth: true; text: "• " + modelData.text; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
+        delegate: PlainText { required property var modelData; Layout.fillWidth: true; text: "• " + modelData.text; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
       }
     }
   }

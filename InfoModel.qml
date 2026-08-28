@@ -20,6 +20,9 @@ Item {
   property string resumePath: Qt.resolvedUrl("resume-session.ts").toString().replace(/^file:\/\//, "")
   property string sessionActionsPath: Qt.resolvedUrl("session-actions.ts").toString().replace(/^file:\/\//, "")
   property string copyTextPath: Qt.resolvedUrl("copy-text.ts").toString().replace(/^file:\/\//, "")
+  // Explicit, transient screenshot/demo data. It never persists and defaults
+  // off on every shell start; normal operation always displays live data.
+  property bool demoMode: false
   // Wallpaper and overlay each run a collector; --id keeps their rate
   // baselines apart (see collector.ts prev-${id}.json).
   property string instance: "bg"
@@ -111,31 +114,78 @@ Item {
   Process {
     id: collector
     property string lastStderr: ""
-    command: ["bun", root.collectorPath, "--id", root.instance]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var t = String(text || "").trim()
-        if (!t) { root.error = "collector produced no output"; return }
-        if (t.length > 2 * 1024 * 1024) { root.error = "collector output exceeded 2 MiB"; return }
-        try {
-          root.snap = JSON.parse(t)
-          root.ready = true
-          root.error = ""
-        } catch (e) {
-          root.error = "bad snapshot: " + root.plainText(e, 256)
-        }
-      }
+    property string outputBuffer: ""
+    property int outputBytes: 0
+    property int stderrBytes: 0
+    property bool protocolFailed: false
+    property bool frameComplete: false
+    readonly property int maxOutputBytes: 2 * 1024 * 1024
+    readonly property int maxStderrBytes: 4096
+    command: root.demoMode ? ["bun", root.collectorPath, "--id", root.instance, "--demo"] : ["bun", root.collectorPath, "--id", root.instance]
+
+    function fail(message) {
+      protocolFailed = true
+      outputBuffer = ""
+      outputBytes = 0
+      root.error = root.plainText(message, 256)
+      if (running) running = false
     }
-    stderr: StdioCollector {
-      // bun / libraries may warn on stderr even when the snapshot is valid.
-      // Stash it; only promote to the desk error banner if the process fails.
-      waitForEnd: true
-      onStreamFinished: { collector.lastStderr = root.plainText(String(text || "").trim(), 512) }
+    function acceptStdout(rawLine) {
+      if (protocolFailed || frameComplete) return
+      var line = String(rawLine || "")
+      // Producer frames are 12 KiB; refuse a malformed line before parsing it.
+      if (line.length > 65536) { fail("collector frame exceeded 64 KiB"); return }
+      var frame
+      try { frame = JSON.parse(line) }
+      catch (e) { fail("bad collector frame"); return }
+      if (!frame || frame.v !== 1) { fail("unsupported collector protocol"); return }
+      if (frame.type === "error") { fail(frame.message || "collector failed safely"); return }
+      if (frame.type === "chunk" && typeof frame.data === "string") {
+        // QString is UTF-16. Counting two bytes per code unit is a hard cap on
+        // the shell-side accumulation, independent of collector input.
+        var added = frame.data.length * 2
+        if (outputBytes + added > maxOutputBytes) { fail("collector output exceeded 2 MiB"); return }
+        outputBuffer += frame.data
+        outputBytes += added
+        return
+      }
+      if (frame.type !== "end" || Number(frame.chars) !== outputBuffer.length) { fail("incomplete collector snapshot"); return }
+      try {
+        root.snap = JSON.parse(outputBuffer)
+        root.ready = true
+        root.error = ""
+        frameComplete = true
+        outputBuffer = ""
+        outputBytes = 0
+      } catch (e2) { fail("bad snapshot: " + root.plainText(e2, 160)) }
+    }
+    function acceptStderr(rawLine) {
+      if (stderrBytes >= maxStderrBytes) return
+      var line = root.plainText(String(rawLine || ""), 512)
+      var added = Math.min(maxStderrBytes - stderrBytes, line.length * 2)
+      if (added <= 0) return
+      lastStderr += line.slice(0, Math.floor(added / 2))
+      stderrBytes += added
+    }
+    onRunningChanged: if (running) {
+      outputBuffer = ""
+      outputBytes = 0
+      stderrBytes = 0
+      lastStderr = ""
+      protocolFailed = false
+      frameComplete = false
+    }
+    stdout: SplitParser {
+      splitMarker: "\n"
+      onRead: function(line) { collector.acceptStdout(line) }
+    }
+    stderr: SplitParser {
+      splitMarker: "\n"
+      onRead: function(line) { collector.acceptStderr(line) }
     }
     onExited: function(exitCode) {
-      if (exitCode !== 0 && collector.lastStderr)
-        root.error = collector.lastStderr.split("\n")[0]
+      if (collector.protocolFailed) return
+      if (!collector.frameComplete) root.error = collector.lastStderr || (exitCode === 0 ? "collector ended without a complete snapshot" : "collector exited " + exitCode)
     }
   }
   function refresh() { if (root.active && !collector.running) collector.running = true }

@@ -22,8 +22,10 @@ Scope {
   property string background: ""
   // How much of the wallpaper survives under the glass. 0 = solid theme bg.
   property real wallpaperOpacity: 0.32
+  // Transient sanitized sample data for public screenshots. Never persisted.
+  property bool demoMode: false
 
-  InfoModel { id: infoModel; refreshMs: 4000 }
+  InfoModel { id: infoModel; refreshMs: 4000; demoMode: root.demoMode }
   InfoSettings { id: dashboardSettings }
 
   function imageUrl(path) { return Util.fileUrl(path) }
@@ -92,6 +94,11 @@ Scope {
     function getDashboardVisible(): string { return dashboardSettings.dashboardVisible ? "true" : "false" }
     function setSection(id: string, v: string): void { dashboardSettings.setSection(id, ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
     function toggleSection(id: string): void { dashboardSettings.toggleSection(id) }
+    function setDemo(v: string): void {
+      root.demoMode = ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0
+      infoModel.refresh()
+    }
+    function getDemo(): string { return root.demoMode ? "true" : "false" }
   }
 
   Variants {
