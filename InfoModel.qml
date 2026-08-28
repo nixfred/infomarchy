@@ -17,6 +17,9 @@ Item {
   // Resolve the script itself so a missing trailing slash on a directory URL
   // cannot produce ".../nixfred.infomarchicollector.ts".
   property string collectorPath: Qt.resolvedUrl("collector.ts").toString().replace(/^file:\/\//, "")
+  property string resumePath: Qt.resolvedUrl("resume-session.ts").toString().replace(/^file:\/\//, "")
+  property string sessionActionsPath: Qt.resolvedUrl("session-actions.ts").toString().replace(/^file:\/\//, "")
+  property string copyTextPath: Qt.resolvedUrl("copy-text.ts").toString().replace(/^file:\/\//, "")
   // Wallpaper and overlay each run a collector; --id keeps their rate
   // baselines apart (see collector.ts prev-${id}.json).
   property string instance: "bg"
@@ -153,6 +156,46 @@ Item {
       Quickshell.execDetached(["hyprctl", "dispatch", 'hl.dsp.focus({ window = "address:0x' + addr + '" })'])
     else
       Quickshell.execDetached(["hyprctl", "dispatch", "focuswindow", "address:0x" + addr])
+  }
+
+  function moveWindowToWorkspace(address, workspace) {
+    var addr = String(address || "").replace(/^0x/, "")
+    var target = Number(workspace)
+    if (!/^[0-9a-f]+$/i.test(addr) || !Number.isInteger(target) || target < 1 || target > 99) return false
+    if (root.snap && root.snap.hyprLua)
+      Quickshell.execDetached(["hyprctl", "dispatch", 'hl.dsp.window.move({ window = "address:0x' + addr + '", workspace = "' + target + '", follow = false })'])
+    else
+      Quickshell.execDetached(["hyprctl", "dispatch", "movetoworkspacesilent", target + ",address:0x" + addr])
+    return true
+  }
+
+  function canResume(provider, sessionId) {
+    var supported = ["claude", "codex", "grok", "opencode"]
+    return supported.indexOf(String(provider || "").toLowerCase()) >= 0 &&
+      /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/.test(String(sessionId || ""))
+  }
+
+  function resumeSession(provider, sessionId, cwd) {
+    if (!canResume(provider, sessionId)) return false
+    Quickshell.execDetached(["bun", root.resumePath, String(provider), String(sessionId), String(cwd || "")])
+    return true
+  }
+
+  function canOpenProject(cwd) {
+    var path = String(cwd || "")
+    return path === "~" || path.indexOf("~/") === 0 || path.indexOf("/") === 0
+  }
+
+  function openProject(cwd) {
+    if (!canOpenProject(cwd)) return false
+    Quickshell.execDetached(["bun", root.sessionActionsPath, String(cwd)])
+    return true
+  }
+  function copyText(text) {
+    var value = String(text || "")
+    if (!value || value.length > 10000) return false
+    Quickshell.execDetached(["bun", root.copyTextPath, value])
+    return true
   }
 
   // --- formatting helpers ----------------------------------------------------

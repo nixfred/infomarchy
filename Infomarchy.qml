@@ -22,10 +22,9 @@ Scope {
   property string background: ""
   // How much of the wallpaper survives under the glass. 0 = solid theme bg.
   property real wallpaperOpacity: 0.32
-  property bool privacyMode: false
-  property bool dashboardVisible: true
 
   InfoModel { id: infoModel; refreshMs: 4000 }
+  InfoSettings { id: dashboardSettings }
 
   function imageUrl(path) { return Util.fileUrl(path) }
   function refreshBackground() { if (!readlinkProc.running) readlinkProc.running = true }
@@ -88,10 +87,11 @@ Scope {
     target: "infomarchy"
     function refresh(): void { infoModel.refresh() }
     function setWallpaperOpacity(v: string): void { var n = Number(v); if (isFinite(n)) root.wallpaperOpacity = Math.max(0, Math.min(1, n)) }
-    function setPrivacy(v: string): void { root.privacyMode = ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0 }
-    function togglePrivacy(): void { root.privacyMode = !root.privacyMode }
-    function setDashboardVisible(v: string): void { root.dashboardVisible = ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0 }
-    function toggleDashboard(): void { root.dashboardVisible = !root.dashboardVisible }
+    function setDashboardVisible(v: string): void { dashboardSettings.setDashboardVisible(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
+    function toggleDashboard(): void { dashboardSettings.toggleDashboardVisible() }
+    function getDashboardVisible(): string { return dashboardSettings.dashboardVisible ? "true" : "false" }
+    function setSection(id: string, v: string): void { dashboardSettings.setSection(id, ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
+    function toggleSection(id: string): void { dashboardSettings.toggleSection(id) }
   }
 
   Variants {
@@ -123,7 +123,9 @@ Scope {
         fillMode: Image.PreserveAspectCrop
         asynchronous: true
         cache: true
-        opacity: root.wallpaperOpacity
+        // Dimming belongs to the dashboard. When SUPER+I hides it, restore the
+        // wallpaper to full brightness instead of leaving an invisible shade.
+        opacity: dashboardSettings.ready && dashboardSettings.dashboardVisible ? root.wallpaperOpacity : 1.0
         Behavior on opacity { NumberAnimation { duration: 300 } }
       }
 
@@ -147,9 +149,9 @@ Scope {
       InfoView {
         anchors.fill: parent
         desk: infoModel
+        settings: dashboardSettings
         interactive: true
-        privacyMode: root.privacyMode
-        visible: root.dashboardVisible
+        visible: dashboardSettings.ready && dashboardSettings.dashboardVisible
       }
     }
   }

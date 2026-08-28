@@ -43,3 +43,32 @@ export function repoCollisions(sessions: any[]): any[] {
     agents: group.map(s => ({ provider: s.provider, pid: s.pid })),
   }));
 }
+
+export function workspaceGroups(sessions: any[]): any[] {
+  const groups = new Map<number, any[]>();
+  for (const session of sessions || []) {
+    const workspace = Number(session?.window?.workspace);
+    const address = String(session?.window?.address || "");
+    if (!Number.isInteger(workspace) || workspace < 1 || !/^0x[0-9a-f]+$/i.test(address)) continue;
+    const group = groups.get(workspace) || [];
+    group.push({ provider: session.provider, address, pid: session.pid, startedAt: Number(session.startedAt || 0) });
+    groups.set(workspace, group);
+  }
+  return [...groups.entries()].sort(([a], [b]) => a - b).map(([workspace, agents]) => ({
+    workspace,
+    agents: agents.sort((a, b) => b.startedAt - a.startedAt),
+  }));
+}
+
+export function resourceDelta(currentTicks: unknown, previousTicks: unknown, elapsedSec: unknown): number | null {
+  const current = Number(currentTicks), previous = Number(previousTicks), elapsed = Number(elapsedSec);
+  if (![current, previous, elapsed].every(Number.isFinite) || current < previous || elapsed < 1) return null;
+  return 100 * ((current - previous) / 100) / elapsed;
+}
+
+export function forecastPercent(percent: unknown, remainingMs: unknown, windowMs: unknown): number | null {
+  const used = Number(percent), remaining = Number(remainingMs), duration = Number(windowMs);
+  const elapsed = duration - remaining;
+  if (![used, remaining, duration].every(Number.isFinite) || used < 0 || remaining < 0 || duration <= 0 || elapsed < duration * 0.03) return null;
+  return Math.max(0, used * duration / elapsed);
+}

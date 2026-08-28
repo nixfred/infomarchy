@@ -6,8 +6,9 @@
 
 import { readdirSync, readFileSync, statSync, existsSync, readlinkSync, mkdirSync, writeFileSync } from "fs";
 import { join, basename } from "path";
+import { Database } from "bun:sqlite";
 import { localDayIndex, localDayStarts } from "./history-time";
-import { attentionState, parseGitStatus, repoCollisions } from "./ai-ops";
+import { attentionState, parseGitStatus, repoCollisions, workspaceGroups, resourceDelta } from "./ai-ops";
 
 const HOME = process.env.HOME || "/root";
 const XDG_STATE = process.env.XDG_STATE_HOME || join(HOME, ".local/state");
@@ -27,6 +28,7 @@ const MAX_COMMAND_BYTES = 1024 * 1024;
 const MAX_HTTP_BYTES = 1024 * 1024;
 const MAX_COLLECTION_ITEMS = 256;
 const MAX_MODELS = 128;
+const currentAgentRaw: Record<string, number> = {};
 
 // ---------------------------------------------------------------- helpers
 function read(p: string, maxBytes = MAX_FILE_BYTES): string | null {
@@ -104,6 +106,29 @@ function sanitizeForUi(value: any, depth = 0): any {
     return result;
   }
   return value;
+}
+
+export function parseExternalIpTrace(value: unknown): string | null {
+  const line = String(value || "").split("\n").find(entry => entry.startsWith("ip="));
+  const address = String(line || "").slice(3).trim();
+  return address.length >= 3 && address.length <= 64 && /^[0-9a-f:.]+$/i.test(address) && /[.:]/.test(address) ? address : null;
+}
+export function externalIpCacheFresh(cached: any, stamp = Date.now()): boolean {
+  const checkedAt = Number(cached && cached.checkedAt);
+  return Number.isFinite(checkedAt) && checkedAt > 0 && stamp >= checkedAt && stamp - checkedAt < 15 * 60 * 1000;
+}
+async function externalIp() {
+  const cached = prev.externalIp || {};
+  // Cache failures too, otherwise a disconnected host would retry every tick.
+  if (externalIpCacheFresh(cached, now)) return cached;
+  if (process.env.INFOMARCHY_SKIP_EXTERNAL_IP === "1") return { address: cached.address || null, checkedAt: now };
+  try {
+    const response = await fetch("https://1.1.1.1/cdn-cgi/trace", { signal: AbortSignal.timeout(1200) });
+    const address = response.ok ? parseExternalIpTrace(await response.text()) : null;
+    return { address, checkedAt: now };
+  } catch {
+    return { address: cached.address || null, checkedAt: now };
+  }
 }
 const prev = readJson(PREV_FILE) || {};
 const dt = prev.ts ? (now - prev.ts) / 1000 : 0;
@@ -249,6 +274,9 @@ export function providerOf(cmd: string[]): string | null {
       if (name === "ollama" && !(cmd[1] === "run" || cmd[1] === "runner")) return null; // only chats/runners, not the daemon
       // Codex app-server / mcp-server are long-lived daemons, not a desk session.
       if (name === "codex" && cmd.some(a => a === "app-server" || a === "mcp-server")) return null;
+      // OpenCode also exposes several persistent services. Only its TUI/run
+      // invocations represent a session that belongs on the desk.
+      if (name === "opencode" && cmd.some(a => ["serve", "web", "acp", "mcp", "github"].includes(a))) return null;
       return name;
     }
   }
@@ -267,6 +295,244 @@ export function cmdIsTurnInhibitor(cmd: string[]): boolean {
 }
 function shortPath(p: string) { return p.startsWith(HOME) ? "~" + p.slice(HOME.length) : p; }
 
+function cleanSessionId(value: unknown): string {
+  const id = String(value || "").trim();
+  return /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/.test(id) ? id : "";
+}
+function envValue(text: string | null, key: string): string {
+  if (!text) return "";
+  const prefix = key + "=";
+  for (const entry of text.split("\0")) if (entry.startsWith(prefix)) return entry.slice(prefix.length);
+  return "";
+}
+// Extract only known session identifiers. /proc/*/environ can contain secrets,
+// so the collector never serializes or scans arbitrary environment values.
+export function sessionIdFrom(provider: string, cmd: string[], environ = ""): string {
+  const keys: Record<string, string[]> = {
+    claude: ["CLAUDE_SESSION_ID"],
+    codex: ["CODEX_SESSION_ID", "CODEX_THREAD_ID"],
+    grok: ["GROK_SESSION_ID"],
+    gemini: ["GEMINI_SESSION_ID"],
+    opencode: ["OPENCODE_SESSION_ID"],
+  };
+  for (const key of keys[provider] || []) {
+    const id = cleanSessionId(envValue(environ, key));
+    if (id) return id;
+  }
+  for (let i = 0; i < cmd.length - 1; i++) {
+    const sessionFlag = ["--resume", "--session", "--session-id", "--thread-id"].includes(cmd[i]) ||
+      (provider === "opencode" && cmd[i] === "-s");
+    if (!sessionFlag) continue;
+    const id = cleanSessionId(cmd[i + 1]);
+    if (id) return id;
+  }
+  return "";
+}
+function childPids(pid: number): number[] {
+  return (read(`/proc/${pid}/task/${pid}/children`) || "").trim().split(/\s+/).filter(Boolean).map(Number);
+}
+function processTreeSample(pid: number) {
+  const queue = [pid], seen = new Set<number>();
+  let ticks = 0, rss = 0;
+  while (queue.length) {
+    const candidate = queue.shift()!;
+    if (!candidate || seen.has(candidate)) continue;
+    seen.add(candidate);
+    const stat = read(`/proc/${candidate}/stat`);
+    if (stat) {
+      const fields = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+      ticks += Number(fields[11] || 0) + Number(fields[12] || 0);
+    }
+    const statm = (read(`/proc/${candidate}/statm`) || "").trim().split(/\s+/);
+    rss += Number(statm[1] || 0) * 4096;
+    queue.push(...childPids(candidate));
+  }
+  return { ticks, rss, pids: [...seen] };
+}
+async function gpuMemoryByPid() {
+  const result = new Map<number, number>();
+  if (!Bun.which("nvidia-smi")) return result;
+  const output = await run(["nvidia-smi", "--query-compute-apps=pid,used_gpu_memory", "--format=csv,noheader,nounits"], 1000);
+  for (const line of output.split("\n")) {
+    const parts = line.split(",").map(v => v.trim()), pid = Number(parts[0]), mib = Number(parts[1]);
+    if (Number.isInteger(pid) && Number.isFinite(mib)) result.set(pid, mib * 1048576);
+  }
+  return result;
+}
+function openSessionIds(pid: number, provider: string): string[] {
+  const ids = new Set<string>();
+  for (const fd of ls(`/proc/${pid}/fd`)) {
+    let target = "";
+    try { target = readlinkSync(`/proc/${pid}/fd/${fd}`); } catch { continue; }
+    let match: RegExpMatchArray | null = null;
+    if (provider === "codex")
+      match = target.match(/\/thread-writer-locks\/([^/]+)\.lock$/) || target.match(/\/rollout-[^/]*-([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$/i);
+    else if (provider === "claude")
+      match = target.match(/\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$/i);
+    const id = cleanSessionId(match?.[1]);
+    if (id) ids.add(id);
+  }
+  return [...ids];
+}
+function processSessionIds(pid: number, provider: string, cmd: string[]): string[] {
+  const ids = new Set<string>();
+  function inspectProcess(candidate: number, candidateCmd: string[]) {
+    const envOrArg = sessionIdFrom(provider, candidateCmd, read(`/proc/${candidate}/environ`) || "");
+    if (envOrArg) ids.add(envOrArg);
+    for (const id of openSessionIds(candidate, provider)) ids.add(id);
+  }
+  inspectProcess(pid, cmd);
+  // Codex and similar tools pass the current ID into their command/sandbox
+  // descendants. Walk only this agent's small process tree, not all of /proc.
+  const queue = childPids(pid), seen = new Set<number>();
+  while (queue.length) {
+    const child = queue.shift()!;
+    if (!child || seen.has(child)) continue;
+    seen.add(child);
+    inspectProcess(child, cmdByPid.get(child) || []);
+    queue.push(...childPids(child));
+  }
+  return [...ids];
+}
+
+export function linkRecentToLive(recentEntries: any[], sessions: any[]): any[] {
+  const liveBySession = new Map<string, any>();
+  for (const session of sessions) {
+    const ids = Array.isArray(session.sessionIds) ? session.sessionIds : [session.session];
+    for (const value of ids) {
+      const id = cleanSessionId(value);
+      if (id) liveBySession.set(`${session.provider}\0${id}`, session);
+    }
+  }
+  return recentEntries.map(entry => {
+    const id = cleanSessionId(entry.session);
+    const live = id ? liveBySession.get(`${entry.provider}\0${id}`) : null;
+    return {
+      ...entry,
+      live: !!live,
+      window: live?.window ? { address: live.window.address, workspace: live.window.workspace } : null,
+    };
+  });
+}
+
+const TOPIC_STOP_WORDS = new Set([
+  "about", "add", "after", "again", "also", "and", "are", "audit", "basically", "been", "being", "build", "can", "cards", "check", "could", "create", "does", "doesnt", "doing", "dont", "fix", "for", "from", "had", "hard", "has", "have", "implement", "in", "into", "is", "it", "its", "just", "last", "little", "make", "more", "need", "needed", "not", "of", "on", "only", "other", "part", "past", "please", "prompt", "prompts", "real", "really", "remove", "review", "screen", "short", "should", "some", "still", "summary", "than", "that", "the", "their", "them", "there", "these", "they", "this", "those", "through", "to", "very", "want", "was", "were", "what", "when", "where", "which", "while", "with", "work", "working", "would", "your"
+]);
+
+function topicProjectLabel(session: any): string {
+  const raw = String(session.project || session.cwd || "").replace(/\/$/, "").split("/").pop() || "";
+  const clean = raw.split(".").filter(Boolean).pop() || raw;
+  return clean && clean !== "~" ? clean.replace(/[-_]+/g, " ").replace(/\b\w/g, c => c.toUpperCase()).replace(/\bAi\b/g, "AI") : "";
+}
+
+function exactSessionEntries(session: any, recentEntries: any[]): any[] {
+  const ids = new Set((Array.isArray(session.sessionIds) ? session.sessionIds : [session.session])
+    .map((value: any) => cleanSessionId(value)).filter(Boolean));
+  if (!ids.size) return [];
+  return recentEntries.filter(entry => entry.provider === session.provider && ids.has(cleanSessionId(entry.session)))
+    .sort((a, b) => Number(b.ts || 0) - Number(a.ts || 0)).slice(0, 5);
+}
+
+export function localSessionSummary(session: any, entries: any[]): string {
+  const text = entries.map(entry => String(entry.text || "")).join(" ").toLowerCase();
+  const latest = String(entries[0]?.text || "").toLowerCase();
+  const action = /\b(summar\w*|synopsis|topic)\b/.test(latest) ? "Summarizing" :
+    /\b(remove\w*|simplif\w*|declutter\w*|duplicate|dont want|don't want|only)\b/.test(latest) ? "Simplifying" :
+    /\b(fix\w*|bug|broken|hard to|doesnt|doesn't|issue|crash|error|scroll\w*)\b/.test(latest) ? "Fixing" :
+    /\b(audit|review|check|verify|inspect)\b/.test(latest) ? "Reviewing" :
+    /\b(research\w*|compare|investigat\w*|find out)\b/.test(latest) ? "Researching" :
+    /\b(add|build\w*|creat\w*|implement\w*|introduc\w*|make)\b/.test(latest) ? "Building" : "Improving";
+  const aliases: Record<string, string> = { session: "sessions", scrolling: "scrolling", scroll: "scrolling", scrollbar: "scrolling", card: "cards", dashboard: "dashboard" };
+  const scores = new Map<string, number>();
+  entries.forEach((entry, index) => {
+    const weight = Math.max(1, 5 - index);
+    for (const token of String(entry.text || "").toLowerCase().match(/[a-z][a-z0-9-]{2,}/g) || []) {
+      const word = aliases[token] || token;
+      if (TOPIC_STOP_WORDS.has(word) || /^\d+$/.test(word)) continue;
+      scores.set(word, (scores.get(word) || 0) + weight);
+    }
+  });
+  const project = topicProjectLabel(session);
+  const projectLower = project.toLowerCase();
+  const keywords = [...scores.entries()].filter(([word]) => word !== projectLower)
+    .sort((a, b) => b[1] - a[1]).slice(0, 2).map(([word]) => word);
+  const subject = [project, ...keywords].filter(Boolean).join(" ") || "active session";
+  return `${action} ${subject}`.split(/\s+/).slice(0, 7).join(" ").slice(0, 64).trim();
+}
+
+export function cleanGeneratedSummary(value: unknown): string {
+  return String(value || "").replace(/[\r\n]+/g, " ").replace(/[*_#]+/g, "").replace(/^[\s"'`-]+|[\s"'`*.!,:;-]+$/g, "")
+    .replace(/\s+/g, " ").split(" ").slice(0, 8).join(" ").slice(0, 72).trim();
+}
+
+export function attachSessionTopics(sessions: any[], recentEntries: any[]): any[] {
+  for (const session of sessions) {
+    const entries = exactSessionEntries(session, recentEntries);
+    session.topic = localSessionSummary(session, entries);
+    session.topicAt = entries.length ? Number(entries[0].ts || 0) : 0;
+  }
+  return sessions;
+}
+
+async function refineSessionTopics(sessions: any[], recentEntries: any[], ollama: any): Promise<Record<string, any>> {
+  const previous = prev.topicSummaries && typeof prev.topicSummaries === "object" ? prev.topicSummaries : {};
+  const next: Record<string, any> = { ...previous };
+  const model = String((ollama.loaded || [])[0]?.name || "");
+  if (!model) return next;
+  const host = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
+  const base = host.startsWith("http") ? host : "http://" + host;
+  await Promise.all(sessions.map(async session => {
+    const entries = exactSessionEntries(session, recentEntries);
+    if (!entries.length) return;
+    const ids = (session.sessionIds || []).map((value: any) => cleanSessionId(value)).filter(Boolean);
+    const key = `${session.provider}:${ids[0] || session.pid}`;
+    const fingerprint = String(Bun.hash(JSON.stringify(entries.map(entry => [entry.ts, entry.text]))));
+    const cached = previous[key];
+    if (cached && cached.fingerprint === fingerprint && cached.model === model && cached.summary) {
+      session.topic = cached.summary;
+      return;
+    }
+    try {
+      const prompt = "Summarize the current work as a specific 3-7 word gerund phrase. Do not quote a request. No punctuation or preamble.\nProject: " +
+        topicProjectLabel(session) + "\nRecent requests:\n" + entries.map(entry => "- " + String(entry.text || "").slice(0, 320)).join("\n");
+      const response = await fetch(base + "/api/generate", {
+        method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(2200),
+        body: JSON.stringify({ model, prompt, stream: false, options: { temperature: 0.1, num_predict: 20 } }),
+      });
+      const generated = response.ok ? cleanGeneratedSummary((await response.json() as any).response) : "";
+      if (generated) session.topic = generated;
+    } catch {}
+    next[key] = { fingerprint, model, summary: session.topic, checkedAt: now };
+  }));
+  return next;
+}
+
+export function inferSessionIdsFromRecent(sessions: any[], recentEntries: any[]): void {
+  const unresolvedByKey = new Map<string, any[]>();
+  for (const session of sessions) {
+    if ((session.sessionIds || []).length || !session.cwd || session.cwd === "/") continue;
+    const key = `${session.provider}\0${session.cwd}`;
+    const group = unresolvedByKey.get(key) || [];
+    group.push(session);
+    unresolvedByKey.set(key, group);
+  }
+  for (const [key, group] of unresolvedByKey) {
+    // Two live agents in the same provider/project are indistinguishable from
+    // history alone. Refuse to guess; their prompt rows remain safely dim.
+    if (group.length !== 1) continue;
+    const session = group[0];
+    const candidate = recentEntries.find(entry =>
+      `${entry.provider}\0${entry.project}` === key &&
+      cleanSessionId(entry.session) &&
+      Number(entry.ts || 0) >= Number(session.startedAt || 0) - 5000
+    );
+    const id = cleanSessionId(candidate?.session);
+    if (!id) continue;
+    session.session = id;
+    session.sessionIds = [id];
+  }
+}
+
 async function repoState(cwd: string) {
   if (!cwd) return { root: "", state: null };
   const [root, status] = await Promise.all([
@@ -281,6 +547,7 @@ async function liveSessions(pids: number[]) {
   try { clients = JSON.parse(await run(["hyprctl", "clients", "-j"], 1000)) || []; } catch {}
   const winByPid = new Map<number, any>(clients.map((c: any) => [c.pid, c]));
   const sessions: any[] = [];
+  const gpuByPid = await gpuMemoryByPid();
   for (const pid of pids) {
     const prov = providerOf(cmdByPid.get(pid) || []); if (!prov) continue;
     const p = info(pid); if (!p) continue;
@@ -291,12 +558,22 @@ async function liveSessions(pids: number[]) {
     // find the hyprland window hosting it by walking up the parent chain
     let w: any = null, q: Proc | null = p;
     while (q && q.pid > 1) { if (winByPid.has(q.pid)) { w = winByPid.get(q.pid); break; } q = info(q.ppid); }
+    const sessionIds = processSessionIds(p.pid, prov, p.cmd);
+    const sample = processTreeSample(p.pid);
+    currentAgentRaw[String(p.pid)] = sample.ticks;
     sessions.push({
       provider: prov, pid: p.pid, cwd: shortPath(p.cwd), project: basename(p.cwd || "") || "/",
       _cwd: p.cwd,
       startedAt: p.start, uptimeSec: Math.max(0, (now - p.start) / 1000),
+      session: sessionIds[0] || "", sessionIds,
       window: w ? { address: w.address, title: w.title, class: w.class, workspace: w.workspace?.id ?? null } : null,
       args: p.cmd.slice(1, 4).join(" ").slice(0, 60),
+      resources: {
+        cpuPct: resourceDelta(sample.ticks, prev.agents?.[String(p.pid)], dt),
+        rss: sample.rss,
+        processes: sample.pids.length,
+        gpuMemory: sample.pids.reduce((sum, child) => sum + (gpuByPid.get(child) || 0), 0) || null,
+      },
     });
   }
   const sessionPids = new Set(sessions.map((s: any) => s.pid as number));
@@ -348,11 +625,19 @@ function heatmapInit() {
 const heat = heatmapInit();
 const heatDays = localDayStarts(now, 7);
 const start7 = heatDays[0];
+export function activityCellIndex(ts: unknown, dayStarts: unknown): number {
+  const time = Number(ts);
+  if (!Number.isFinite(time) || !Array.isArray(dayStarts) || dayStarts.length !== 7) return -1;
+  const day = localDayIndex(time, dayStarts.map(Number));
+  if (day < 0 || day > 6) return -1;
+  const hour = new Date(time).getHours();
+  return day * 24 + hour;
+}
 function bump(ts: number, prov: string) {
   if (ts < start7 || ts > now + 60000) return;
-  const d = new Date(ts); const dayIdx = localDayIndex(ts, heatDays);
-  if (dayIdx < 0 || dayIdx > 6) return;
-  const cell = heat[dayIdx * 24 + d.getHours()]; cell.n++; cell.p[prov] = (cell.p[prov] || 0) + 1;
+  const index = activityCellIndex(ts, heatDays);
+  if (index < 0) return;
+  const cell = heat[index]; cell.n++; cell.p[prov] = (cell.p[prov] || 0) + 1;
 }
 const recent: any[] = [];
 const todayStart = (() => { const d = new Date(now); d.setHours(0, 0, 0, 0); return d.getTime(); })();
@@ -416,6 +701,42 @@ function grokHistory() {
   }
   return { present: true, sessions: sessionIds.size, active: active.map((a: any) => ({ pid: a.pid, cwd: shortPath(a.cwd || ""), openedAt: Date.parse(a.opened_at) })) };
 }
+function opencodeHistory() {
+  const dataRoot = process.env.XDG_DATA_HOME || join(HOME, ".local/share");
+  const path = join(dataRoot, "opencode/opencode.db");
+  if (!existsSync(path)) return { present: false };
+  let db: Database | null = null;
+  try {
+    db = new Database(path, { readonly: true });
+    const rows = db.query(`
+      SELECT m.session_id AS session, m.time_created AS ts, s.directory AS project,
+        (SELECT json_extract(p.data, '$.text')
+           FROM part p
+          WHERE p.message_id = m.id AND json_extract(p.data, '$.type') = 'text'
+          ORDER BY p.time_created, p.id LIMIT 1) AS text
+        FROM message m
+        JOIN session s ON s.id = m.session_id
+       WHERE json_extract(m.data, '$.role') = 'user'
+       ORDER BY m.time_created DESC, m.id DESC
+    `).all() as any[];
+    const sessions = new Set<string>();
+    let prompts = 0;
+    for (const row of rows) {
+      const ts = Number(row.ts || 0);
+      if (!ts || !row.text) continue;
+      prompts++;
+      const session = cleanSessionId(row.session);
+      if (session) sessions.add(session);
+      bump(ts, "opencode"); cnt("opencode", ts);
+      recent.push({ provider: "opencode", ts, project: shortPath(String(row.project || "")), text: safePrompt(row.text), session });
+    }
+    return { present: true, prompts, sessions: sessions.size };
+  } catch (error) {
+    return { present: true, prompts: 0, sessions: 0, error: String(error) };
+  } finally {
+    try { db?.close(); } catch {}
+  }
+}
 async function ollamaState() {
   const host = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
   const base = host.startsWith("http") ? host : "http://" + host;
@@ -453,11 +774,20 @@ function agentsUsage() {
 // ---------------------------------------------------------------- main
 async function runCollector() {
   const pids = scanProcs();
-  const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama] = await Promise.all([
-    Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(),
+  const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama, externalIpS] = await Promise.all([
+    Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(), externalIp(),
   ]);
-  const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory();
+  const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory(), opencode = opencodeHistory();
   recent.sort((a, b) => b.ts - a.ts);
+  for (const entry of recent) entry.activityCell = activityCellIndex(entry.ts, heatDays);
+  inferSessionIdsFromRecent(sessions, recent);
+  attachSessionTopics(sessions, recent);
+  const topicSummaries = await refineSessionTopics(sessions, recent, ollama);
+  const linkedRecent = linkRecentToLive(recent, sessions);
+  const weekRecentCount = linkedRecent.filter(entry => entry.activityCell >= 0).length;
+  // Default view still shows 40. Keep enough week rows in the snapshot for
+  // heatmap drill-down without allowing an unbounded history payload.
+  const dashboardRecent = linkedRecent.slice(0, Math.max(40, Math.min(1000, weekRecentCount)));
 
   // Hyprland >= 0.56 takes Lua in `hyprctl dispatch`; older takes "dispatcher arg".
   let hyprLua = false;
@@ -467,14 +797,16 @@ async function runCollector() {
     ts: now, hyprLua, host: (read("/etc/hostname") || "").trim() || null, user: process.env.USER || null,
     machine: {
       cpu: { pct: cpuS.pct, load: cpuS.load, cores: cpuS.cores }, mem: memS, disks: diskS, net: netS, ping: pingS,
-      battery: battery(), gpu: gpuS, temp: temp(), uptime: uptime(),
+      battery: battery(), gpu: gpuS, temp: temp(), uptime: uptime(), externalIp: externalIpS.address,
     },
     ai: {
       sessions,
+      workspaces: workspaceGroups(sessions),
       attention: sessions.filter((s: any) => s.attention),
       collisions: repoCollisions(sessions),
-      counts, providers: { claude, codex, grok, ollama }, usage: agentsUsage(),
-      heatmap: { start: start7, days: heatDays, cells: heat.map(c => [c.n, c.p]) }, recent: recent.slice(0, 40),
+      counts, providers: { claude, codex, grok, opencode, ollama }, usage: agentsUsage(),
+      heatmap: { start: start7, days: heatDays, cells: heat.map(c => [c.n, c.p]) },
+      recent: dashboardRecent, recentTruncated: weekRecentCount > 1000,
     },
   };
 
@@ -484,6 +816,9 @@ async function runCollector() {
       ts: now,
       cpu: { ...cpuS._raw, pct: cpuS.pct },
       net: { dev: netS.dev, rx: netS.rx, tx: netS.tx, rxRate: netS.rxRate, txRate: netS.txRate },
+      agents: currentAgentRaw,
+      externalIp: externalIpS,
+      topicSummaries,
     }));
   } catch {}
   console.log(JSON.stringify(sanitizeForUi(snapshot)));
