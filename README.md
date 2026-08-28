@@ -46,7 +46,7 @@ Each card also attributes live CPU, resident RAM, process-tree size, and—when 
 
 Only the full per-session cards appear in Live AI Sessions; there is no duplicate compact workspace-card strip. Each large card includes its workspace number. In the session inspector, workspace buttons 1–10 can move that exact agent window silently; the current workspace is highlighted and disabled.
 
-Window thumbnails are opt-in: right-click a large session card, toggle **PREVIEWS OFF/ON** in its inspector, then hover a live card. Infomarchy captures only that exact address after a short delay, downsizes it to 160×90, applies a heavy blur, and displays a 320×180 still. Raw captures are immediately deleted and the blurred cache lives only under `/tmp`.
+Window thumbnails are opt-in: right-click a large session card, toggle **PREVIEWS OFF/ON** in its inspector, then hover a live card. Infomarchy captures only that exact address after a short delay, downsizes it to 160×90, applies a heavy blur, and displays a 320×180 still. The raw capture moves through bounded in-memory streams from `grim` to ImageMagick without touching disk; the blurred result is written through an exclusive no-follow descriptor inside a random private temporary directory.
 
 Cards also show the repository branch, clean/changed state, ahead/behind counts, and merge conflicts. A **Needs You** strip calls out agents that appear blocked, waiting for input, or finished for review, plus repositories being shared by multiple live agents.
 

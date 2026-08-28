@@ -243,9 +243,22 @@ Item {
   }
   function copyText(text) {
     var value = String(text || "")
-    if (!value || value.length > 10000) return false
-    Quickshell.execDetached(["bun", root.copyTextPath, value])
+    if (!value || value.length > 10000 || clipboardProcess.running) return false
+    clipboardProcess.pendingText = value
+    clipboardProcess.running = true
     return true
+  }
+
+  // Prompt text is framed over stdin so it never appears in /proc/*/cmdline.
+  Process {
+    id: clipboardProcess
+    property string pendingText: ""
+    command: ["bun", root.copyTextPath]
+    stdinEnabled: true
+    onStarted: {
+      write(JSON.stringify(pendingText) + "\n")
+      pendingText = ""
+    }
   }
 
   // --- formatting helpers ----------------------------------------------------

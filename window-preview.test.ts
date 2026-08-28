@@ -1,5 +1,13 @@
-import { describe, expect, test } from "bun:test";
-import { validWindowAddress } from "./window-preview";
+import { afterEach, describe, expect, test } from "bun:test";
+import { chmodSync, closeSync, constants, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { createPreviewTarget, validWindowAddress } from "./window-preview";
+
+const cleanup: string[] = [];
+afterEach(() => {
+  for (const path of cleanup.splice(0)) rmSync(path, { recursive: true, force: true });
+});
 
 describe("blurred window previews", () => {
   test("accepts only exact Hyprland hexadecimal addresses", () => {
@@ -7,5 +15,83 @@ describe("blurred window previews", () => {
     expect(validWindowAddress("title:anything")).toBeNull();
     expect(validWindowAddress("0x123; grim /tmp/leak")).toBeNull();
     expect(validWindowAddress("")).toBeNull();
+  });
+
+  test("creates an exclusive no-follow file in a random private directory", () => {
+    const base = join(tmpdir(), `infomarchy-preview-test-${crypto.randomUUID()}`);
+    mkdirSync(base, { mode: 0o700 });
+    cleanup.push(base);
+    const target = createPreviewTarget(base);
+    try {
+      expect(target.directory.startsWith(join(base, "infomarchy-preview-"))).toBe(true);
+      expect(lstatSync(target.directory).mode & 0o777).toBe(0o700);
+      expect(lstatSync(target.path).isSymbolicLink()).toBe(false);
+      expect(lstatSync(target.path).mode & 0o777).toBe(0o600);
+      expect(() => openSync(target.path, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600)).toThrow();
+    } finally {
+      closeSync(target.fd);
+    }
+  });
+
+  test("never uses the legacy predictable screenshot paths", () => {
+    const source = readFileSync(import.meta.dir + "/window-preview.ts", "utf8");
+    expect(source).not.toContain("/tmp/infomarchy-preview-${process.pid}.png");
+    expect(source).not.toContain("address.slice(2)}.png");
+    expect(source).toContain('["grim", "-g", geometry, "-"]');
+    expect(source).toContain('"png:-"');
+  });
+
+  test("an attacker-created legacy symlink remains untouched", () => {
+    const base = join(tmpdir(), `infomarchy-preview-test-${crypto.randomUUID()}`);
+    mkdirSync(base, { mode: 0o700 });
+    cleanup.push(base);
+    const victim = join(base, "victim");
+    const legacy = join(base, `infomarchy-preview-${process.pid}.png`);
+    writeFileSync(victim, "unchanged", { mode: 0o600 });
+    symlinkSync(victim, legacy);
+    const target = createPreviewTarget(base);
+    try {
+      writeFileSync(target.fd, "preview");
+    } finally {
+      closeSync(target.fd);
+    }
+    expect(readFileSync(victim, "utf8")).toBe("unchanged");
+  });
+
+  test("streams the capture pipeline and returns only a securely created result", async () => {
+    const base = mkdtempSync(join(tmpdir(), "infomarchy-preview-e2e-"));
+    cleanup.push(base);
+    const fakeBin = join(base, "bin");
+    mkdirSync(fakeBin, { mode: 0o700 });
+    const install = (name: string, body: string) => {
+      const path = join(fakeBin, name);
+      writeFileSync(path, `#!/bin/sh\n${body}\n`, { mode: 0o700 });
+      chmodSync(path, 0o700);
+    };
+    install("hyprctl", "printf '%s' '[{\"address\":\"0xabc\",\"at\":[0,0],\"size\":[100,80]}]'");
+    install("grim", "printf '%s\\n' \"$@\" > \"$INFOMARCHY_GRIM_ARGS\"; printf '%s' 'raw-preview-bytes'");
+    install("magick", "printf '%s\\n' \"$@\" > \"$INFOMARCHY_MAGICK_ARGS\"; cat");
+    const grimArgs = join(base, "grim-args");
+    const magickArgs = join(base, "magick-args");
+    const proc = Bun.spawn(["bun", join(import.meta.dir, "window-preview.ts"), "0xabc"], {
+      stdout: "pipe",
+      stderr: "pipe",
+      env: {
+        ...process.env,
+        PATH: `${fakeBin}:${process.env.PATH || ""}`,
+        TMPDIR: base,
+        INFOMARCHY_GRIM_ARGS: grimArgs,
+        INFOMARCHY_MAGICK_ARGS: magickArgs,
+      },
+    });
+    const output = (await new Response(proc.stdout).text()).trim();
+    expect(await proc.exited).toBe(0);
+    expect(output.startsWith(join(base, "infomarchy-preview-"))).toBe(true);
+    expect(readFileSync(output, "utf8")).toBe("raw-preview-bytes");
+    expect(lstatSync(output).mode & 0o777).toBe(0o600);
+    expect(readFileSync(grimArgs, "utf8").trim().endsWith("-")).toBe(true);
+    const magickInvocation = readFileSync(magickArgs, "utf8");
+    expect(magickInvocation).toContain("png:-");
+    expect(magickInvocation).not.toContain(base + "/");
   });
 });

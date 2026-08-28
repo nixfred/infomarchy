@@ -1,9 +1,75 @@
 #!/usr/bin/env bun
-import { rmSync } from "fs";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  fsyncSync,
+  lstatSync,
+  mkdtempSync,
+  openSync,
+  rmSync,
+  writeSync,
+} from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+
+const MAX_PREVIEW_BYTES = 4 * 1024 * 1024;
+const MAX_RAW_CAPTURE_BYTES = 32 * 1024 * 1024;
+
+export interface PreviewTarget {
+  directory: string;
+  path: string;
+  fd: number;
+}
 
 export function validWindowAddress(value: unknown): string | null {
   const address = String(value || "").toLowerCase();
   return /^0x[0-9a-f]+$/.test(address) ? address : null;
+}
+
+export function createPreviewTarget(baseDirectory = tmpdir()): PreviewTarget {
+  const directory = mkdtempSync(join(baseDirectory, "infomarchy-preview-"));
+  try {
+    chmodSync(directory, 0o700);
+    const stat = lstatSync(directory);
+    if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== (process.getuid?.() ?? stat.uid) || (stat.mode & 0o777) !== 0o700) {
+      throw new Error("unsafe preview directory");
+    }
+    const path = join(directory, "preview.png");
+    const fd = openSync(
+      path,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600,
+    );
+    return { directory, path, fd };
+  } catch (error) {
+    rmSync(directory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function readBounded(stream: ReadableStream<Uint8Array>, limit = MAX_PREVIEW_BYTES): Promise<Uint8Array> {
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let length = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      length += value.byteLength;
+      if (length > limit) throw new Error("preview output limit exceeded");
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const output = new Uint8Array(length);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return output;
 }
 
 if (import.meta.main) {
@@ -14,14 +80,36 @@ if (import.meta.main) {
   const client = clients.find((item: any) => String(item.address || "").toLowerCase() === address);
   const at = client?.at, size = client?.size;
   if (!Array.isArray(at) || !Array.isArray(size) || size[0] < 20 || size[1] < 20) process.exit(3);
-  const raw = `/tmp/infomarchy-preview-${process.pid}.png`;
-  const safe = `/tmp/infomarchy-preview-${process.getuid?.() ?? 0}-${address.slice(2)}.png`;
+  const target = createPreviewTarget();
+  let keepTarget = false;
   try {
     const geometry = `${at[0]},${at[1]} ${size[0]}x${size[1]}`;
-    if (await Bun.spawn(["grim", "-g", geometry, raw], { stdout: "ignore", stderr: "ignore" }).exited !== 0) process.exit(4);
-    if (await Bun.spawn(["magick", raw, "-resize", "160x90!", "-blur", "0x10", "-scale", "320x180!", safe], { stdout: "ignore", stderr: "ignore" }).exited !== 0) process.exit(5);
-    console.log(safe);
+    const grim = Bun.spawn(["grim", "-g", geometry, "-"], { stdout: "pipe", stderr: "ignore" });
+    const [grimExit, raw] = await Promise.all([
+      grim.exited,
+      readBounded(grim.stdout, MAX_RAW_CAPTURE_BYTES),
+    ]);
+    if (grimExit !== 0 || raw.byteLength === 0) process.exitCode = 4;
+    else {
+      const magick = Bun.spawn(
+        ["magick", "png:-", "-resize", "160x90!", "-blur", "0x10", "-scale", "320x180!", "png:-"],
+        { stdin: new Blob([raw]), stdout: "pipe", stderr: "ignore" },
+      );
+      const [magickExit, preview] = await Promise.all([
+        magick.exited,
+        readBounded(magick.stdout),
+      ]);
+      if (magickExit !== 0 || preview.byteLength === 0) process.exitCode = 5;
+      else {
+        let offset = 0;
+        while (offset < preview.byteLength) offset += writeSync(target.fd, preview, offset);
+        fsyncSync(target.fd);
+        keepTarget = true;
+        console.log(target.path);
+      }
+    }
   } finally {
-    rmSync(raw, { force: true });
+    closeSync(target.fd);
+    if (!keepTarget) rmSync(target.directory, { recursive: true, force: true });
   }
 }
