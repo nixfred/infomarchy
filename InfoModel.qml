@@ -85,6 +85,11 @@ Item {
       default: return Color.accent
     }
   }
+  function plainText(value, limit) {
+    return String(value || "").slice(0, limit).replace(/[<>&]/g, function(character) {
+      return character === "<" ? "‹" : character === ">" ? "›" : "＆"
+    }).replace(/[\u0000-\u001f\u007f]/g, " ")
+  }
   function providerLabel(p) {
     switch (String(p)) {
       case "claude": return "Claude"
@@ -95,7 +100,7 @@ Item {
       case "opencode": return "opencode"
       case "aider": return "Aider"
       case "copilot": return "Copilot"
-      default: return String(p)
+      default: return plainText(p, 64)
     }
   }
 
@@ -105,22 +110,25 @@ Item {
     property string lastStderr: ""
     command: ["bun", root.collectorPath, "--id", root.instance]
     stdout: StdioCollector {
+      waitForEnd: true
       onStreamFinished: {
         var t = String(text || "").trim()
         if (!t) { root.error = "collector produced no output"; return }
+        if (t.length > 2 * 1024 * 1024) { root.error = "collector output exceeded 2 MiB"; return }
         try {
           root.snap = JSON.parse(t)
           root.ready = true
           root.error = ""
         } catch (e) {
-          root.error = "bad snapshot: " + e
+          root.error = "bad snapshot: " + root.plainText(e, 256)
         }
       }
     }
     stderr: StdioCollector {
       // bun / libraries may warn on stderr even when the snapshot is valid.
       // Stash it; only promote to the desk error banner if the process fails.
-      onStreamFinished: { collector.lastStderr = String(text || "").trim() }
+      waitForEnd: true
+      onStreamFinished: { collector.lastStderr = root.plainText(String(text || "").trim(), 512) }
     }
     onExited: function(exitCode) {
       if (exitCode !== 0 && collector.lastStderr)
@@ -140,7 +148,7 @@ Item {
   // Focus a Hyprland window by address, on both dispatch syntaxes.
   function focusWindow(address) {
     var addr = String(address || "").replace(/^0x/, "")
-    if (!addr) return
+    if (!/^[0-9A-Fa-f]{1,32}$/.test(addr)) return
     if (root.snap && root.snap.hyprLua)
       Quickshell.execDetached(["hyprctl", "dispatch", 'hl.dsp.focus({ window = "address:0x' + addr + '" })'])
     else

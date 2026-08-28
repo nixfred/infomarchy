@@ -39,6 +39,8 @@ Item {
   readonly property color textFaint: Util.alpha(view.desk.themeForeground, 0.38)
   readonly property string mono: Style.resolvedFontFamily
 
+  component PlainText: Text { textFormat: Text.PlainText }
+
   // ---- reusable pieces -------------------------------------------------------
   component Card: Rectangle {
     id: card
@@ -60,9 +62,9 @@ Item {
       RowLayout {
         Layout.fillWidth: true
         visible: card.title !== ""
-        Text { text: card.title; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; font.letterSpacing: 1.5; font.bold: true }
+        PlainText { text: card.title; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; font.letterSpacing: 1.5; font.bold: true }
         Item { Layout.fillWidth: true }
-        Text { text: card.hint; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+        PlainText { text: card.hint; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
       }
       Item { id: body; Layout.fillWidth: true; Layout.fillHeight: true; implicitHeight: childrenRect.height }
     }
@@ -78,9 +80,9 @@ Item {
     RowLayout {
       id: mrow
       width: parent.width
-      Text { text: label; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+      PlainText { text: label; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
       Item { Layout.fillWidth: true }
-      Text { text: value; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+      PlainText { text: value; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
     }
     Rectangle {
       id: bar
@@ -105,7 +107,7 @@ Item {
     radius: view.radius
     implicitWidth: tl.implicitWidth + Style.spacing.md * 2
     implicitHeight: tl.implicitHeight + Style.spacing.xs * 2
-    Text { id: tl; anchors.centerIn: parent; text: parent.text; color: tone; font.family: view.mono; font.pixelSize: Style.font.caption; font.bold: true }
+    PlainText { id: tl; anchors.centerIn: parent; text: parent.text; color: tone; font.family: view.mono; font.pixelSize: Style.font.caption; font.bold: true }
   }
 
   // ---- layout ----------------------------------------------------------------
@@ -184,15 +186,15 @@ Item {
                         onRunningChanged: if (!running) dot.opacity = 1
                         NumberAnimation { target: dot; property: "opacity"; from: 1; to: 0.2; duration: 700 }
                         NumberAnimation { target: dot; property: "opacity"; from: 0.2; to: 1; duration: 700 } } }
-                    Text { text: view.desk.providerLabel(sc.modelData.provider); color: sc.tone; font.family: view.mono; font.bold: true; font.pixelSize: Style.font.body }
+                    PlainText { text: view.desk.providerLabel(sc.modelData.provider); color: sc.tone; font.family: view.mono; font.bold: true; font.pixelSize: Style.font.body }
                     Item { Layout.fillWidth: true }
-                    Text { text: view.desk.dur(sc.modelData.uptimeSec); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+                    PlainText { text: view.desk.dur(sc.modelData.uptimeSec); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
                   }
-                  Text { Layout.fillWidth: true; text: view.privacyMode ? "private project" : (sc.modelData.project || "/"); color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.subtitle; elide: Text.ElideMiddle }
-                  Text { Layout.fillWidth: true; text: view.privacyMode ? "path hidden" : (sc.modelData.cwd || ""); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideMiddle }
-                  Text { Layout.fillWidth: true; visible: !!(sc.modelData.window && sc.modelData.window.title); text: view.privacyMode ? "task hidden" : (sc.modelData.window ? (sc.modelData.window.title || "") : ""); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
-                  Text { Layout.fillWidth: true; visible: !!sc.modelData.git; text: sc.modelData.git ? ("git " + sc.modelData.git.branch + (sc.modelData.git.dirty ? " · " + sc.modelData.git.dirty + " changed" : " · clean") + (sc.modelData.git.ahead ? " · ↑" + sc.modelData.git.ahead : "") + (sc.modelData.git.behind ? " · ↓" + sc.modelData.git.behind : "") + (sc.modelData.git.conflicts ? " · " + sc.modelData.git.conflicts + " conflicts" : "")) : ""; color: sc.modelData.git && sc.modelData.git.conflicts ? view.desk.red : sc.modelData.git && sc.modelData.git.dirty ? view.desk.yellow : view.desk.green; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
-                  Text { Layout.fillWidth: true; text: "pid " + sc.modelData.pid + (sc.modelData.window ? "  ·  ws " + sc.modelData.window.workspace : "  ·  no window"); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+                  PlainText { Layout.fillWidth: true; text: view.privacyMode ? "private project" : (sc.modelData.project || "/"); color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.subtitle; elide: Text.ElideMiddle }
+                  PlainText { Layout.fillWidth: true; text: view.privacyMode ? "path hidden" : (sc.modelData.cwd || ""); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideMiddle }
+                  PlainText { Layout.fillWidth: true; visible: !!(sc.modelData.window && sc.modelData.window.title); text: view.privacyMode ? "task hidden" : (sc.modelData.window ? (sc.modelData.window.title || "") : ""); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+                  PlainText { Layout.fillWidth: true; visible: !!sc.modelData.git; text: sc.modelData.git ? ("git " + sc.modelData.git.branch + (sc.modelData.git.dirty ? " · " + sc.modelData.git.dirty + " changed" : " · clean") + (sc.modelData.git.ahead ? " · ↑" + sc.modelData.git.ahead : "") + (sc.modelData.git.behind ? " · ↓" + sc.modelData.git.behind : "") + (sc.modelData.git.conflicts ? " · " + sc.modelData.git.conflicts + " conflicts" : "")) : ""; color: sc.modelData.git && sc.modelData.git.conflicts ? view.desk.red : sc.modelData.git && sc.modelData.git.dirty ? view.desk.yellow : view.desk.green; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+                  PlainText { Layout.fillWidth: true; text: "pid " + sc.modelData.pid + (sc.modelData.window ? "  ·  ws " + sc.modelData.window.workspace : "  ·  no window"); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
                 }
                 MouseArea {
                   id: hover; anchors.fill: parent; hoverEnabled: true; enabled: view.interactive
@@ -202,7 +204,7 @@ Item {
                 }
               }
             }
-            Text { visible: view.sessions.length === 0; text: view.desk.ready ? "no agents running — go start something" : "collecting…"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.body }
+            PlainText { visible: view.sessions.length === 0; text: view.desk.ready ? "no agents running — go start something" : "collecting…"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.body }
           }
         }
 
@@ -293,10 +295,10 @@ Item {
                 model: ["claude", "codex", "grok", "gemini", "ollama"]
                 delegate: RowLayout { required property string modelData; spacing: Style.spacing.xs
                   Rectangle { width: 8; height: 8; radius: 2; color: view.desk.providerColor(modelData) }
-                  Text { text: view.desk.providerLabel(modelData); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption } }
+                  PlainText { text: view.desk.providerLabel(modelData); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption } }
               }
               Item { Layout.fillWidth: true }
-              Text {
+              PlainText {
                 text: {
                   if (heat.hoverIdx < 0) return "hover a cell · red tick = now"
                   var c = heat.cells[heat.hoverIdx] || [0, {}]
@@ -333,10 +335,10 @@ Item {
               height: rrow.implicitHeight + Style.spacing.sm
               RowLayout {
                 id: rrow; width: parent.width; spacing: Style.spacing.md
-                Text { text: view.desk.ago(ri.modelData.ts); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; Layout.preferredWidth: Math.round(28 * Style.fontScale); horizontalAlignment: Text.AlignRight }
+                PlainText { text: view.desk.ago(ri.modelData.ts); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; Layout.preferredWidth: Math.round(28 * Style.fontScale); horizontalAlignment: Text.AlignRight }
                 Tag { text: view.desk.providerLabel(ri.modelData.provider); tone: view.desk.providerColor(ri.modelData.provider) }
-                Text { text: view.privacyMode ? "private" : (ri.modelData.project || "").replace(/^.*\//, "") ; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; Layout.preferredWidth: Math.round(110 * Style.fontScale); elide: Text.ElideLeft }
-                Text { Layout.fillWidth: true; text: view.privacyMode ? "prompt hidden" : (ri.modelData.text || ""); color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight; maximumLineCount: 1 }
+                PlainText { text: view.privacyMode ? "private" : (ri.modelData.project || "").replace(/^.*\//, "") ; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; Layout.preferredWidth: Math.round(110 * Style.fontScale); elide: Text.ElideLeft }
+                PlainText { Layout.fillWidth: true; text: view.privacyMode ? "prompt hidden" : (ri.modelData.text || ""); color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight; maximumLineCount: 1 }
               }
             }
           }
@@ -372,10 +374,10 @@ Item {
                 spacing: Style.spacing.xs
                 RowLayout {
                   Layout.fillWidth: true
-                  Text { text: up.u.name || up.modelData; color: up.tone; font.family: view.mono; font.bold: true; font.pixelSize: Style.font.body }
-                  Text { text: up.u.tierLabel || ""; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+                  PlainText { text: up.u.name || up.modelData; color: up.tone; font.family: view.mono; font.bold: true; font.pixelSize: Style.font.body }
+                  PlainText { text: up.u.tierLabel || ""; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
                   Item { Layout.fillWidth: true }
-                  Text { text: "today " + (up.u.todayPrompts || 0) + "p · " + view.desk.tokens(up.u.todayTotalTokens) + " tok"; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
+                  PlainText { text: "today " + (up.u.todayPrompts || 0) + "p · " + view.desk.tokens(up.u.todayTotalTokens) + " tok"; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
                 }
                 Repeater {
                   model: up.u.limits || []
@@ -390,7 +392,7 @@ Item {
                 }
               }
             }
-            Text { visible: Object.keys(view.usage).length === 0; text: "no usage cache yet"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+            PlainText { visible: Object.keys(view.usage).length === 0; text: "no usage cache yet"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
           }
         }
 
@@ -409,11 +411,11 @@ Item {
                 required property var modelData
                 Layout.fillWidth: true
                 Rectangle { width: 8; height: 8; radius: 4; color: view.desk.green }
-                Text { text: modelData.name; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; Layout.fillWidth: true; elide: Text.ElideRight }
-                Text { text: "vram " + view.desk.bytes(modelData.vram); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
+                PlainText { text: modelData.name; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; Layout.fillWidth: true; elide: Text.ElideRight }
+                PlainText { text: "vram " + view.desk.bytes(modelData.vram); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
               }
             }
-            Text { visible: !((((view.ai.providers || {}).ollama || {}).loaded || []).length); text: "no model loaded"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+            PlainText { visible: !((((view.ai.providers || {}).ollama || {}).loaded || []).length); text: "no model loaded"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
             Meter {
               visible: !!view.machine.gpu
               Layout.fillWidth: true
@@ -468,10 +470,10 @@ Item {
             RowLayout {
               Layout.fillWidth: true
               spacing: Style.spacing.lg
-              Text { text: "↓ " + view.desk.rate(mc.net.rxRate); color: view.desk.green; font.family: view.mono; font.pixelSize: Style.font.subtitle; font.bold: true }
-              Text { text: "↑ " + view.desk.rate(mc.net.txRate); color: view.desk.green; font.family: view.mono; font.pixelSize: Style.font.subtitle; font.bold: true }
+              PlainText { text: "↓ " + view.desk.rate(mc.net.rxRate); color: view.desk.green; font.family: view.mono; font.pixelSize: Style.font.subtitle; font.bold: true }
+              PlainText { text: "↑ " + view.desk.rate(mc.net.txRate); color: view.desk.green; font.family: view.mono; font.pixelSize: Style.font.subtitle; font.bold: true }
               Item { Layout.fillWidth: true }
-              Text {
+              PlainText {
                 text: "⇄ " + (mc.ping.ok ? mc.ping.ms.toFixed(0) + " ms" : "timeout") + " cf"
                 color: !mc.ping.ok ? view.desk.red : mc.ping.ms > 80 ? view.desk.yellow : view.desk.green
                 font.family: view.mono; font.pixelSize: Style.font.subtitle; font.bold: true
@@ -480,9 +482,9 @@ Item {
             RowLayout {
               Layout.fillWidth: true
               visible: !!mc.bat
-              Text { text: "BAT"; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+              PlainText { text: "BAT"; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
               Item { Layout.fillWidth: true }
-              Text { text: mc.bat ? mc.bat.pct + "% · " + mc.bat.status : ""; color: mc.bat && mc.bat.pct < 20 && mc.bat.status !== "Charging" ? view.desk.red : view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+              PlainText { text: mc.bat ? mc.bat.pct + "% · " + mc.bat.status : ""; color: mc.bat && mc.bat.pct < 20 && mc.bat.status !== "Charging" ? view.desk.red : view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
             }
           }
         }

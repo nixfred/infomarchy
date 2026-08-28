@@ -22,17 +22,48 @@ function instanceId(): string {
 const PREV_FILE = join(STATE_DIR, `prev-${instanceId()}.json`);
 const now = Date.now();
 const MIN_RATE_DT = 1;
+const MAX_FILE_BYTES = 8 * 1024 * 1024;
+const MAX_COMMAND_BYTES = 1024 * 1024;
+const MAX_HTTP_BYTES = 1024 * 1024;
+const MAX_COLLECTION_ITEMS = 256;
+const MAX_MODELS = 128;
 
 // ---------------------------------------------------------------- helpers
-function read(p: string): string | null { try { return readFileSync(p, "utf8"); } catch { return null; } }
-function readJson(p: string): any { try { return JSON.parse(readFileSync(p, "utf8")); } catch { return null; } }
+function read(p: string, maxBytes = MAX_FILE_BYTES): string | null {
+  try {
+    const size = statSync(p).size;
+    if (size > maxBytes) return null;
+    return readFileSync(p, "utf8");
+  } catch { return null; }
+}
+function readJson(p: string): any { try { const text = read(p); return text === null ? null : JSON.parse(text); } catch { return null; } }
 function ls(p: string): string[] { try { return readdirSync(p); } catch { return []; } }
+async function boundedStream(stream: ReadableStream<Uint8Array> | null, limit: number): Promise<string | null> {
+  if (!stream) return "";
+  const reader = stream.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) { await reader.cancel(); return null; }
+      chunks.push(value);
+    }
+  } finally { reader.releaseLock(); }
+  const joined = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength; }
+  return new TextDecoder().decode(joined);
+}
 async function run(cmd: string[], timeoutMs = 1500): Promise<string> {
   try {
     const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore" });
     const t = setTimeout(() => { try { proc.kill(); } catch {} }, timeoutMs);
     try {
-      const out = await new Response(proc.stdout).text();
+      const out = await boundedStream(proc.stdout, MAX_COMMAND_BYTES);
+      if (out === null) { try { proc.kill(); } catch {}; return ""; }
       await proc.exited;
       return out;
     } finally {
@@ -43,8 +74,36 @@ async function run(cmd: string[], timeoutMs = 1500): Promise<string> {
 async function fetchJson(url: string, ms = 600): Promise<any> {
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout(ms) });
-    return r.ok ? await r.json() : null;
+    if (!r.ok) return null;
+    const text = await boundedStream(r.body, MAX_HTTP_BYTES);
+    if (text === null) return null;
+    const payload = JSON.parse(text);
+    return payload && typeof payload === "object" && !Array.isArray(payload) ? payload : null;
   } catch { return null; }
+}
+function finiteSize(value: unknown): number {
+  const number = Number(value);
+  return Number.isFinite(number) && number >= 0 ? Math.min(number, Number.MAX_SAFE_INTEGER) : 0;
+}
+function uiString(value: unknown, limit = 512): string {
+  return String(value ?? "").slice(0, limit)
+    .replace(/[<>&]/g, character => character === "<" ? "‹" : character === ">" ? "›" : "＆")
+    .replace(/[\u0000-\u001f\u007f]/g, " ");
+}
+function sanitizeForUi(value: any, depth = 0): any {
+  if (depth > 12) return null;
+  if (typeof value === "string") return uiString(value);
+  if (Array.isArray(value)) return value.slice(0, MAX_COLLECTION_ITEMS).map(item => sanitizeForUi(item, depth + 1));
+  if (value && typeof value === "object") {
+    const result: Record<string, any> = {};
+    for (const [rawKey, item] of Object.entries(value).slice(0, MAX_COLLECTION_ITEMS)) {
+      const key = uiString(rawKey, 128);
+      if (!key || key === "__proto__" || key === "constructor" || key === "prototype") continue;
+      result[key] = sanitizeForUi(item, depth + 1);
+    }
+    return result;
+  }
+  return value;
 }
 const prev = readJson(PREV_FILE) || {};
 const dt = prev.ts ? (now - prev.ts) / 1000 : 0;
@@ -362,18 +421,23 @@ async function ollamaState() {
   const base = host.startsWith("http") ? host : "http://" + host;
   const ps = await fetchJson(base + "/api/ps"); const tags = await fetchJson(base + "/api/tags");
   if (!ps && !tags) return { present: false, up: false };
+  const loaded = Array.isArray(ps?.models) ? ps.models.slice(0, MAX_MODELS) : [];
+  const models = Array.isArray(tags?.models) ? tags.models.slice(0, MAX_MODELS) : [];
   return {
     present: true, up: true,
-    loaded: (ps?.models || []).map((m: any) => ({ name: m.name, vram: m.size_vram, size: m.size, until: m.expires_at })),
-    models: (tags?.models || []).map((m: any) => m.name),
-    modelCount: (tags?.models || []).length,
+    loaded: loaded.filter((model: any) => model && typeof model === "object")
+      .map((model: any) => ({ name: uiString(model.name, 256), vram: finiteSize(model.size_vram),
+        size: finiteSize(model.size), until: uiString(model.expires_at, 64) })),
+    models: models.filter((model: any) => model && typeof model === "object")
+      .map((model: any) => uiString(model.name, 256)).filter(Boolean),
+    modelCount: models.length,
   };
 }
 function agentsUsage() {
   // Omarchy's own agents plugin caches rate limits + token usage here; reuse it when present.
   const dir = join(XDG_STATE, "omarchy/agents/usage");
   const out: Record<string, any> = {};
-  for (const f of ls(dir)) {
+  for (const f of ls(dir).slice(0, MAX_COLLECTION_ITEMS)) {
     if (!f.endsWith(".json")) continue;
     const j = readJson(join(dir, f)); if (!j) continue;
     out[f.replace(/\.json$/, "")] = {
@@ -422,7 +486,7 @@ async function runCollector() {
       net: { dev: netS.dev, rx: netS.rx, tx: netS.tx, rxRate: netS.rxRate, txRate: netS.txRate },
     }));
   } catch {}
-  console.log(JSON.stringify(snapshot));
+  console.log(JSON.stringify(sanitizeForUi(snapshot)));
 }
 
 if (import.meta.main) await runCollector();

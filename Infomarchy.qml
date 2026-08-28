@@ -54,7 +54,21 @@ Scope {
 
   Process {
     id: bgSwitchProc
-    command: ["bash", "-c", "background=$(omarchy-theme-bg-switcher); [[ -n $background ]] && omarchy-theme-bg-set \"$background\""]
+    command: ["omarchy-theme-bg-switcher"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var selected = String(text || "").trim()
+        if (selected.length > 0 && selected.length <= 4096 && selected.charAt(0) === "/" && !bgSetProc.running) {
+          bgSetProc.command = ["omarchy-theme-bg-set", selected]
+          bgSetProc.running = true
+        }
+      }
+    }
+  }
+
+  Process {
+    id: bgSetProc
     onExited: root.refreshBackground()
   }
 

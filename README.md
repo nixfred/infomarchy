@@ -15,7 +15,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/hero.jpg" alt="Infomarchy on a 1080p Omarchy desktop: live AI sessions, 7-day heatmap, recent prompts, usage limits, local AI, machine stats" width="100%">
+  <img src="preview.png" alt="Infomarchy in privacy mode on an empty 1080p Omarchy desktop: live AI sessions, 7-day heatmap, usage limits, local AI, and machine stats" width="100%">
 </p>
 
 ---
@@ -97,7 +97,7 @@ The wallpaper is interactive wherever no window covers it (double-click or right
 
 ```bash
 omarchy plugin add https://github.com/nixfred/infomarchy.git --enable --yes
-omarchy-restart-shell    # first time only: services load at shell start
+omarchy restart shell    # first time only: services load at shell start
 ```
 
 The plugin declares itself as a clone of `omarchy.background`, so Omarchy hands it the wallpaper role. Your chosen wallpaper is still there — dimmed to 32% behind the glass — and `omarchy theme bg set …` keeps working.
@@ -116,20 +116,22 @@ o.bind("SUPER + I", "Infomarchy: toggle wallpaper dashboard", "omarchy-shell inf
 git clone https://github.com/nixfred/infomarchy.git ~/.config/omarchy/plugins/nixfred.infomarchy
 omarchy-shell shell rescanPlugins
 omarchy plugin enable nixfred.infomarchy
-omarchy-restart-shell
+omarchy restart shell
 ```
 </details>
 
-<details>
-<summary>Uninstall / go back to a plain wallpaper</summary>
+## Remove
+
+Remove Infomarchy and return to the stock wallpaper service with:
 
 ```bash
-omarchy plugin remove nixfred.infomarchy    # Omarchy switches back to omarchy.background
-omarchy-restart-shell
+omarchy plugin remove nixfred.infomarchy --yes
+omarchy restart shell
 ```
-</details>
 
-**Requirements:** Omarchy 3.x shell (Quickshell ≥ 0.2), `bun` (ships with Omarchy), `iw`, `iproute2`, `ping`. Optional: `nvidia-smi` (GPU row hides without it), the `omarchy.agents` bar widget (for the usage card), Ollama (for the local-AI card). Hyprland 0.56+ (Lua dispatch) and older (`focuswindow`) are both handled.
+## Requirements
+
+Omarchy Quattro with third-party shell plugin support, `bun` (ships with Omarchy), `iw`, `iproute2`, and `ping`. Optional: `nvidia-smi` (GPU row hides without it), the `omarchy.agents` bar widget (for the usage card), and Ollama (for the local-AI card). Hyprland 0.56+ (Lua dispatch) and older (`focuswindow`) are both handled.
 
 ## It follows your theme
 
@@ -193,7 +195,7 @@ Everything stays on the machine — there is no network call except the ping to 
 
 **Does it drain my battery?** One `bun` run every 4 s (~0.2 s of CPU warm), no idle animation except the busy-dot pulse — a few percent of one core at most. Raise `refreshMs` if you want it lower.
 
-**The desk is black / empty.** You changed QML and the shell didn't reload the service — run `omarchy-restart-shell`. (`collector.ts` changes are picked up live.)
+**The desk is black / empty.** You changed QML and the shell didn't reload the service — run `omarchy restart shell`. (`collector.ts` changes are picked up live.)
 
 **Clicking a card doesn't focus anything.** The card says *no window* — the agent isn't under a Hyprland client (SSH session, systemd service, or started from a launcher that already exited). That's expected.
 
