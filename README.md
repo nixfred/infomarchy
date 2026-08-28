@@ -18,6 +18,8 @@
   <img src="preview.png" alt="Infomarchy in privacy mode on an empty 1080p Omarchy desktop: live AI sessions, 7-day heatmap, usage limits, local AI, and machine stats" width="100%">
 </p>
 
+> **Want to see the plain desktop?** Press **`SUPER + I`** to hide the Infomarchy cards and reveal your wallpaper. Press **`SUPER + I`** again to bring the dashboard back. Add the one-time key binding shown under [Install](#install).
+
 ---
 
 ## Why
@@ -91,7 +93,7 @@ Any meter goes **red** when it's genuinely in trouble (RAM > 90%, disk > 90%, CP
 
 ### ⌨️ Two surfaces, one dashboard
 
-The wallpaper is interactive wherever no window covers it (double-click or right-click the empty desk opens Omarchy's wallpaper switcher, as stock does). When you're buried in terminals, **`SUPER + D`** summons the *same* dashboard as a fullscreen overlay on top of everything; `Esc` or a click on the backdrop dismisses it.
+The wallpaper is interactive wherever no window covers it (double-click or right-click the empty desk opens Omarchy's wallpaper switcher, as stock does). Press **`SUPER + I`** to hide the wallpaper dashboard and see the clean desktop; press it again to restore the cards. When you're buried in terminals, **`SUPER + D`** summons the *same* dashboard as a fullscreen overlay on top of everything; `Esc` or a click on the backdrop dismisses it.
 
 ## Install
 
@@ -106,6 +108,7 @@ Bind the fullscreen overlay and wallpaper-dashboard toggle in `~/.config/hypr/bi
 
 ```lua
 o.bind("SUPER + D", "Infomarchy: AI info desk", "omarchy-shell shell toggle nixfred.infomarchy '{}'")
+-- Hide the cards to see the plain desktop; press again to restore them.
 o.bind("SUPER + I", "Infomarchy: toggle wallpaper dashboard", "omarchy-shell infomarchy toggleDashboard")
 ```
 
