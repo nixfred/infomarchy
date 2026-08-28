@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "fs";
+import { Database } from "bun:sqlite";
 const historyFixture = join(import.meta.dir, ".test-fixture");
 afterAll(() => rmSync(historyFixture, { recursive: true, force: true }));
 import { join } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh } from "./collector.ts";
 
 const fixture = join(import.meta.dir, ".test-fixture-races");
 afterAll(() => rmSync(fixture, { recursive: true, force: true }));
@@ -21,6 +22,29 @@ describe("providerOf", () => {
   test("ignores the Ollama daemon but keeps chats", () => {
     expect(providerOf(["ollama", "serve"])).toBeNull();
     expect(providerOf(["/usr/bin/ollama", "run", "llama3"])).toBe("ollama");
+  });
+
+  test("ignores OpenCode services but keeps its TUI and run sessions", () => {
+    expect(providerOf(["opencode", "serve"])).toBeNull();
+    expect(providerOf(["/usr/bin/opencode"])).toBe("opencode");
+    expect(providerOf(["opencode", "run", "inspect this"])).toBe("opencode");
+  });
+});
+
+describe("external IP cache", () => {
+  test("accepts only IP-shaped Cloudflare trace values", () => {
+    expect(parseExternalIpTrace("fl=1\nip=203.0.113.8\n")).toBe("203.0.113.8");
+    expect(parseExternalIpTrace("ip=2001:db8::1\n")).toBe("2001:db8::1");
+    expect(parseExternalIpTrace("ip=$(touch /tmp/nope)\n")).toBeNull();
+    expect(parseExternalIpTrace("fl=1\n")).toBeNull();
+  });
+
+  test("backs off for 15 minutes after success or failure", () => {
+    const stamp = 2_000_000;
+    expect(externalIpCacheFresh({ address: null, checkedAt: stamp - 1 }, stamp)).toBe(true);
+    expect(externalIpCacheFresh({ address: "203.0.113.8", checkedAt: stamp - 899_999 }, stamp)).toBe(true);
+    expect(externalIpCacheFresh({ address: null, checkedAt: stamp - 900_000 }, stamp)).toBe(false);
+    expect(externalIpCacheFresh({ address: null, checkedAt: stamp + 1 }, stamp)).toBe(false);
   });
 });
 
@@ -40,6 +64,103 @@ describe("busy detection", () => {
   });
 });
 
+describe("activity heatmap filtering metadata", () => {
+  const days = Array.from({ length: 7 }, (_, i) => new Date(2026, 7, 21 + i, 0, 0, 0, 0).getTime());
+
+  test("maps a local timestamp to the same day/hour cell as the heatmap", () => {
+    expect(activityCellIndex(new Date(2026, 7, 24, 14, 32).getTime(), days)).toBe(3 * 24 + 14);
+  });
+
+  test("rejects stale, malformed, and unavailable activity ranges", () => {
+    expect(activityCellIndex(new Date(2026, 7, 20, 23, 59).getTime(), days)).toBe(-1);
+    expect(activityCellIndex("not-a-time", days)).toBe(-1);
+    expect(activityCellIndex(Date.now(), [])).toBe(-1);
+  });
+});
+
+describe("recent prompt live-window linking", () => {
+  test("extracts provider session IDs without exposing unrelated environment values", () => {
+    expect(sessionIdFrom("codex", ["codex"], "TOKEN=do-not-read\0CODEX_THREAD_ID=01a04631-65f2-7140-a12c-ff1ecbc5d0a4\0"))
+      .toBe("01a04631-65f2-7140-a12c-ff1ecbc5d0a4");
+    expect(sessionIdFrom("claude", ["claude", "--resume", "e28daec7-27df-4c04-a1a4-9898b1a4d60b"], ""))
+      .toBe("e28daec7-27df-4c04-a1a4-9898b1a4d60b");
+    expect(sessionIdFrom("opencode", ["opencode", "-s", "ses_12345678"], "")).toBe("ses_12345678");
+    expect(sessionIdFrom("codex", ["codex", "--session-id", "../bad"], "TOKEN=secret\0")).toBe("");
+  });
+
+  test("marks only an exact provider and session match as live and clickable", () => {
+    const recent = [
+      { provider: "codex", session: "session-open", text: "open" },
+      { provider: "codex", session: "session-closed", text: "closed" },
+      { provider: "claude", session: "session-open", text: "other provider" },
+    ];
+    const sessions = [{
+      provider: "codex", sessionIds: ["session-helper", "session-open"],
+      window: { address: "0xabc", workspace: 4, title: "must not leak into recent" },
+    }];
+    expect(linkRecentToLive(recent, sessions)).toEqual([
+      { ...recent[0], live: true, window: { address: "0xabc", workspace: 4 } },
+      { ...recent[1], live: false, window: null },
+      { ...recent[2], live: false, window: null },
+    ]);
+  });
+
+  test("infers one newly started agent from exact provider, directory, and time", () => {
+    const sessions = [{ provider: "claude", cwd: "~/Work", startedAt: 1000, session: "", sessionIds: [] }];
+    const recent = [
+      { provider: "claude", project: "~/Other", ts: 3000, session: "wrong-project" },
+      { provider: "claude", project: "~/Work", ts: 2000, session: "session-right" },
+    ];
+    inferSessionIdsFromRecent(sessions, recent);
+    expect(sessions[0].sessionIds).toEqual(["session-right"]);
+  });
+
+  test("refuses to infer when two live agents share a provider and directory", () => {
+    const sessions = [
+      { provider: "claude", cwd: "~/Work", startedAt: 1000, session: "", sessionIds: [] },
+      { provider: "claude", cwd: "~/Work", startedAt: 1500, session: "", sessionIds: [] },
+    ];
+    inferSessionIdsFromRecent(sessions, [{ provider: "claude", project: "~/Work", ts: 2000, session: "session-ambiguous" }]);
+    expect(sessions.map(s => s.sessionIds)).toEqual([[], []]);
+  });
+});
+
+describe("live session topics", () => {
+  test("summarizes several prompts without displaying the newest prompt verbatim", () => {
+    const sessions = [
+      { provider: "codex", project: "~/nixfred.infomarchy", sessionIds: ["session-a"] },
+      { provider: "claude", project: "~/auth-service", sessionIds: ["session-a"] },
+      { provider: "codex", project: "~/local-ai", sessionIds: ["session-b"] },
+    ];
+    const recent = [
+      { provider: "codex", session: "session-a", ts: 100, text: "fix scrollbar behavior" },
+      { provider: "claude", session: "session-a", ts: 250, text: "review authentication failures" },
+      { provider: "codex", session: "session-b", ts: 200, text: "add ollama model controls" },
+      { provider: "codex", session: "session-a", ts: 300, text: "the scrolling in past prompts is hard to scroll" },
+    ];
+    attachSessionTopics(sessions, recent);
+    expect(sessions.map(session => [session.topic, session.topicAt])).toEqual([
+      ["Fixing Infomarchy scrolling behavior", 300],
+      ["Reviewing Auth Service authentication failures", 250],
+      ["Building Local AI ollama model", 200],
+    ]);
+    expect(sessions[0].topic).not.toContain(recent[3].text);
+  });
+
+  test("uses a generic project summary when exact history is unavailable", () => {
+    const sessions = [{ provider: "codex", project: "~/Infomarchy", sessionIds: [] }];
+    attachSessionTopics(sessions, [{ provider: "codex", session: "another", ts: 100, text: "wrong session" }]);
+    expect(sessions[0]).toMatchObject({ topic: "Improving Infomarchy", topicAt: 0 });
+  });
+
+  test("cleans and bounds local-model summaries", () => {
+    expect(cleanGeneratedSummary("\n**Improving live session summaries.**\nextra ignored words beyond the allowed maximum here"))
+      .toBe("Improving live session summaries. extra ignored words beyond");
+    expect(localSessionSummary({ project: "~/Infomarchy" }, [{ text: "make a real short summary of live sessions" }]))
+      .toBe("Summarizing Infomarchy live sessions");
+  });
+});
+
 describe("prev.json instance files", () => {
   test(" --id writes separate rate-delta files so overlay and wallpaper do not clobber each other", async () => {
     const state = join(fixture, "state");
@@ -48,7 +169,7 @@ describe("prev.json instance files", () => {
 
     async function collect(id: string) {
       const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts"), "--id", id], {
-        env: { HOME: fixture, USER: "tester", XDG_STATE_HOME: state, PATH: process.env.PATH || "" },
+        env: { HOME: fixture, USER: "tester", XDG_STATE_HOME: state, PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -76,7 +197,7 @@ describe("history collection", () => {
     ].join("\n"));
 
     const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
-      env: { HOME: historyFixture, USER: "tester", XDG_STATE_HOME: join(historyFixture, "state"), PATH: process.env.PATH || "" },
+      env: { HOME: historyFixture, USER: "tester", XDG_STATE_HOME: join(historyFixture, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -91,5 +212,40 @@ describe("history collection", () => {
       "then check status",
       "use ntn_[redacted]",
     ]);
+  });
+
+  test("parses OpenCode user prompts, sessions, projects, and redacts secrets", async () => {
+    const root = join(import.meta.dir, ".test-fixture-opencode");
+    const data = join(root, "data");
+    const dbDir = join(data, "opencode");
+    mkdirSync(dbDir, { recursive: true });
+    const db = new Database(join(dbDir, "opencode.db"));
+    db.exec(`
+      CREATE TABLE session (id TEXT PRIMARY KEY, directory TEXT);
+      CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);
+      CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, time_created INTEGER, data TEXT);
+    `);
+    db.query("INSERT INTO session VALUES (?, ?)").run("ses_test12345", join(root, "project"));
+    db.query("INSERT INTO message VALUES (?, ?, ?, ?)").run("msg_1", "ses_test12345", Date.now(), JSON.stringify({ role: "user" }));
+    db.query("INSERT INTO part VALUES (?, ?, ?, ?, ?)").run("part_1", "msg_1", "ses_test12345", Date.now(), JSON.stringify({ type: "text", text: "inspect with password: very-secret-value" }));
+    db.close();
+
+    const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
+      env: { HOME: root, USER: "tester", XDG_DATA_HOME: data, XDG_STATE_HOME: join(root, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = await new Response(proc.stdout).text();
+    expect(await proc.exited).toBe(0);
+    const snap = JSON.parse(output);
+
+    expect(snap.ai.providers.opencode).toEqual({ present: true, prompts: 1, sessions: 1 });
+    expect(snap.ai.recent[0]).toMatchObject({
+      provider: "opencode",
+      session: "ses_test12345",
+      project: "~/project",
+      text: "inspect with password: [redacted]",
+    });
+    rmSync(root, { recursive: true, force: true });
   });
 });

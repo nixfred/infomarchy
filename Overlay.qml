@@ -11,9 +11,9 @@ import qs.Ui
 Scope {
   id: root
   property bool opened: false
-  property bool privacyMode: false
 
   InfoModel { id: infoModel; refreshMs: 3000; active: root.opened; instance: "overlay" }
+  InfoSettings { id: dashboardSettings }
 
   function open(payload) {
     root.opened = true
@@ -50,17 +50,24 @@ Scope {
         color: Util.alpha(infoModel.themeBackground, 0.88)
         focus: root.opened
         Keys.onEscapePressed: root.close()
-        Keys.onPressed: function(event) { if (event.key === Qt.Key_P && !(event.modifiers & Qt.ControlModifier)) { root.privacyMode = !root.privacyMode; event.accepted = true } }
+        Keys.onPressed: function(event) {
+          if (event.key >= Qt.Key_1 && event.key <= Qt.Key_7) { var i = event.key - Qt.Key_1; var def = dashboardSettings.definitions[i]; if (def) dashboardSettings.toggleSection(def.id); event.accepted = true; return }
+          if (event.key === Qt.Key_J || event.key === Qt.Key_Down) { infoView.keyboardStep(1); event.accepted = true; return }
+          if (event.key === Qt.Key_K || event.key === Qt.Key_Up) { infoView.keyboardStep(-1); event.accepted = true; return }
+          if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { infoView.activateKeyboardSession(); event.accepted = true; return }
+          if (event.key === Qt.Key_A) { infoView.clearActivityFilter(); event.accepted = true }
+        }
         // Exclusive keyboard focus on the layer is not enough — Qt still
         // needs an item with activeFocus or Esc never fires.
         onVisibleChanged: if (visible) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
         MouseArea { anchors.fill: parent; onClicked: root.close() }
         InfoView {
+          id: infoView
           anchors.fill: parent
           desk: infoModel
+          settings: dashboardSettings
           interactive: true
           topInset: Style.spacing.xl
-          privacyMode: root.privacyMode
           onNavigated: root.close()
         }
       }
