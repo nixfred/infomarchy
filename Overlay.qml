@@ -51,7 +51,7 @@ Scope {
         focus: root.opened
         Keys.onEscapePressed: root.close()
         Keys.onPressed: function(event) {
-          if (event.key >= Qt.Key_1 && event.key <= Qt.Key_7) { var i = event.key - Qt.Key_1; var def = dashboardSettings.definitions[i]; if (def) dashboardSettings.toggleSection(def.id); event.accepted = true; return }
+          if (event.key >= Qt.Key_1 && event.key <= Qt.Key_9) { var i = event.key - Qt.Key_1; var def = dashboardSettings.definitions[i]; if (def) dashboardSettings.toggleSection(def.id); event.accepted = true; return }
           if (event.key === Qt.Key_J || event.key === Qt.Key_Down) { infoView.keyboardStep(1); event.accepted = true; return }
           if (event.key === Qt.Key_K || event.key === Qt.Key_Up) { infoView.keyboardStep(-1); event.accepted = true; return }
           if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { infoView.activateKeyboardSession(); event.accepted = true; return }

@@ -1,16 +1,36 @@
 import { describe, expect, test } from "bun:test";
-import { attentionState, parseGitStatus, repoCollisions, workspaceGroups, resourceDelta, forecastPercent } from "./ai-ops";
+import { attentionSignal, attentionState, parseCommitSummary, parseDiffNumstat, parseGitStatus, projectHealth, repoCollisions, workspaceGroups, resourceDelta, forecastPercent } from "./ai-ops";
 
 describe("AI operations signals", () => {
   test("parses branch readiness and conflicts", () => {
-    const state = parseGitStatus("# branch.head feature\n# branch.upstream origin/feature\n# branch.ab +2 -1\n1 .M N... 100644 100644 100644 a b file\nu UU N... 100644 100644 100644 100644 a b c file2\n");
-    expect(state).toEqual({ branch: "feature", upstream: "origin/feature", ahead: 2, behind: 1, dirty: 2, conflicts: 1 });
+    const state = parseGitStatus("# branch.head feature\n# branch.upstream origin/feature\n# branch.ab +2 -1\n1 .M N... 100644 100644 100644 a b src/file.ts\n1 M. N... 100644 100644 100644 a b staged.ts\n? new test.ts\nu UU N... 100644 100644 100644 100644 a b c conflict.ts\n");
+    expect(state).toEqual({
+      branch: "feature", upstream: "origin/feature", ahead: 2, behind: 1,
+      dirty: 4, staged: 1, untracked: 1, conflicts: 1,
+      files: ["src/file.ts", "staged.ts", "new test.ts", "conflict.ts"],
+    });
+  });
+
+  test("summarizes bounded diff and commit metadata", () => {
+    expect(parseDiffNumstat("12\t3\tsrc/a.ts\n-\t-\tasset.png\n4\t0\ttest/a.test.ts\n")).toEqual({ files: 3, additions: 16, deletions: 3 });
+    expect(parseCommitSummary("abcdef0123456789\tabcdef0\t1787920000\tfeat: add operations intelligence\n")).toEqual({
+      hash: "abcdef0123456789", short: "abcdef0", committedAt: 1787920000000, subject: "feat: add operations intelligence",
+    });
+    expect(parseCommitSummary("not-a-commit")).toBeNull();
   });
 
   test("prioritizes blocked, waiting, and completed titles", () => {
     expect(attentionState("Permission required to continue")).toBe("waiting");
     expect(attentionState("✅ Ready for review")).toBe("done");
     expect(attentionState("working", 1)).toBe("blocked");
+    expect(attentionSignal("Confirmation required")).toEqual({
+      state: "waiting", reason: "waiting for your confirmation", action: "answer", detail: "Confirmation required",
+    });
+    expect(attentionSignal("working", 2)).toEqual({
+      state: "blocked", reason: "2 merge conflicts need resolution", action: "resolve", detail: "working",
+    });
+    expect(attentionSignal("✅ Ready for review")?.action).toBe("review");
+    expect(attentionSignal("actively editing files")).toBeNull();
   });
 
   test("reports agents sharing a repository", () => {
@@ -21,6 +41,19 @@ describe("AI operations signals", () => {
     ]);
     expect(collisions).toHaveLength(1);
     expect(collisions[0].agents).toHaveLength(2);
+  });
+
+  test("aggregates repository health and prioritizes actionable projects", () => {
+    const projects = projectHealth([
+      { repoRoot: "/work/clean", cwd: "/work/clean", project: "clean", provider: "codex", pid: 1, git: { branch: "main", dirty: 0, behind: 0, conflicts: 0 }, ci: { state: "success" }, changes: { headShort: "abc1234" } },
+      { repoRoot: "/work/risk", cwd: "/work/risk", project: "risk", provider: "claude", pid: 2, git: { branch: "feature", dirty: 2, behind: 1, conflicts: 0 }, ci: { state: "in_progress" } },
+      { repoRoot: "/work/risk", cwd: "/work/risk", project: "risk", provider: "opencode", pid: 3, git: { branch: "feature", dirty: 2, behind: 1, conflicts: 0 }, ci: { state: "in_progress" } },
+      { repoRoot: "/work/broken", cwd: "/work/broken", project: "broken", provider: "grok", pid: 4, git: { branch: "main", dirty: 0, behind: 0, conflicts: 0 }, ci: { state: "failure" } },
+    ]);
+    expect(projects.map(project => [project.project, project.status])).toEqual([
+      ["broken", "blocked"], ["risk", "running"], ["clean", "healthy"],
+    ]);
+    expect(projects[1].agents.map(agent => agent.provider)).toEqual(["claude", "opencode"]);
   });
 
   test("groups addressable agents by workspace and puts the newest first", () => {

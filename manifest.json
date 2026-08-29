@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "nixfred.infomarchy",
   "name": "Infomarchy",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "author": "Fred Nix & Larry",
   "license": "MIT",
-  "description": "Your wallpaper becomes a live, clickable information desk: every running AI agent (Claude Code, Codex, Grok, Gemini, opencode, Ollama), a 7-day activity heatmap, subscription limits, recent prompts, and a machine-stats corner (CPU, RAM, disk, Wi-Fi speed, Cloudflare latency, GPU, battery). Theme-driven. SUPER+D overlay.",
+  "description": "A live, clickable wallpaper desk for AI sessions, exact next actions, repository changes and health, activity, usage limits, local AI, and machine telemetry. Theme-driven. SUPER+D overlay.",
   "kinds": [
     "service",
     "overlay"

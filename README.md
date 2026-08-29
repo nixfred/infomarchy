@@ -91,6 +91,16 @@ The newest prompts across all providers — time ago, provider tag, project, and
 
 Right-click a prompt for its action drawer: copy, pin/unpin, open the project, and review up to five recent prompts from the same session. Pins persist and sort above ordinary recency without changing the underlying history. Wheel and touchpad deltas are handled directly by the row beneath the pointer, and the wider scrollbar track can be clicked or dragged.
 
+### 🔵 Operations intelligence — *what changed, what needs you, what is healthy*
+
+Three compact cards sit beneath the live sessions:
+
+- **What Changed** fingerprints each active repository and highlights it until you inspect the newest state. It summarizes staged, untracked, test, addition/deletion, and commit data; expand a row to copy changed paths or open the project.
+- **Next Actions** turns terminal state into a short reason and an exact control: **Answer**, **Resolve**, **Review**, **Resume**, or **Open Project**. Permission/approval prompts, conflicts, failures, questions, and completed work no longer share one vague warning.
+- **Project Health** combines live agent count, branch, clean/dirty state, ahead/behind and conflicts, the last commit, and the newest GitHub Actions result when authenticated `gh` is available. Click a repository to filter sessions, prompts, changes, and action signals across the whole dashboard; click the project chip at the top to clear it.
+
+All three cards are independently removable. Drag their headers left or right to reorder them; they snap into place and the order persists. The layout compacts automatically when one or two cards are hidden.
+
 ### 🟢🟡🔵 Machine — *the boring numbers, in the corner where they belong*
 
 <img src="docs/machine.png" alt="Machine stats card">
@@ -108,13 +118,13 @@ Right-click a prompt for its action drawer: copy, pin/unpin, open the project, a
 
 Any meter goes **red** when it's genuinely in trouble (RAM > 90%, disk > 90%, CPU > 85%, ping dead).
 
-The three right-column cards—Usage, Local AI, and Machine—have draggable headers. Drag one far enough up or down to swap it with its neighbor; the card snaps into place and the order persists across overlay and shell restarts. Every section can still be removed and restored from the module strip.
+The three right-column cards—Usage, Local AI, and Machine—also have draggable headers. Drag one far enough up or down to swap it with its neighbor; the card snaps into place and the order persists across overlay and shell restarts. Every section can still be removed and restored from the module strip.
 
 ### ⌨️ Two surfaces, one dashboard
 
 The wallpaper is interactive wherever no window covers it (double-click or right-click the empty desk opens Omarchy's wallpaper switcher, as stock does). Press **`SUPER + I`** to hide the wallpaper dashboard and see the clean desktop; press it again to restore the cards. When you're buried in terminals, **`SUPER + D`** summons the *same* dashboard as a fullscreen overlay on top of everything; `Esc` or a click on the backdrop dismisses it.
 
-The module strip doubles as a keyboard command strip in the overlay: **1–7** toggle modules, **J/K** (or arrows) select a live session, **Enter** focuses it, **A** clears activity filters, and **Esc** closes. The selected session gets a bright outline.
+The module strip doubles as a keyboard command strip in the overlay: **1–9** toggle modules, **J/K** (or arrows) select a live session, **Enter** focuses it, **A** clears activity filters, and **Esc** closes. The selected session gets a bright outline.
 
 ## Install
 
@@ -155,7 +165,7 @@ omarchy restart shell
 
 ## Requirements
 
-Omarchy Quattro with third-party shell plugin support, `bun` (ships with Omarchy), `iw`, `iproute2`, and `ping`. Optional: `nvidia-smi` (GPU row hides without it), the `omarchy.agents` bar widget (for the usage card), and Ollama (for the local-AI card). Hyprland 0.56+ (Lua dispatch) and older (`focuswindow`) are both handled.
+Omarchy Quattro with third-party shell plugin support, `bun` (ships with Omarchy), `iw`, `iproute2`, and `ping`. Optional: `nvidia-smi` (GPU row hides without it), authenticated GitHub CLI `gh` (for the latest CI result), the `omarchy.agents` bar widget (for the usage card), and Ollama (for the local-AI card). Hyprland 0.56+ (Lua dispatch) and older (`focuswindow`) are both handled.
 
 ## It follows your theme
 
@@ -175,7 +185,8 @@ The screenshots above are the **Last Call** theme. A theme gallery is on the roa
 │  ~/.local/share/opencode/*.db│                                     │
 │  Ollama /api/ps /api/tags    │               ┌─────────────────────┴───────────────────┐
 │  omarchy agents usage cache  │               │ InfoView.qml  (cards, heatmap, meters)  │
-│  iw · ip · ping · nvidia-smi │               └───────┬───────────────────────┬─────────┘
+│  git · optional gh CI status │               └───────┬───────────────────────┬─────────┘
+│  iw · ip · ping · nvidia-smi │                       │                       │
 └──────────────────────────────┘                       │                       │
                                      Infomarchy.qml ◀──┘                       └──▶ Overlay.qml
                                      service · WlrLayer.Background                 overlay · SUPER+D
@@ -216,7 +227,7 @@ omarchy-shell infomarchy setDemo false                                # return t
 
 ## Data handling
 
-Prompt and session data stays on the machine. Network checks are limited to the existing ping to `1.1.1.1`, the local Ollama API, and a Cloudflare trace request for the public IP at most once every 15 minutes per dashboard surface. Recent task text is credential-redacted before it reaches QML. Collector JSON is depth/node/byte bounded and streamed to QML in capped frames. Infomarchy has no screen-level privacy masking: prompts, projects, paths, host/network details, and session topics remain visible. The explicit `setDemo true` screenshot mode replaces the whole snapshot with documentation-only sample data and resets off whenever the shell restarts.
+Prompt and session data stays on the machine. Network checks are limited to the existing ping to `1.1.1.1`, the local Ollama API, a Cloudflare trace request for the public IP at most once every 15 minutes per dashboard surface, and—only when authenticated `gh` is installed—the newest GitHub Actions run for each active repository, cached for ten minutes. Recent task text is credential-redacted before it reaches QML. Collector JSON is depth/node/byte bounded and streamed to QML in capped frames. Infomarchy has no screen-level privacy masking: prompts, projects, paths, host/network details, and session topics remain visible. The explicit `setDemo true` screenshot mode replaces the whole snapshot with documentation-only sample data and resets off whenever the shell restarts.
 
 ## FAQ
 

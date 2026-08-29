@@ -13,7 +13,7 @@ import { randomUUID } from "crypto";
 import { join, basename } from "path";
 import { Database } from "bun:sqlite";
 import { localDayIndex, localDayStarts } from "./history-time";
-import { attentionState, parseGitStatus, repoCollisions, workspaceGroups, resourceDelta } from "./ai-ops";
+import { attentionSignal, parseCommitSummary, parseDiffNumstat, parseGitStatus, projectHealth, repoCollisions, workspaceGroups, resourceDelta } from "./ai-ops";
 
 const HOME = process.env.HOME || "/root";
 const XDG_STATE = process.env.XDG_STATE_HOME || join(HOME, ".local/state");
@@ -38,6 +38,7 @@ const MAX_JSON_DEPTH = 24;
 const MAX_SNAPSHOT_BYTES = 1536 * 1024;
 const OUTPUT_FRAME_CHARS = 12 * 1024;
 const currentAgentRaw: Record<string, number> = {};
+const currentCiByRepo: Record<string, any> = {};
 
 // ---------------------------------------------------------------- helpers
 export function readRegularFileLimited(p: string, maxBytes = MAX_FILE_BYTES, maxMs = 75): string | null {
@@ -144,9 +145,9 @@ async function boundedStream(stream: ReadableStream<Uint8Array> | null, limit: n
   for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength; }
   return new TextDecoder().decode(joined);
 }
-async function run(cmd: string[], timeoutMs = 1500): Promise<string> {
+async function run(cmd: string[], timeoutMs = 1500, cwd?: string): Promise<string> {
   try {
-    const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore" });
+    const proc = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "ignore" });
     const t = setTimeout(() => { try { proc.kill(); } catch {} }, timeoutMs);
     try {
       const out = await boundedStream(proc.stdout, MAX_COMMAND_BYTES);
@@ -619,13 +620,63 @@ export function inferSessionIdsFromRecent(sessions: any[], recentEntries: any[])
   }
 }
 
+async function githubCiState(cwd: string): Promise<any> {
+  const previous = prev.ciByRepo && typeof prev.ciByRepo === "object" ? prev.ciByRepo[cwd] : null;
+  const checkedAt = Number(previous?.checkedAt || 0);
+  if (checkedAt > 0 && now >= checkedAt && now - checkedAt < 10 * 60 * 1000) {
+    currentCiByRepo[cwd] = previous;
+    return previous;
+  }
+  if (!Bun.which("gh")) {
+    const unavailable = previous ? { ...previous, checkedAt: now, stale: true } : { state: "unavailable", checkedAt: now };
+    currentCiByRepo[cwd] = unavailable;
+    return unavailable;
+  }
+  const output = await run(["gh", "run", "list", "--limit", "1", "--json", "status,conclusion,name,headSha,updatedAt"], 1800, cwd);
+  const rows = parseJsonBounded(output, 256, 10);
+  const latest = Array.isArray(rows) && rows.length && rows[0] && typeof rows[0] === "object" ? rows[0] : null;
+  const state = String(latest?.conclusion || latest?.status || "").toLowerCase();
+  const result = latest && /^[a-z_]+$/.test(state) ? {
+    state,
+    name: uiString(latest.name, 80),
+    headSha: /^[0-9a-f]{7,64}$/i.test(String(latest.headSha || "")) ? String(latest.headSha) : "",
+    updatedAt: uiString(latest.updatedAt, 40),
+    checkedAt: now,
+    stale: false,
+  } : previous ? { ...previous, checkedAt: now, stale: true } : { state: "unavailable", checkedAt: now };
+  currentCiByRepo[cwd] = result;
+  return result;
+}
+
 async function repoState(cwd: string) {
-  if (!cwd) return { root: "", state: null };
-  const [root, status] = await Promise.all([
+  if (!cwd) return { root: "", state: null, changes: null, ci: null };
+  const [root, status, diff, commitLine, ci] = await Promise.all([
     run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], 700),
     run(["git", "-C", cwd, "status", "--porcelain=v2", "--branch"], 900),
+    run(["git", "-C", cwd, "diff", "--numstat", "HEAD", "--"], 900),
+    run(["git", "-C", cwd, "log", "-1", "--format=%H%x09%h%x09%ct%x09%s"], 700),
+    githubCiState(cwd),
   ]);
-  return { root: root.trim(), state: parseGitStatus(status) };
+  const state = parseGitStatus(status), stats = parseDiffNumstat(diff), commit = parseCommitSummary(commitLine);
+  const fingerprint = String(Bun.hash(JSON.stringify([commit?.hash || "", status, diff])));
+  return {
+    root: root.trim(), state,
+    changes: state || commit ? {
+      fingerprint,
+      count: state?.dirty || 0,
+      staged: state?.staged || 0,
+      untracked: state?.untracked || 0,
+      files: state?.files || [],
+      testFiles: (state?.files || []).filter(file => /(^|\/)(test|tests|spec|specs)(\/|\.)|\.(test|spec)\./i.test(file)).length,
+      additions: stats.additions,
+      deletions: stats.deletions,
+      head: commit?.hash || "",
+      headShort: commit?.short || "",
+      commitSubject: commit?.subject || "",
+      committedAt: commit?.committedAt || 0,
+    } : null,
+    ci,
+  };
 }
 
 async function liveSessions(pids: number[]) {
@@ -679,13 +730,19 @@ async function liveSessions(pids: number[]) {
     if (!s.busy && s.window && titleLooksBusy(s.window.title) && s.provider === "grok")
       s.window = { ...s.window, title: "" };
   }
-  const repos = new Map<string, Promise<{ root: string; state: any }>>();
+  const repos = new Map<string, Promise<{ root: string; state: any; changes: any; ci: any }>>();
   for (const session of sessions) if (session._cwd && !repos.has(session._cwd)) repos.set(session._cwd, repoState(session._cwd));
   await Promise.all(sessions.map(async session => {
     const repo = session._cwd ? await repos.get(session._cwd) : null;
     session.repoRoot = repo?.root ? shortPath(repo.root) : "";
     session.git = repo?.state || null;
-    session.attention = attentionState(session.window?.title, session.git?.conflicts || 0);
+    session.changes = repo?.changes || null;
+    session.ci = repo?.ci || null;
+    const signal = attentionSignal(session.window?.title, session.git?.conflicts || 0);
+    session.attention = signal?.state || "";
+    session.attentionReason = signal?.reason || "";
+    session.attentionAction = signal?.action || "";
+    session.attentionDetail = signal?.detail || "";
     delete session._cwd;
   }));
   sessions.sort((a, b) => b.startedAt - a.startedAt);
@@ -889,7 +946,10 @@ function demoSnapshot(stamp = Date.now()) {
       topic: "Hardening atomic state persistence", topicAt: stamp - 90_000,
       window: { address: "0xd001", title: "Implementing bounded snapshot transport", class: "com.mitchellh.ghostty", workspace: 2 },
       resources: { cpuPct: 18.4, rss: 912_261_120, processes: 7, gpuMemory: null },
-      repoRoot: "~/Code/atlas", git: { branch: "release/dashboard", dirty: 4, ahead: 2, behind: 0, conflicts: 0 }, attention: null,
+      repoRoot: "~/Code/atlas", git: { branch: "release/dashboard", dirty: 4, staged: 1, untracked: 1, files: ["collector.ts", "InfoView.qml", "tests/dashboard.test.ts", "README.md"], ahead: 2, behind: 0, conflicts: 0 }, attention: "",
+      attentionReason: "", attentionAction: "", attentionDetail: "",
+      changes: { fingerprint: "atlas-demo-2", count: 4, staged: 1, untracked: 1, files: ["collector.ts", "InfoView.qml", "tests/dashboard.test.ts", "README.md"], testFiles: 1, additions: 186, deletions: 24, head: "a11a5d00", headShort: "a11a5d0", commitSubject: "feat: add operations intelligence", committedAt: stamp - 12 * 60_000 },
+      ci: { state: "in_progress", name: "test", headSha: "a11a5d00", updatedAt: new Date(stamp - 2 * 60_000).toISOString(), checkedAt: stamp },
     },
     {
       provider: "claude", pid: 42463, cwd: "~/Code/orbit", project: "orbit", startedAt: stamp - 74 * 60_000,
@@ -897,7 +957,10 @@ function demoSnapshot(stamp = Date.now()) {
       topic: "Reviewing plugin submission checks", topicAt: stamp - 4 * 60_000,
       window: { address: "0xd002", title: "Waiting for marketplace review", class: "kitty", workspace: 4 },
       resources: { cpuPct: 2.1, rss: 604_241_920, processes: 5, gpuMemory: null },
-      repoRoot: "~/Code/orbit", git: { branch: "main", dirty: 0, ahead: 0, behind: 0, conflicts: 0 }, attention: "waiting",
+      repoRoot: "~/Code/orbit", git: { branch: "main", dirty: 0, staged: 0, untracked: 0, files: [], ahead: 0, behind: 0, conflicts: 0 }, attention: "waiting",
+      attentionReason: "waiting for your permission", attentionAction: "answer", attentionDetail: "Waiting for marketplace review approval",
+      changes: { fingerprint: "orbit-demo-1", count: 0, staged: 0, untracked: 0, files: [], testFiles: 0, additions: 0, deletions: 0, head: "0b17cafe", headShort: "0b17caf", commitSubject: "security: pass marketplace review", committedAt: stamp - 48 * 60_000 },
+      ci: { state: "success", name: "validate", headSha: "0b17cafe", updatedAt: new Date(stamp - 44 * 60_000).toISOString(), checkedAt: stamp },
     },
     {
       provider: "opencode", pid: 42511, cwd: "~/Code/beacon", project: "beacon", startedAt: stamp - 16 * 60_000,
@@ -905,7 +968,10 @@ function demoSnapshot(stamp = Date.now()) {
       topic: "Building interactive model controls", topicAt: stamp - 45_000,
       window: { address: "0xd003", title: "Local AI model controls", class: "Alacritty", workspace: 6 },
       resources: { cpuPct: 9.7, rss: 486_539_264, processes: 4, gpuMemory: 1_288_490_188 },
-      repoRoot: "~/Code/beacon", git: { branch: "feat/local-ai", dirty: 2, ahead: 1, behind: 0, conflicts: 0 }, attention: null,
+      repoRoot: "~/Code/beacon", git: { branch: "feat/local-ai", dirty: 2, staged: 0, untracked: 1, files: ["LocalAi.qml", "local-ai.test.ts"], ahead: 1, behind: 0, conflicts: 0 }, attention: "",
+      attentionReason: "", attentionAction: "", attentionDetail: "",
+      changes: { fingerprint: "beacon-demo-3", count: 2, staged: 0, untracked: 1, files: ["LocalAi.qml", "local-ai.test.ts"], testFiles: 1, additions: 94, deletions: 8, head: "bea00ace", headShort: "bea00ac", commitSubject: "feat: control local models", committedAt: stamp - 35 * 60_000 },
+      ci: { state: "failure", name: "qml-check", headSha: "bea00ace", updatedAt: new Date(stamp - 8 * 60_000).toISOString(), checkedAt: stamp },
     },
   ];
   const promptSeeds = [
@@ -938,7 +1004,7 @@ function demoSnapshot(stamp = Date.now()) {
       temp: 52, uptime: 186_300, externalIp: "203.0.113.42",
     },
     ai: {
-      sessions, workspaces: workspaceGroups(sessions), attention: [sessions[1]], collisions: [],
+      sessions, projects: projectHealth(sessions), workspaces: workspaceGroups(sessions), attention: [sessions[1]], collisions: [],
       counts: { claude: { today: 18, week: 96, total: 640 }, codex: { today: 27, week: 144, total: 1102 }, opencode: { today: 11, week: 51, total: 214 } },
       providers: {
         claude: { present: true, prompts: 640 }, codex: { present: true, prompts: 1102, threadCount: 37 },
@@ -987,6 +1053,7 @@ async function runCollector() {
     },
     ai: {
       sessions,
+      projects: projectHealth(sessions),
       workspaces: workspaceGroups(sessions),
       attention: sessions.filter((s: any) => s.attention),
       collisions: repoCollisions(sessions),
@@ -1004,6 +1071,7 @@ async function runCollector() {
       agents: currentAgentRaw,
       externalIp: externalIpS,
       topicSummaries,
+      ciByRepo: currentCiByRepo,
     }));
   } catch {}
   process.stdout.write(frameSnapshot(snapshot));
