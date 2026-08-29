@@ -84,6 +84,7 @@ Item {
       case "codex": return root.cyan
       case "grok": return root.magenta
       case "gemini": return root.blue
+      case "hermes": return root.green
       case "ollama": return root.green
       case "opencode": return root.blue
       case "aider": return root.yellow
@@ -102,6 +103,7 @@ Item {
       case "codex": return "Codex"
       case "grok": return "Grok"
       case "gemini": return "Gemini"
+      case "hermes": return "Hermes"
       case "ollama": return "Ollama"
       case "opencode": return "opencode"
       case "aider": return "Aider"

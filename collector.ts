@@ -350,6 +350,7 @@ const PROVIDERS: [string, RegExp][] = [
   ["codex", /(^|\/)codex(\.js|\.mjs)?$/],
   ["grok", /(^|\/)grok(\.js|\.mjs)?$/],
   ["gemini", /(^|\/)gemini(\.js|\.mjs)?$/],
+  ["hermes", /(^|\/)hermes(\.js|\.mjs|\.py)?$/],
   ["opencode", /(^|\/)opencode$/],
   ["aider", /(^|\/)aider$/],
   ["copilot", /(^|\/)copilot$/],
@@ -391,6 +392,88 @@ function envValue(text: string | null, key: string): string {
   const prefix = key + "=";
   for (const entry of text.split("\0")) if (entry.startsWith(prefix)) return entry.slice(prefix.length);
   return "";
+}
+function contextValue(value: unknown, limit = 80): string {
+  return uiString(value, limit).replace(/\s+/g, " ").trim();
+}
+function contextId(value: unknown): string {
+  const id = String(value || "").trim();
+  return /^[A-Za-z0-9%][A-Za-z0-9_.:%-]{0,127}$/.test(id) ? id : "";
+}
+export type SessionHost = {
+  kind: "herdr" | "boomux" | "tmux";
+  label: string;
+  workspace?: string;
+  workspaceId?: string;
+  shell?: string;
+  shellId?: string;
+  runId?: string;
+  tabId?: string;
+  paneId?: string;
+  session?: string;
+  window?: string;
+  pane?: string;
+  attached?: boolean;
+};
+// Extract only documented multiplexer identity variables. Never serialize or
+// search the rest of /proc/<pid>/environ, which may contain credentials.
+export function sessionHostsFromEnvironment(environ = ""): SessionHost[] {
+  const hosts: SessionHost[] = [];
+  const herdrPane = contextId(envValue(environ, "HERDR_PANE_ID"));
+  const herdrWorkspace = contextId(envValue(environ, "HERDR_WORKSPACE_ID"));
+  const herdrTab = contextId(envValue(environ, "HERDR_TAB_ID"));
+  if (envValue(environ, "HERDR_ENV") === "1" && (herdrPane || herdrWorkspace || herdrTab)) {
+    const parts = [herdrWorkspace, herdrTab, herdrPane].filter(Boolean);
+    hosts.push({ kind: "herdr", label: "Herdr " + parts.join(" / "), workspaceId: herdrWorkspace, tabId: herdrTab, paneId: herdrPane });
+  }
+  const boomuxShellId = contextId(envValue(environ, "BOOMUX_SHELL_ID"));
+  if (boomuxShellId) {
+    const workspace = contextValue(envValue(environ, "BOOMUX_WORKSPACE"), 64);
+    const shell = contextValue(envValue(environ, "BOOMUX_SHELL_NAME"), 64);
+    const workspaceId = contextId(envValue(environ, "BOOMUX_WORKSPACE_ID"));
+    const runId = contextId(envValue(environ, "BOOMUX_RUN_ID"));
+    const friendly = [workspace, shell].filter(Boolean).join(" / ");
+    hosts.push({
+      kind: "boomux", label: "Boomux " + (friendly || ("shell " + boomuxShellId.slice(0, 8))),
+      workspace, workspaceId, shell, shellId: boomuxShellId, runId,
+    });
+  }
+  const tmuxPane = contextId(envValue(environ, "TMUX_PANE"));
+  if (envValue(environ, "TMUX") || tmuxPane) hosts.push({ kind: "tmux", label: "tmux", paneId: tmuxPane });
+  return hosts;
+}
+
+export function tmuxSocketFromEnvironment(environ = ""): string {
+  const socket = String(envValue(environ, "TMUX") || "").split(",")[0];
+  return socket.length > 0 && socket.length <= 256 && socket.startsWith("/") && !/[\u0000-\u001f\u007f]/.test(socket) ? socket : "";
+}
+export type TmuxPane = { pid: number; paneId: string; session: string; window: string; pane: string; cwd: string; active: boolean; server: string };
+export type TmuxClient = { pid: number; session: string; server: string };
+export function parseTmuxPanes(text: string, server = ""): TmuxPane[] {
+  const result: TmuxPane[] = [];
+  for (const line of String(text || "").split("\n").slice(0, MAX_COLLECTION_ITEMS)) {
+    const [rawPid, rawPaneId, rawSession, rawWindow, rawPane, rawCwd, rawActive] = line.split("\t");
+    const pid = Number(rawPid), paneId = contextId(rawPaneId), session = contextValue(rawSession, 64);
+    if (!Number.isInteger(pid) || pid < 2 || !paneId || !session) continue;
+    result.push({ pid, paneId, session, window: contextValue(rawWindow, 16), pane: contextValue(rawPane, 16), cwd: contextValue(rawCwd, 256), active: rawActive === "1", server });
+  }
+  return result;
+}
+export function parseTmuxClients(text: string, server = ""): TmuxClient[] {
+  const result: TmuxClient[] = [];
+  for (const line of String(text || "").split("\n").slice(0, MAX_COLLECTION_ITEMS)) {
+    const [rawPid, rawSession] = line.split("\t"), pid = Number(rawPid), session = contextValue(rawSession, 64);
+    if (Number.isInteger(pid) && pid > 1 && session) result.push({ pid, session, server });
+  }
+  return result;
+}
+export function tmuxPaneForAncestors(ancestors: number[], panes: TmuxPane[], paneId = "", server = ""): TmuxPane | null {
+  const candidates = server ? panes.filter(pane => pane.server === server) : panes;
+  const byPid = new Map(candidates.map(pane => [pane.pid, pane]));
+  for (const pid of ancestors) if (byPid.has(pid)) return byPid.get(pid)!;
+  const exact = paneId ? candidates.find(pane => pane.paneId === paneId) : null;
+  if (exact) return exact;
+  return null;
 }
 // Extract only known session identifiers. /proc/*/environ can contain secrets,
 // so the collector never serializes or scans arbitrary environment values.
@@ -679,12 +762,54 @@ async function repoState(cwd: string) {
   };
 }
 
+function processAncestors(pid: number): number[] {
+  const result: number[] = [], seen = new Set<number>();
+  let current = info(pid);
+  while (current && current.pid > 1 && !seen.has(current.pid)) {
+    seen.add(current.pid); result.push(current.pid); current = info(current.ppid);
+  }
+  return result;
+}
+function windowForProcess(pid: number, winByPid: Map<number, any>): any {
+  for (const ancestor of processAncestors(pid)) if (winByPid.has(ancestor)) return winByPid.get(ancestor);
+  return null;
+}
+async function tmuxState(winByPid: Map<number, any>, pids: number[]): Promise<{ panes: TmuxPane[]; windows: Map<string, any> }> {
+  const windows = new Map<string, any>();
+  const tmuxRunning = [...cmdByPid.values()].some(cmd => cmd.some(arg => /(^|\/)tmux$|^tmux: server$/.test(arg)));
+  if (!tmuxRunning || !Bun.which("tmux")) return { panes: [], windows };
+  const sockets = new Set<string>();
+  for (const pid of pids) {
+    if (!providerOf(cmdByPid.get(pid) || [])) continue;
+    const socket = tmuxSocketFromEnvironment(read(`/proc/${pid}/environ`) || "");
+    if (socket) sockets.add(socket);
+    if (sockets.size >= 8) break;
+  }
+  if (!sockets.size) sockets.add("");
+  const formatPane = "#{pane_pid}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_current_path}\t#{pane_active}";
+  const formatClient = "#{client_pid}\t#{session_name}";
+  const panes: TmuxPane[] = [];
+  for (const socket of [...sockets]) {
+    const prefix = socket ? ["tmux", "-S", socket] : ["tmux"];
+    const [paneText, clientText] = await Promise.all([
+      run([...prefix, "list-panes", "-a", "-F", formatPane], 650),
+      run([...prefix, "list-clients", "-F", formatClient], 650),
+    ]);
+    panes.push(...parseTmuxPanes(paneText, socket));
+    for (const client of parseTmuxClients(clientText, socket)) {
+      const window = windowForProcess(client.pid, winByPid), key = client.server + "\0" + client.session;
+      if (window && !windows.has(key)) windows.set(key, window);
+    }
+  }
+  return { panes, windows };
+}
+
 async function liveSessions(pids: number[]) {
   let clients: any[] = [];
   try { clients = parseJsonBounded(await run(["hyprctl", "clients", "-j"], 1000), 50_000, 16) || []; } catch {}
   const winByPid = new Map<number, any>(clients.map((c: any) => [c.pid, c]));
   const sessions: any[] = [];
-  const gpuByPid = await gpuMemoryByPid();
+  const [gpuByPid, tmux] = await Promise.all([gpuMemoryByPid(), tmuxState(winByPid, pids)]);
   for (const pid of pids) {
     const prov = providerOf(cmdByPid.get(pid) || []); if (!prov) continue;
     const p = info(pid); if (!p) continue;
@@ -692,9 +817,23 @@ async function liveSessions(pids: number[]) {
     let anc = info(p.ppid), child = false;
     while (anc && anc.pid > 1) { if (providerOf(anc.cmd)) { child = true; break; } anc = info(anc.ppid); }
     if (child) continue;
-    // find the hyprland window hosting it by walking up the parent chain
-    let w: any = null, q: Proc | null = p;
-    while (q && q.pid > 1) { if (winByPid.has(q.pid)) { w = winByPid.get(q.pid); break; } q = info(q.ppid); }
+    // Direct terminals share ancestry with the agent. Multiplexer servers do
+    // not, so tmux is resolved through its pane and attached client below.
+    let w: any = windowForProcess(p.pid, winByPid);
+    const environ = read(`/proc/${p.pid}/environ`) || "";
+    const hosts = sessionHostsFromEnvironment(environ);
+    const tmuxHost = hosts.find(host => host.kind === "tmux");
+    const tmuxSocket = tmuxSocketFromEnvironment(environ);
+    const pane = tmuxPaneForAncestors(processAncestors(p.pid), tmux.panes, tmuxHost?.paneId || "", tmuxSocket);
+    if (pane) {
+      const attachedWindow = tmux.windows.get(pane.server + "\0" + pane.session) || null;
+      if (!tmuxHost) hosts.push({ kind: "tmux", label: "tmux" });
+      const host = hosts.find(item => item.kind === "tmux")!;
+      host.session = pane.session; host.window = pane.window; host.pane = pane.pane; host.paneId = pane.paneId;
+      host.attached = !!attachedWindow;
+      host.label = "tmux " + pane.session + ":" + pane.window + "." + pane.pane;
+      if (!w && attachedWindow) w = attachedWindow;
+    }
     const sessionIds = processSessionIds(p.pid, prov, p.cmd);
     const sample = processTreeSample(p.pid);
     currentAgentRaw[String(p.pid)] = sample.ticks;
@@ -703,6 +842,7 @@ async function liveSessions(pids: number[]) {
       _cwd: p.cwd,
       startedAt: p.start, uptimeSec: Math.max(0, (now - p.start) / 1000),
       session: sessionIds[0] || "", sessionIds,
+      hosts,
       window: w ? { address: w.address, title: w.title, class: w.class, workspace: w.workspace?.id ?? null } : null,
       args: p.cmd.slice(1, 4).join(" ").slice(0, 60),
       resources: {
@@ -948,6 +1088,7 @@ function demoSnapshot(stamp = Date.now()) {
       resources: { cpuPct: 18.4, rss: 912_261_120, processes: 7, gpuMemory: null },
       repoRoot: "~/Code/atlas", git: { branch: "release/dashboard", dirty: 4, staged: 1, untracked: 1, files: ["collector.ts", "InfoView.qml", "tests/dashboard.test.ts", "README.md"], ahead: 2, behind: 0, conflicts: 0 }, attention: "",
       attentionReason: "", attentionAction: "", attentionDetail: "",
+      hosts: [{ kind: "tmux", label: "tmux build:2.0", session: "build", window: "2", pane: "0", paneId: "%4", attached: true }],
       changes: { fingerprint: "atlas-demo-2", count: 4, staged: 1, untracked: 1, files: ["collector.ts", "InfoView.qml", "tests/dashboard.test.ts", "README.md"], testFiles: 1, additions: 186, deletions: 24, head: "a11a5d00", headShort: "a11a5d0", commitSubject: "feat: add operations intelligence", committedAt: stamp - 12 * 60_000 },
       ci: { state: "in_progress", name: "test", headSha: "a11a5d00", updatedAt: new Date(stamp - 2 * 60_000).toISOString(), checkedAt: stamp },
     },
@@ -959,6 +1100,7 @@ function demoSnapshot(stamp = Date.now()) {
       resources: { cpuPct: 2.1, rss: 604_241_920, processes: 5, gpuMemory: null },
       repoRoot: "~/Code/orbit", git: { branch: "main", dirty: 0, staged: 0, untracked: 0, files: [], ahead: 0, behind: 0, conflicts: 0 }, attention: "waiting",
       attentionReason: "waiting for your permission", attentionAction: "answer", attentionDetail: "Waiting for marketplace review approval",
+      hosts: [{ kind: "boomux", label: "Boomux release / reviewer", workspace: "release", shell: "reviewer", shellId: "demo-boomux-shell", runId: "demo-boomux-run" }],
       changes: { fingerprint: "orbit-demo-1", count: 0, staged: 0, untracked: 0, files: [], testFiles: 0, additions: 0, deletions: 0, head: "0b17cafe", headShort: "0b17caf", commitSubject: "security: pass marketplace review", committedAt: stamp - 48 * 60_000 },
       ci: { state: "success", name: "validate", headSha: "0b17cafe", updatedAt: new Date(stamp - 44 * 60_000).toISOString(), checkedAt: stamp },
     },
@@ -970,6 +1112,7 @@ function demoSnapshot(stamp = Date.now()) {
       resources: { cpuPct: 9.7, rss: 486_539_264, processes: 4, gpuMemory: 1_288_490_188 },
       repoRoot: "~/Code/beacon", git: { branch: "feat/local-ai", dirty: 2, staged: 0, untracked: 1, files: ["LocalAi.qml", "local-ai.test.ts"], ahead: 1, behind: 0, conflicts: 0 }, attention: "",
       attentionReason: "", attentionAction: "", attentionDetail: "",
+      hosts: [{ kind: "herdr", label: "Herdr w2 / w2:t3 / w2:p7", workspaceId: "w2", tabId: "w2:t3", paneId: "w2:p7" }],
       changes: { fingerprint: "beacon-demo-3", count: 2, staged: 0, untracked: 1, files: ["LocalAi.qml", "local-ai.test.ts"], testFiles: 1, additions: 94, deletions: 8, head: "bea00ace", headShort: "bea00ac", commitSubject: "feat: control local models", committedAt: stamp - 35 * 60_000 },
       ci: { state: "failure", name: "qml-check", headSha: "bea00ace", updatedAt: new Date(stamp - 8 * 60_000).toISOString(), checkedAt: stamp },
     },

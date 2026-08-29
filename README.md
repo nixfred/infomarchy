@@ -40,7 +40,9 @@ Infomarchy puts all of it on the one surface you always have open and never use:
 
 <img src="docs/sessions.png" alt="Live AI sessions card">
 
-One card per running agent — **Claude Code, Codex, Grok, Gemini, opencode, aider, Ollama chats** — detected straight from `/proc`, no agent-side hooks, nothing to configure. Each card shows the project, working directory, how long it's been up, the pid, the workspace it lives on, and the terminal's own title. Its two-line **current topic** is a short synopsis derived from several exact-session requests—not the last prompt copied onto the card. A loaded local Ollama model may refine the wording; summaries are cached by session/content and Infomarchy never auto-loads a model. The dot **pulses while the agent is thinking**.
+One card per running agent — **Claude Code, Codex, Grok, Gemini, Hermes, opencode, aider, Ollama chats** — detected straight from `/proc`, no agent-side hooks, nothing to configure. Each card shows the project, working directory, how long it's been up, the pid, the workspace it lives on, and the terminal's own title. Its two-line **current topic** is a short synopsis derived from several exact-session requests—not the last prompt copied onto the card. A loaded local Ollama model may refine the wording; summaries are cached by session/content and Infomarchy never auto-loads a model. The dot **pulses while the agent is thinking**.
+
+Agents hosted inside **Herdr, Boomux, or tmux** remain visible. Their large session card reports the host and its bounded identity: Herdr workspace/tab/pane, Boomux workspace/shell plus exact shell/run IDs in the snapshot, or tmux `session:window.pane`. Infomarchy reads only those documented identity variables from the agent environment; unrelated environment values are never serialized. An attached tmux pane is matched to its client terminal, so clicking the card still focuses the correct window. Detached Herdr/Boomux sessions remain reportable from their local agent process but honestly show **no direct window** rather than guessing one. Remote-only processes on another machine are outside local `/proc` and are not fabricated.
 
 Each card also attributes live CPU, resident RAM, process-tree size, and—when `nvidia-smi` exposes compute PIDs—GPU memory to that agent. The detailed totals repeat in the inspector; unavailable counters display `—`.
 
@@ -165,7 +167,7 @@ omarchy restart shell
 
 ## Requirements
 
-Omarchy Quattro with third-party shell plugin support, `bun` (ships with Omarchy), `iw`, `iproute2`, and `ping`. Optional: `nvidia-smi` (GPU row hides without it), authenticated GitHub CLI `gh` (for the latest CI result), the `omarchy.agents` bar widget (for the usage card), and Ollama (for the local-AI card). Hyprland 0.56+ (Lua dispatch) and older (`focuswindow`) are both handled.
+Omarchy Quattro with third-party shell plugin support, `bun` (ships with Omarchy), `iw`, `iproute2`, and `ping`. Optional: `nvidia-smi` (GPU row hides without it), authenticated GitHub CLI `gh` (for the latest CI result), the `omarchy.agents` bar widget (for the usage card), Ollama (for the local-AI card), and Herdr/Boomux/tmux when those hosts are actually used. Infomarchy does not start or configure a multiplexer. Hyprland 0.56+ (Lua dispatch) and older (`focuswindow`) are both handled.
 
 ## It follows your theme
 
@@ -227,7 +229,7 @@ omarchy-shell infomarchy setDemo false                                # return t
 
 ## Data handling
 
-Prompt and session data stays on the machine. Network checks are limited to the existing ping to `1.1.1.1`, the local Ollama API, a Cloudflare trace request for the public IP at most once every 15 minutes per dashboard surface, and—only when authenticated `gh` is installed—the newest GitHub Actions run for each active repository, cached for ten minutes. Recent task text is credential-redacted before it reaches QML. Collector JSON is depth/node/byte bounded and streamed to QML in capped frames. Infomarchy has no screen-level privacy masking: prompts, projects, paths, host/network details, and session topics remain visible. The explicit `setDemo true` screenshot mode replaces the whole snapshot with documentation-only sample data and resets off whenever the shell restarts.
+Prompt and session data stays on the machine. Network checks are limited to the existing ping to `1.1.1.1`, the local Ollama API, a Cloudflare trace request for the public IP at most once every 15 minutes per dashboard surface, and—only when authenticated `gh` is installed—the newest GitHub Actions run for each active repository, cached for ten minutes. Multiplexer reporting reads only documented Herdr/Boomux/tmux identity variables; tmux inventory commands run only while tmux is already present, and Infomarchy never invokes Herdr or Boomux control APIs. Recent task text is credential-redacted before it reaches QML. Collector JSON is depth/node/byte bounded and streamed to QML in capped frames. Infomarchy has no screen-level privacy masking: prompts, projects, paths, host/network details, and session topics remain visible. The explicit `setDemo true` screenshot mode replaces the whole snapshot with documentation-only sample data and resets off whenever the shell restarts.
 
 ## FAQ
 

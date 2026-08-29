@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite";
 const historyFixture = join(import.meta.dir, ".test-fixture");
 afterAll(() => rmSync(historyFixture, { recursive: true, force: true }));
 import { join } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, writePrivateStateFile } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, writePrivateStateFile } from "./collector.ts";
 
 const fixture = join(import.meta.dir, ".test-fixture-races");
 afterAll(() => rmSync(fixture, { recursive: true, force: true }));
@@ -35,6 +35,36 @@ describe("providerOf", () => {
     expect(providerOf(["opencode", "serve"])).toBeNull();
     expect(providerOf(["/usr/bin/opencode"])).toBe("opencode");
     expect(providerOf(["opencode", "run", "inspect this"])).toBe("opencode");
+  });
+
+  test("recognizes Hermes as an interactive agent provider", () => {
+    expect(providerOf(["/home/user/.hermes/bin/hermes"])).toBe("hermes");
+  });
+});
+
+describe("multiplexer session identity", () => {
+  test("extracts only documented Herdr, Boomux, and tmux identity fields", () => {
+    const hosts = sessionHostsFromEnvironment([
+      "TOKEN=must-never-appear", "HERDR_ENV=1", "HERDR_WORKSPACE_ID=w1", "HERDR_TAB_ID=w1:t2", "HERDR_PANE_ID=w1:p3",
+      "BOOMUX_WORKSPACE_ID=workspace-123", "BOOMUX_WORKSPACE=atlas", "BOOMUX_SHELL_ID=shell-456", "BOOMUX_SHELL_NAME=builder", "BOOMUX_RUN_ID=run-789",
+      "TMUX=/tmp/tmux/default,1,0", "TMUX_PANE=%7",
+    ].join("\0") + "\0");
+    expect(hosts.map(host => host.kind)).toEqual(["herdr", "boomux", "tmux"]);
+    expect(hosts[0]).toMatchObject({ workspaceId: "w1", tabId: "w1:t2", paneId: "w1:p3" });
+    expect(hosts[1]).toMatchObject({ workspace: "atlas", shell: "builder", shellId: "shell-456", runId: "run-789" });
+    expect(hosts[2]).toMatchObject({ paneId: "%7" });
+    expect(tmuxSocketFromEnvironment("TMUX=/tmp/tmux-1000/custom,1,0\0TOKEN=hidden\0")).toBe("/tmp/tmux-1000/custom");
+    expect(tmuxSocketFromEnvironment("TMUX=../../bad,1,0\0")).toBe("");
+    expect(JSON.stringify(hosts)).not.toContain("must-never-appear");
+  });
+
+  test("parses bounded tmux inventory and resolves the nearest pane", () => {
+    const panes = parseTmuxPanes("320\t%7\twork\t2\t1\t/home/user/project\t1\ninvalid\n");
+    expect(panes).toEqual([{ pid: 320, paneId: "%7", session: "work", window: "2", pane: "1", cwd: "/home/user/project", active: true, server: "" }]);
+    expect(parseTmuxClients("410\twork\n")).toEqual([{ pid: 410, session: "work", server: "" }]);
+    expect(tmuxPaneForAncestors([900, 500, 320, 1], panes)?.paneId).toBe("%7");
+    expect(tmuxPaneForAncestors([900], panes, "%7")?.session).toBe("work");
+    expect(tmuxPaneForAncestors([900], panes, "%8")).toBeNull();
   });
 });
 

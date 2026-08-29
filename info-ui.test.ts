@@ -41,4 +41,11 @@ describe("interactive information modules", () => {
     expect(view).toContain('text: "1–9 MODULES');
     expect(overlay).toContain("event.key <= Qt.Key_9");
   });
+
+  test("shows multiplexer hosting context on live cards and the inspector", () => {
+    expect(view).toContain("function sessionHostLabel");
+    expect(view).toContain("function sessionHostDetail");
+    expect(view).toContain('text: "hosted in " + view.sessionHostLabel');
+    expect(view).toContain("view.sessionHostDetail(sessionInspector.session)");
+  });
 });
