@@ -362,13 +362,21 @@ describe("codex project resolution", () => {
 
 describe("topic cache never pins its own failure", () => {
   test("a hit requires a real summary", () => {
-    expect(topicCacheHit({ fingerprint: "f", model: "m", summary: "Fixing the thing" }, "f", "m")).toBe("Fixing the thing");
-    expect(topicCacheHit({ fingerprint: "f", model: "m", failedAt: 1 }, "f", "m")).toBe("");
-    expect(topicCacheHit({ fingerprint: "f", model: "other", summary: "s" }, "f", "m")).toBe("");
+    expect(topicCacheHit({ v: 2, fingerprint: "f", model: "m", summary: "Fixing the thing" }, "f", "m")).toBe("Fixing the thing");
+    expect(topicCacheHit({ v: 2, fingerprint: "f", model: "m", failedAt: 1 }, "f", "m")).toBe("");
+    expect(topicCacheHit({ v: 2, fingerprint: "f", model: "other", summary: "s" }, "f", "m")).toBe("");
+  });
+
+  test("pre-fix cache entries are discarded, not served forever", () => {
+    // Written before the failure marker existed: a local fallback parked in
+    // `summary` as though the model had produced it. No version stamp.
+    const poisoned = { fingerprint: "f", model: "m", summary: "Improving Pi now nixfred", checkedAt: 1 };
+    expect(topicCacheHit(poisoned, "f", "m")).toBe("");
+    expect(topicRetryBlocked(poisoned, "f", "m", 2)).toBe(false);
   });
 
   test("a failed generate backs off, then retries", () => {
-    const failed = { fingerprint: "f", model: "m", failedAt: 1000 };
+    const failed = { v: 2, fingerprint: "f", model: "m", failedAt: 1000 };
     expect(topicRetryBlocked(failed, "f", "m", 1000 + 30_000)).toBe(true);
     expect(topicRetryBlocked(failed, "f", "m", 1000 + 61_000)).toBe(false);
     // New prompts mean a new fingerprint — always retry.

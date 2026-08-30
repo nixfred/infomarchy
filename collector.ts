@@ -639,12 +639,17 @@ export function attachSessionTopics(sessions: any[], recentEntries: any[]): any[
 // model would never be consulted again. Record a short retry backoff instead.
 const TOPIC_TIMEOUT_MS = 6000;
 const TOPIC_RETRY_MS = 60_000;
+// Entries written before the failure-marker fix are shape-identical to good
+// ones: they hold a local fallback in `summary` as though the model had
+// produced it, so they would be served forever. Require the version stamp so
+// pre-fix caches are discarded on first read instead of staying poisoned.
+const TOPIC_CACHE_VERSION = 2;
 export function topicCacheHit(cached: any, fingerprint: string, model: string): string {
-  return cached && cached.fingerprint === fingerprint && cached.model === model && typeof cached.summary === "string" && cached.summary
-    ? cached.summary : "";
+  return cached && cached.v === TOPIC_CACHE_VERSION && cached.fingerprint === fingerprint && cached.model === model
+    && typeof cached.summary === "string" && cached.summary ? cached.summary : "";
 }
 export function topicRetryBlocked(cached: any, fingerprint: string, model: string, stamp: number): boolean {
-  if (!cached || cached.fingerprint !== fingerprint || cached.model !== model) return false;
+  if (!cached || cached.v !== TOPIC_CACHE_VERSION || cached.fingerprint !== fingerprint || cached.model !== model) return false;
   const failedAt = Number(cached.failedAt || 0);
   return failedAt > 0 && stamp - failedAt < TOPIC_RETRY_MS;
 }
@@ -659,7 +664,8 @@ export function pruneTopicCache(cache: Record<string, any>, liveKeys: Set<string
 
 async function refineSessionTopics(sessions: any[], recentEntries: any[], ollama: any): Promise<Record<string, any>> {
   const previous = prev.topicSummaries && typeof prev.topicSummaries === "object" ? prev.topicSummaries : {};
-  const next: Record<string, any> = { ...previous };
+  const next: Record<string, any> = {};
+  for (const [key, entry] of Object.entries(previous)) if (entry && (entry as any).v === TOPIC_CACHE_VERSION) next[key] = entry;
   const liveKeys = new Set<string>();
   const model = String((ollama.loaded || [])[0]?.name || "");
   const host = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
@@ -688,11 +694,11 @@ async function refineSessionTopics(sessions: any[], recentEntries: any[], ollama
     } catch {}
     if (generated) {
       session.topic = generated;
-      next[key] = { fingerprint, model, summary: generated, checkedAt: now };
+      next[key] = { v: TOPIC_CACHE_VERSION, fingerprint, model, summary: generated, checkedAt: now };
     } else {
       // Keep the local summary on screen, but remember this as a FAILURE so a
       // later tick retries once the backoff expires.
-      next[key] = { fingerprint, model, failedAt: now, checkedAt: now };
+      next[key] = { v: TOPIC_CACHE_VERSION, fingerprint, model, failedAt: now, checkedAt: now };
     }
   }));
   return pruneTopicCache(next, liveKeys);
