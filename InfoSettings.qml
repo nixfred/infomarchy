@@ -51,12 +51,39 @@ Item {
     }
     ready = true
   }
+  // Both maps are keyed by values that age out of the snapshot (pid, prompt
+  // timestamp) and nothing ever removed them, so dashboard.json grew forever.
+  readonly property int maxPins: 200
+  function prunedMuted(muted, now) {
+    var next = {}, stamp = Number(now || Date.now())
+    for (var key in muted) {
+      var until = Number(muted[key])
+      // A lapsed snooze is already visible again; only keep live snoozes and
+      // explicit dismissals (-1).
+      if (until < 0 || until > stamp) next[key] = until
+    }
+    return next
+  }
+  function prunedPins(pins) {
+    var keys = []
+    for (var key in pins) if (pins[key] === true) keys.push(key)
+    if (keys.length <= maxPins) {
+      var same = {}
+      for (var k = 0; k < keys.length; k++) same[keys[k]] = true
+      return same
+    }
+    // Key is provider:session:ts — keep the most recent pins.
+    keys.sort(function(a, b) { return Number(b.split(":").pop()) - Number(a.split(":").pop()) })
+    var next = {}
+    for (var i = 0; i < maxPins; i++) next[keys[i]] = true
+    return next
+  }
   function persist(nextSections, nextMuted, nextPins, nextDashboardVisible, nextRightOrder) {
     configFile.setText(JSON.stringify({
       version: 2,
       sections: nextSections,
-      attentionMuted: nextMuted,
-      pinnedPrompts: nextPins,
+      attentionMuted: prunedMuted(nextMuted),
+      pinnedPrompts: prunedPins(nextPins),
       dashboardVisible: nextDashboardVisible,
       rightOrder: normalizedRightOrder(nextRightOrder)
     }, null, 2) + "\n")

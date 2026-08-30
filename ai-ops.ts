@@ -66,6 +66,20 @@ export function resourceDelta(currentTicks: unknown, previousTicks: unknown, ela
   return 100 * ((current - previous) / 100) / elapsed;
 }
 
+// Kept beside forecastPercent so the window rule and the projection are tested
+// together; the QML dashboard consumes the result rather than re-deriving it.
+export function usageWindowMs(label: unknown): number {
+  const value = String(label || "");
+  if (/week|7-day/i.test(value)) return 7 * 86400000;
+  if (/session|5-hour/i.test(value)) return 5 * 3600000;
+  return 0;
+}
+export function limitForecast(limit: any, stamp = Date.now()): number | null {
+  if (!limit || typeof limit !== "object") return null;
+  const duration = usageWindowMs(limit.label ?? limit.title);
+  const remaining = Date.parse(String(limit.resetsAt || "")) - stamp;
+  return duration ? forecastPercent(limit.percent, remaining, duration) : null;
+}
 export function forecastPercent(percent: unknown, remainingMs: unknown, windowMs: unknown): number | null {
   const used = Number(percent), remaining = Number(remainingMs), duration = Number(windowMs);
   const elapsed = duration - remaining;

@@ -13,7 +13,7 @@ import { randomUUID } from "crypto";
 import { join, basename } from "path";
 import { Database } from "bun:sqlite";
 import { localDayIndex, localDayStarts } from "./history-time";
-import { attentionState, parseGitStatus, repoCollisions, workspaceGroups, resourceDelta } from "./ai-ops";
+import { attentionState, parseGitStatus, repoCollisions, workspaceGroups, resourceDelta, limitForecast } from "./ai-ops";
 
 const HOME = process.env.HOME || "/root";
 const XDG_STATE = process.env.XDG_STATE_HOME || join(HOME, ".local/state");
@@ -68,6 +68,56 @@ export function readRegularFileLimited(p: string, maxBytes = MAX_FILE_BYTES, max
 function read(p: string, maxBytes = MAX_FILE_BYTES): string | null {
   return readRegularFileLimited(p, maxBytes);
 }
+// Append-only JSONL histories outgrow MAX_FILE_BYTES. Refusing to read one
+// made a provider disappear from the desk entirely ("present: false" reads as
+// "not installed"). The dashboard only ever shows the last 7 days, so keep the
+// tail and drop the leading partial line.
+export function dropPartialFirstLine(text: string): string {
+  const newline = text.indexOf("\n");
+  return newline < 0 ? "" : text.slice(newline + 1);
+}
+export function readHistoryTail(path: string, maxBytes = MAX_FILE_BYTES): string | null {
+  const whole = readRegularFileLimited(path, maxBytes);
+  if (whole !== null) return whole;
+  const tail = readRegularFileTail(path, maxBytes);
+  return tail === null ? null : dropPartialFirstLine(tail);
+}
+// First bytes only. Codex rollout files reach tens of MB (they embed the full
+// transcript), but the session_meta header we need sits in the first line.
+export function readRegularFileHead(path: string, maxBytes: number): string | null {
+  let fd = -1;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    if (!fstatSync(fd).isFile()) return null;
+    const buffer = Buffer.allocUnsafe(maxBytes);
+    const bytes = readSync(fd, buffer, 0, maxBytes, 0);
+    return bytes > 0 ? buffer.subarray(0, bytes).toString("utf8") : null;
+  } catch { return null; }
+  finally { if (fd >= 0) try { closeSync(fd); } catch {} }
+}
+function readRegularFileTail(path: string, maxBytes: number, maxMs = 150): string | null {
+  let fd = -1;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const opened = fstatSync(fd);
+    if (!opened.isFile() || opened.size <= maxBytes) return null;
+    const started = performance.now();
+    const chunks: Buffer[] = [];
+    let position = opened.size - maxBytes;
+    let total = 0;
+    while (total < maxBytes) {
+      if (performance.now() - started > maxMs) return null;
+      const buffer = Buffer.allocUnsafe(Math.min(64 * 1024, maxBytes - total));
+      const bytes = readSync(fd, buffer, 0, buffer.byteLength, position);
+      if (bytes === 0) break;
+      position += bytes;
+      total += bytes;
+      chunks.push(buffer.subarray(0, bytes));
+    }
+    return Buffer.concat(chunks, total).toString("utf8");
+  } catch { return null; }
+  finally { if (fd >= 0) try { closeSync(fd); } catch {} }
+}
 export function structureWithinBudget(value: unknown, maxNodes = MAX_JSON_NODES, maxDepth = MAX_JSON_DEPTH): boolean {
   const stack: Array<{ value: any; depth: number }> = [{ value, depth: 0 }];
   let nodes = 0;
@@ -104,6 +154,23 @@ function ensurePrivateStateDir(path: string): boolean {
     return !state.isSymbolicLink() && state.isDirectory() && state.uid === uid && (state.mode & 0o077) === 0;
   } catch { return false; }
 }
+// A collector killed between open() and rename() leaves its temp file behind
+// and the finally-block never runs. Sweep our own stale ones so the state dir
+// cannot fill with orphans.
+export function reapStateTempFiles(directory: string, ttlMs = 10 * 60 * 1000, stamp = Date.now()): number {
+  let removed = 0;
+  for (const name of ls(directory)) {
+    if (!/^\..+\.\d+\.[0-9a-f-]{36}\.tmp$/.test(name)) continue;
+    try {
+      const path = join(directory, name);
+      const state = lstatSync(path);
+      if (!state.isFile() || stamp - state.mtimeMs <= ttlMs) continue;
+      unlinkSync(path);
+      removed++;
+    } catch {}
+  }
+  return removed;
+}
 export function writePrivateStateFile(directory: string, name: string, text: string): boolean {
   if (!/^[A-Za-z0-9_.-]{1,96}$/.test(name) || Buffer.byteLength(text) > MAX_FILE_BYTES) return false;
   if (!ensurePrivateStateDir(directory)) return false;
@@ -118,6 +185,7 @@ export function writePrivateStateFile(directory: string, name: string, text: str
     closeSync(fd); fd = -1;
     // rename replaces a hostile destination symlink itself; it never follows it.
     renameSync(temporary, join(directory, name));
+    reapStateTempFiles(directory);
     return true;
   } catch { return false; }
   finally {
@@ -380,6 +448,12 @@ export function cmdIsTurnInhibitor(cmd: string[]): boolean {
   return cmd.some(a => /agent turn in progress/i.test(a));
 }
 function shortPath(p: string) { return p.startsWith(HOME) ? "~" + p.slice(HOME.length) : p; }
+// Grok names session dirs after a percent-encoded cwd. A literal "%" in the
+// project path makes decodeURIComponent throw, which used to abort the whole
+// snapshot. Fall back to the raw directory name instead.
+export function decodeProjectDir(dir: string): string {
+  try { return decodeURIComponent(dir); } catch { return dir; }
+}
 
 function cleanSessionId(value: unknown): string {
   const id = String(value || "").trim();
@@ -560,11 +634,34 @@ export function attachSessionTopics(sessions: any[], recentEntries: any[]): any[
   return sessions;
 }
 
+// A generate call that times out must NOT be cached as if it had succeeded:
+// the local fallback would be pinned against this fingerprint forever and the
+// model would never be consulted again. Record a short retry backoff instead.
+const TOPIC_TIMEOUT_MS = 6000;
+const TOPIC_RETRY_MS = 60_000;
+export function topicCacheHit(cached: any, fingerprint: string, model: string): string {
+  return cached && cached.fingerprint === fingerprint && cached.model === model && typeof cached.summary === "string" && cached.summary
+    ? cached.summary : "";
+}
+export function topicRetryBlocked(cached: any, fingerprint: string, model: string, stamp: number): boolean {
+  if (!cached || cached.fingerprint !== fingerprint || cached.model !== model) return false;
+  const failedAt = Number(cached.failedAt || 0);
+  return failedAt > 0 && stamp - failedAt < TOPIC_RETRY_MS;
+}
+// Keys are provider:sessionId. Dead sessions would accumulate forever, and an
+// oversized prev-*.json silently fails to write, killing every rate stat.
+export function pruneTopicCache(cache: Record<string, any>, liveKeys: Set<string>, limit = 64): Record<string, any> {
+  const kept = Object.entries(cache).filter(([key]) => liveKeys.has(key));
+  const rest = Object.entries(cache).filter(([key]) => !liveKeys.has(key))
+    .sort((a, b) => Number(b[1]?.checkedAt || 0) - Number(a[1]?.checkedAt || 0));
+  return Object.fromEntries([...kept, ...rest].slice(0, limit));
+}
+
 async function refineSessionTopics(sessions: any[], recentEntries: any[], ollama: any): Promise<Record<string, any>> {
   const previous = prev.topicSummaries && typeof prev.topicSummaries === "object" ? prev.topicSummaries : {};
   const next: Record<string, any> = { ...previous };
+  const liveKeys = new Set<string>();
   const model = String((ollama.loaded || [])[0]?.name || "");
-  if (!model) return next;
   const host = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
   const base = host.startsWith("http") ? host : "http://" + host;
   await Promise.all(sessions.map(async session => {
@@ -572,25 +669,33 @@ async function refineSessionTopics(sessions: any[], recentEntries: any[], ollama
     if (!entries.length) return;
     const ids = (session.sessionIds || []).map((value: any) => cleanSessionId(value)).filter(Boolean);
     const key = `${session.provider}:${ids[0] || session.pid}`;
+    liveKeys.add(key);
+    if (!model) return;
     const fingerprint = String(Bun.hash(JSON.stringify(entries.map(entry => [entry.ts, entry.text]))));
     const cached = previous[key];
-    if (cached && cached.fingerprint === fingerprint && cached.model === model && cached.summary) {
-      session.topic = cached.summary;
-      return;
-    }
+    const hit = topicCacheHit(cached, fingerprint, model);
+    if (hit) { session.topic = hit; return; }
+    if (topicRetryBlocked(cached, fingerprint, model, now)) return;
+    let generated = "";
     try {
       const prompt = "Summarize the current work as a specific 3-7 word gerund phrase. Do not quote a request. No punctuation or preamble.\nProject: " +
         topicProjectLabel(session) + "\nRecent requests:\n" + entries.map(entry => "- " + String(entry.text || "").slice(0, 320)).join("\n");
       const response = await fetch(base + "/api/generate", {
-        method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(2200),
+        method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(TOPIC_TIMEOUT_MS),
         body: JSON.stringify({ model, prompt, stream: false, options: { temperature: 0.1, num_predict: 20 } }),
       });
-      const generated = response.ok ? cleanGeneratedSummary((await response.json() as any).response) : "";
-      if (generated) session.topic = generated;
+      generated = response.ok ? cleanGeneratedSummary((await response.json() as any).response) : "";
     } catch {}
-    next[key] = { fingerprint, model, summary: session.topic, checkedAt: now };
+    if (generated) {
+      session.topic = generated;
+      next[key] = { fingerprint, model, summary: generated, checkedAt: now };
+    } else {
+      // Keep the local summary on screen, but remember this as a FAILURE so a
+      // later tick retries once the backoff expires.
+      next[key] = { fingerprint, model, failedAt: now, checkedAt: now };
+    }
   }));
-  return next;
+  return pruneTopicCache(next, liveKeys);
 }
 
 export function inferSessionIdsFromRecent(sessions: any[], recentEntries: any[]): void {
@@ -735,7 +840,7 @@ function cnt(prov: string, ts: number) {
 
 function claudeHistory() {
   const p = join(process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude"), "history.jsonl");
-  const txt = read(p); if (!txt) return { present: false };
+  const txt = readHistoryTail(p); if (!txt) return { present: false };
   const lines = txt.split("\n").filter(Boolean);
   for (const l of lines) {
     try {
@@ -746,15 +851,49 @@ function claudeHistory() {
   }
   return { present: true, prompts: lines.length };
 }
+// Codex history.jsonl carries no cwd, which left every Codex row on the desk
+// with a blank project and made RESUME open a terminal in $HOME. The working
+// directory lives in the session_meta header of the matching rollout file, and
+// the session id is in that file's name — so read only the first bytes.
+export function rolloutSessionId(fileName: string): string {
+  const match = fileName.match(/rollout-.*?-([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$/i);
+  return cleanSessionId(match?.[1]);
+}
+export function rolloutCwd(head: string): string {
+  const line = String(head || "").split("\n")[0] || "";
+  const match = line.match(/"cwd"\s*:\s*"((?:[^"\\]|\\.){0,4096})"/);
+  if (!match) return "";
+  try { return JSON.parse('"' + match[1] + '"'); } catch { return ""; }
+}
+function codexSessionDirectories(base: string): Map<string, string> {
+  const result = new Map<string, string>();
+  const root = join(base, "sessions");
+  const files: string[] = [];
+  // sessions/YYYY/MM/DD/rollout-*.jsonl
+  for (const year of ls(root).sort().reverse().slice(0, 4))
+    for (const month of ls(join(root, year)).sort().reverse().slice(0, 12))
+      for (const day of ls(join(root, year, month)).sort().reverse().slice(0, 31))
+        for (const file of ls(join(root, year, month, day)))
+          if (file.endsWith(".jsonl")) files.push(join(root, year, month, day, file));
+  for (const path of files.sort().reverse().slice(0, MAX_COLLECTION_ITEMS)) {
+    const id = rolloutSessionId(basename(path));
+    if (!id || result.has(id)) continue;
+    const cwd = rolloutCwd(readRegularFileHead(path, 4096) || "");
+    if (cwd) result.set(id, shortPath(cwd));
+  }
+  return result;
+}
+
 function codexHistory() {
   const base = process.env.CODEX_HOME || join(HOME, ".codex");
   if (!existsSync(base)) return { present: false };
-  const hist = read(join(base, "history.jsonl")) || "";
+  const hist = readHistoryTail(join(base, "history.jsonl")) || "";
+  const directories = codexSessionDirectories(base);
   let prompts = 0;
   for (const l of hist.split("\n").filter(Boolean)) {
     try { const e = parseJsonBounded(l, 2048, 12); const ts = (+e?.ts || 0) * 1000; if (!ts) continue; prompts++;
       bump(ts, "codex"); cnt("codex", ts);
-      recent.push({ provider: "codex", ts, project: "", text: safePrompt(e.text), session: e.session_id });
+      recent.push({ provider: "codex", ts, project: directories.get(cleanSessionId(e.session_id)) || "", text: safePrompt(e.text), session: e.session_id });
     } catch {}
   }
   const threads: any[] = [];
@@ -767,13 +906,14 @@ function codexHistory() {
 function grokHistory() {
   const base = join(HOME, ".grok");
   if (!existsSync(base)) return { present: false };
-  const active = readJson(join(base, "active_sessions.json")) || [];
+  const activeRaw = readJson(join(base, "active_sessions.json"));
+  const active = Array.isArray(activeRaw) ? activeRaw : [];
   const sessionIds = new Set<string>();
   for (const dir of ls(join(base, "sessions"))) {
     const full = join(base, "sessions", dir);
     try { const state = lstatSync(full); if (state.isSymbolicLink() || !state.isDirectory()) continue; } catch { continue; }
-    const project = shortPath(decodeURIComponent(dir));
-    const history = read(join(full, "prompt_history.jsonl")) || "";
+    const project = shortPath(decodeProjectDir(dir));
+    const history = readHistoryTail(join(full, "prompt_history.jsonl")) || "";
     for (const l of history.split("\n").filter(Boolean)) {
       try {
         const e = parseJsonBounded(l, 2048, 12), ts = Date.parse(e?.timestamp);
@@ -785,7 +925,10 @@ function grokHistory() {
       } catch {}
     }
   }
-  return { present: true, sessions: sessionIds.size, active: active.map((a: any) => ({ pid: a.pid, cwd: shortPath(a.cwd || ""), openedAt: Date.parse(a.opened_at) })) };
+  const activeSessions = active.filter((a: any) => a && typeof a === "object")
+    .slice(0, MAX_COLLECTION_ITEMS)
+    .map((a: any) => ({ pid: a.pid, cwd: shortPath(String(a.cwd || "")), openedAt: Date.parse(String(a.opened_at || "")) }));
+  return { present: true, sessions: sessionIds.size, active: activeSessions };
 }
 function opencodeHistory() {
   const dataRoot = process.env.XDG_DATA_HOME || join(HOME, ".local/share");
@@ -848,7 +991,11 @@ function agentsUsage() {
     if (!f.endsWith(".json")) continue;
     const j = readJson(join(dir, f)); if (!j) continue;
     out[f.replace(/\.json$/, "")] = {
-      name: j.name, ready: j.ready, tierLabel: j.tierLabel, limits: j.limits || [],
+      name: j.name, ready: j.ready, tierLabel: j.tierLabel,
+      // Ship the projection from the tested implementation instead of letting
+      // the QML re-derive it (the copy there had drifted out of test coverage).
+      limits: (Array.isArray(j.limits) ? j.limits : []).slice(0, MAX_COLLECTION_ITEMS)
+        .map((limit: any) => (limit && typeof limit === "object") ? { ...limit, forecast: limitForecast(limit, now) } : limit),
       todayPrompts: j.todayPrompts, todaySessions: j.todaySessions, todayTotalTokens: j.todayTotalTokens,
       totalPrompts: j.totalPrompts, totalSessions: j.totalSessions, updatedAt: j.updatedAt,
       modelUsage: j.modelUsage || {}, recentDays: j.recentDays || [], usageStatusText: j.usageStatusText,

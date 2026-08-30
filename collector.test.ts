@@ -4,7 +4,7 @@ import { Database } from "bun:sqlite";
 const historyFixture = join(import.meta.dir, ".test-fixture");
 afterAll(() => rmSync(historyFixture, { recursive: true, force: true }));
 import { join } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, writePrivateStateFile } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles } from "./collector.ts";
 
 const fixture = join(import.meta.dir, ".test-fixture-races");
 afterAll(() => rmSync(fixture, { recursive: true, force: true }));
@@ -297,5 +297,111 @@ describe("history collection", () => {
       text: "inspect with password: [redacted]",
     });
     rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe("degrading instead of crashing", () => {
+  const guard = join(import.meta.dir, ".test-fixture-guards");
+  afterAll(() => rmSync(guard, { recursive: true, force: true }));
+
+  test("a literal % in a grok project dir does not throw", () => {
+    // decodeURIComponent("100%home") throws — this used to abort the whole snapshot.
+    expect(decodeProjectDir("100%home%2Fpi")).toBe("100%home%2Fpi");
+    expect(decodeProjectDir("%2Fhome%2Fdev")).toBe("/home/dev");
+  });
+
+  test("oversized JSONL history keeps its tail rather than disappearing", () => {
+    mkdirSync(guard, { recursive: true });
+    const path = join(guard, "history.jsonl");
+    const line = JSON.stringify({ timestamp: 1, display: "x".repeat(200) }) + "\n";
+    let text = "";
+    while (Buffer.byteLength(text) < 40 * 1024) text += line;
+    text += JSON.stringify({ timestamp: 2, display: "NEWEST" }) + "\n";
+    writeFileSync(path, text);
+    // Under the cap: whole file.
+    expect(readHistoryTail(path, 8 * 1024 * 1024)!.length).toBe(text.length);
+    // Over the cap: the newest entries survive, and no partial first line leaks.
+    const tail = readHistoryTail(path, 4 * 1024)!;
+    expect(tail).toContain("NEWEST");
+    expect(tail.length).toBeLessThan(text.length);
+    for (const row of tail.split("\n").filter(Boolean)) expect(() => JSON.parse(row)).not.toThrow();
+  });
+
+  test("dropPartialFirstLine discards a truncated leading record", () => {
+    expect(dropPartialFirstLine('mp":1}\n{"ok":true}\n')).toBe('{"ok":true}\n');
+    expect(dropPartialFirstLine("no newline at all")).toBe("");
+  });
+});
+
+describe("codex project resolution", () => {
+  const codex = join(import.meta.dir, ".test-fixture-codex");
+  afterAll(() => rmSync(codex, { recursive: true, force: true }));
+
+  test("reads the session id out of a rollout filename", () => {
+    expect(rolloutSessionId("rollout-2026-08-30T17-03-16-01a0547b-d5fb-7923-afd8-5e3a8ee3e715.jsonl"))
+      .toBe("01a0547b-d5fb-7923-afd8-5e3a8ee3e715");
+    expect(rolloutSessionId("history.jsonl")).toBe("");
+  });
+
+  test("extracts cwd from the session_meta header only", () => {
+    expect(rolloutCwd('{"type":"session_meta","payload":{"session_id":"x","cwd":"/home/dev/Projects/thing"}}\n{"cwd":"/wrong"}'))
+      .toBe("/home/dev/Projects/thing");
+    expect(rolloutCwd('{"payload":{"cwd":"/tmp/a b"}}')).toBe("/tmp/a b");
+    expect(rolloutCwd("not json")).toBe("");
+  });
+
+  test("reads only the head of a large rollout file", () => {
+    mkdirSync(codex, { recursive: true });
+    const path = join(codex, "rollout-2026-01-01T00-00-00-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+    writeFileSync(path, '{"type":"session_meta","payload":{"cwd":"/home/dev/Work"}}\n' + "z".repeat(512 * 1024));
+    const head = readRegularFileHead(path, 4096)!;
+    expect(head.length).toBe(4096);
+    expect(rolloutCwd(head)).toBe("/home/dev/Work");
+  });
+});
+
+describe("topic cache never pins its own failure", () => {
+  test("a hit requires a real summary", () => {
+    expect(topicCacheHit({ fingerprint: "f", model: "m", summary: "Fixing the thing" }, "f", "m")).toBe("Fixing the thing");
+    expect(topicCacheHit({ fingerprint: "f", model: "m", failedAt: 1 }, "f", "m")).toBe("");
+    expect(topicCacheHit({ fingerprint: "f", model: "other", summary: "s" }, "f", "m")).toBe("");
+  });
+
+  test("a failed generate backs off, then retries", () => {
+    const failed = { fingerprint: "f", model: "m", failedAt: 1000 };
+    expect(topicRetryBlocked(failed, "f", "m", 1000 + 30_000)).toBe(true);
+    expect(topicRetryBlocked(failed, "f", "m", 1000 + 61_000)).toBe(false);
+    // New prompts mean a new fingerprint — always retry.
+    expect(topicRetryBlocked(failed, "different", "m", 1000 + 1)).toBe(false);
+  });
+
+  test("prunes dead sessions so prev-*.json cannot grow without bound", () => {
+    const cache: Record<string, any> = {};
+    for (let i = 0; i < 300; i++) cache[`claude:dead-${i}`] = { summary: "s", checkedAt: i };
+    cache["claude:alive"] = { summary: "live", checkedAt: 0 };
+    const pruned = pruneTopicCache(cache, new Set(["claude:alive"]), 64);
+    expect(Object.keys(pruned).length).toBe(64);
+    // The live session survives even though it has the oldest timestamp.
+    expect(pruned["claude:alive"]).toBeTruthy();
+  });
+});
+
+describe("state dir hygiene", () => {
+  const dir = join(import.meta.dir, ".test-fixture-tmpreap");
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("reaps temp files orphaned by a killed collector", () => {
+    mkdirSync(dir, { recursive: true });
+    const orphan = join(dir, ".prev-bg.json.3105095.269b5d36-3ca7-4aca-95d4-a627651b9a71.tmp");
+    writeFileSync(orphan, "{}");
+    const keep = join(dir, "prev-bg.json");
+    writeFileSync(keep, "{}");
+    // Fresh orphans are left alone (another collector may be mid-write).
+    expect(reapStateTempFiles(dir, 10 * 60 * 1000)).toBe(0);
+    expect(existsSync(orphan)).toBe(true);
+    // Stale ones go.
+    expect(reapStateTempFiles(dir, 0, Date.now() + 1000)).toBe(1);
+    expect(existsSync(orphan)).toBe(false);
+    expect(existsSync(keep)).toBe(true);
   });
 });

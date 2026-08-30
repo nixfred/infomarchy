@@ -25,7 +25,15 @@ Scope {
   // Transient sanitized sample data for public screenshots. Never persisted.
   property bool demoMode: false
 
-  InfoModel { id: infoModel; refreshMs: 4000; demoMode: root.demoMode }
+  // Collecting costs ~20 subprocesses a tick (/proc scan, df, ping, iw, hyprctl,
+  // nvidia-smi, git per session, a full opencode.db scan). Do not pay it while
+  // SUPER+I has the dashboard hidden.
+  InfoModel {
+    id: infoModel
+    refreshMs: 4000
+    demoMode: root.demoMode
+    active: dashboardSettings.ready && dashboardSettings.dashboardVisible
+  }
   InfoSettings { id: dashboardSettings }
 
   function imageUrl(path) { return Util.fileUrl(path) }

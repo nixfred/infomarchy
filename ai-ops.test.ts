@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { attentionState, parseGitStatus, repoCollisions, workspaceGroups, resourceDelta, forecastPercent } from "./ai-ops";
+import { attentionState, parseGitStatus, repoCollisions, workspaceGroups, resourceDelta, forecastPercent, usageWindowMs, limitForecast } from "./ai-ops";
 
 describe("AI operations signals", () => {
   test("parses branch readiness and conflicts", () => {
@@ -49,5 +49,26 @@ describe("AI operations signals", () => {
     expect(forecastPercent(0.25, 2 * 3600000, 4 * 3600000)).toBe(0.5);
     expect(forecastPercent(0.1, 3.95 * 3600000, 4 * 3600000)).toBeNull();
     expect(forecastPercent("bad", 1, 2)).toBeNull();
+  });
+});
+
+describe("usage forecast", () => {
+  const stamp = Date.UTC(2026, 7, 30, 12, 0, 0);
+  test("classifies limit windows", () => {
+    expect(usageWindowMs("WEEKLY")).toBe(7 * 86400000);
+    expect(usageWindowMs("7-day")).toBe(7 * 86400000);
+    expect(usageWindowMs("5-HOUR")).toBe(5 * 3600000);
+    expect(usageWindowMs("SESSION")).toBe(5 * 3600000);
+    expect(usageWindowMs("mystery")).toBe(0);
+  });
+  test("projects a limit at its window pace", () => {
+    const resetsAt = new Date(stamp + 2 * 3600000).toISOString();
+    expect(limitForecast({ label: "SESSION", percent: 0.25, resetsAt }, stamp)).toBeCloseTo(0.4166, 3);
+  });
+  test("refuses unusable limits instead of guessing", () => {
+    expect(limitForecast(null, stamp)).toBeNull();
+    expect(limitForecast({ label: "unknown", percent: 0.5, resetsAt: new Date(stamp).toISOString() }, stamp)).toBeNull();
+    // Barely into the window — too little signal to extrapolate.
+    expect(limitForecast({ label: "SESSION", percent: 0.1, resetsAt: new Date(stamp + 4.99 * 3600000).toISOString() }, stamp)).toBeNull();
   });
 });

@@ -55,7 +55,11 @@ Item {
       return (String(row.text || "") + " " + String(row.project || "") + " " + String(row.provider || "")).toLowerCase().indexOf(query) >= 0
     })
     var limit = query || activityFilterActive ? 200 : 80
-    return chosen.slice(0, limit).sort(function(a, b) { return Number(settings.promptPinned(promptKey(b))) - Number(settings.promptPinned(promptKey(a))) || Number(b.ts || 0) - Number(a.ts || 0) })
+    // Sort BEFORE slicing. Slicing first dropped every pinned prompt older than
+    // the newest 80 rows — which defeats the only reason to pin one.
+    return chosen.slice().sort(function(a, b) {
+      return Number(settings.promptPinned(promptKey(b))) - Number(settings.promptPinned(promptKey(a))) || Number(b.ts || 0) - Number(a.ts || 0)
+    }).slice(0, limit)
   }
   readonly property int pad: Style.spacing.xl
   readonly property int gap: Style.spacing.lg
@@ -72,7 +76,10 @@ Item {
   function attentionKey(item) { return String(item.provider || "") + ":" + String(item.pid || "") + ":" + String(item.attention || "") }
   function promptKey(item) { return String(item.provider || "") + ":" + String(item.session || "") + ":" + String(item.ts || "") }
   function usageWindowMs(label) { return /week|7-day/i.test(String(label || "")) ? 7 * 86400000 : /session|5-hour/i.test(String(label || "")) ? 5 * 3600000 : 0 }
+  // The collector ships forecast from ai-ops.limitForecast (tested). The local
+  // math stays only as a fallback for snapshots from an older collector.
   function usageProjection(limit) {
+    if (limit && limit.forecast !== undefined) return limit.forecast === null ? null : Number(limit.forecast)
     var duration = usageWindowMs(limit.label || limit.title), remaining = Date.parse(limit.resetsAt || "") - Date.now(), elapsed = duration - remaining
     if (!duration || !isFinite(remaining) || remaining < 0 || elapsed < duration * 0.03) return null
     return Math.max(0, Number(limit.percent || 0) * duration / elapsed)
@@ -84,6 +91,19 @@ Item {
   function activateKeyboardSession() {
     var session = sessions[keyboardSessionIndex]
     if (session && session.window && session.window.address) navigateTo(session.window.address)
+  }
+  // inspectedSession/selectedPrompt hold a copy of the delegate's modelData from
+  // click time. sessions is replaced on every 4s snapshot, so the drawer used to
+  // freeze — showing stale CPU/git and offering FOCUS on an exited window.
+  // Re-resolve against the current snapshot each tick and close it when the
+  // session is gone.
+  readonly property var liveInspectedSession: {
+    var pinnedSession = inspectedSession
+    if (!pinnedSession) return null
+    for (var i = 0; i < sessions.length; i++) {
+      if (sessions[i].pid === pinnedSession.pid && sessions[i].provider === pinnedSession.provider) return sessions[i]
+    }
+    return null
   }
   function toggleActivityCell(index) { activityCellFilter = activityCellFilter === index ? -1 : index }
   function toggleActivityProvider(provider) { activityProviderFilter = activityProviderFilter === provider ? "" : provider }
@@ -959,14 +979,14 @@ Item {
     id: sessionInspector
     z: 100
     anchors.centerIn: parent
-    visible: !!view.inspectedSession && view.sectionEnabled("sessions")
+    visible: !!view.liveInspectedSession && view.sectionEnabled("sessions")
     width: Math.min(parent.width - view.gap * 4, Math.round(620 * Style.fontScale))
     implicitHeight: inspectorColumn.implicitHeight + view.pad * 2
     radius: view.radius
     color: Util.alpha(view.desk.themeBackground, 0.97)
-    border.color: Util.alpha(view.inspectedSession ? view.desk.providerColor(view.inspectedSession.provider) : view.desk.themeForeground, 0.8)
+    border.color: Util.alpha(view.liveInspectedSession ? view.desk.providerColor(view.liveInspectedSession.provider) : view.desk.themeForeground, 0.8)
     border.width: 1
-    readonly property var session: view.inspectedSession || ({})
+    readonly property var session: view.liveInspectedSession || ({})
     readonly property color tone: view.desk.providerColor(session.provider)
 
     MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: function(mouse) { mouse.accepted = true } }
