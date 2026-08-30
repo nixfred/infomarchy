@@ -343,8 +343,12 @@ Item {
           title: "LIVE AI SESSIONS"
           hint: view.sessions.length + " running · left focus · right inspect" + (view.desk.error ? " · ⚠ " + view.desk.error : "")
           Flow {
+            id: sessionFlow
             width: parent.width
             spacing: Style.spacing.md
+            readonly property int targetColumns: 4
+            readonly property int minimumCardWidth: Math.round(210 * Style.fontScale)
+            readonly property int fittedCardWidth: Math.floor((width - spacing * (targetColumns - 1)) / targetColumns)
             Repeater {
               model: view.sessions
               delegate: Rectangle {
@@ -356,7 +360,9 @@ Item {
                 // Fall back to the title regex for snapshots from an older collector.
                 readonly property bool busy: modelData.busy === true || (modelData.busy !== false && modelData.window && /Processing|🧠|⚙|⏳|…/.test(String(modelData.window.title || "")))
                 property string previewSource: ""
-                width: Math.round(250 * Style.fontScale); height: scol.implicitHeight + Style.spacing.lg * 2
+                // Fill four columns when they remain readable; narrower layouts
+                // retain a minimum width and let Flow wrap naturally.
+                width: Math.max(sessionFlow.minimumCardWidth, sessionFlow.fittedCardWidth); height: scol.implicitHeight + Style.spacing.lg * 2
                 color: hover.containsMouse ? Util.alpha(tone, 0.16) : Util.alpha(tone, 0.08)
                 border.color: view.keyboardSessionIndex === index ? tone : Util.alpha(tone, hover.containsMouse ? 0.9 : 0.45); border.width: view.keyboardSessionIndex === index ? 2 : 1; radius: view.radius
                 Image { anchors.fill: parent; visible: hover.containsMouse && view.previewsEnabled && sc.previewSource !== ""; source: sc.previewSource; fillMode: Image.PreserveAspectCrop; opacity: 0.28 }
