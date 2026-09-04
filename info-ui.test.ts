@@ -5,8 +5,20 @@ import { join } from "path";
 const settings = readFileSync(join(import.meta.dir, "InfoSettings.qml"), "utf8");
 const view = readFileSync(join(import.meta.dir, "InfoView.qml"), "utf8");
 const overlay = readFileSync(join(import.meta.dir, "Overlay.qml"), "utf8");
+const model = readFileSync(join(import.meta.dir, "InfoModel.qml"), "utf8");
+const service = readFileSync(join(import.meta.dir, "Infomarchy.qml"), "utf8");
 
 describe("interactive information modules", () => {
+  test("reordering skips hidden cards instead of producing a visual no-op", () => {
+    const source = settings.match(/function adjacentEnabledIndex\([\s\S]*?\n  \}/)?.[0];
+    expect(source).toBeTruthy();
+    const adjacentEnabledIndex = Function(`return (${source})`)();
+    expect(adjacentEnabledIndex(["usage", "localAi", "machine"], 0, 1, { localAi: false })).toBe(2);
+    expect(adjacentEnabledIndex(["changes", "needs", "projects"], 2, -1, { needs: false })).toBe(0);
+    expect(adjacentEnabledIndex(["usage", "localAi", "machine"], 0, -1, {})).toBe(0);
+    expect(settings).toContain("adjacentEnabledIndex(next, from, direction, sections)");
+  });
+
   test("persists seen change fingerprints and exposes the optional change module", () => {
     expect(settings).toContain('{ id: "changes", label: "CHANGES" }');
     expect(settings).toContain("property var seenChanges");
@@ -47,5 +59,29 @@ describe("interactive information modules", () => {
     expect(view).toContain("function sessionHostDetail");
     expect(view).toContain('text: "hosted in " + view.sessionHostLabel');
     expect(view).toContain("view.sessionHostDetail(sessionInspector.session)");
+  });
+
+  test("offers safe selectable Ollama load and unload controls", () => {
+    expect(settings).toContain("property string selectedOllamaModel");
+    expect(settings).toContain("function setSelectedOllamaModel");
+    expect(model).toContain('ollamaControlPath: Qt.resolvedUrl("ollama-control.ts")');
+    expect(model).toContain("ollamaProcess.pendingFrame");
+    expect(model).toContain("write(JSON.stringify(pendingFrame)");
+    expect(view).toContain("function needsConfirmation");
+    expect(view).toContain('view.desk.controlOllama("load"');
+    expect(view).toContain('view.desk.controlOllama("unload"');
+    expect(view).toContain('"CONFIRM"');
+  });
+
+  test("deduplicates configurable attention and lifecycle notifications", () => {
+    expect(settings).toContain("property var notificationEvents");
+    expect(settings).toContain("function claimNotificationEvent");
+    expect(settings).toContain("function notificationsAllowed");
+    expect(settings).toContain("function toggleNotificationProvider");
+    expect(view).toContain('text: "ALERTS "');
+    expect(view).toContain('text: "QUIET 22–08 "');
+    expect(service).toContain('"omarchy-notification-send"');
+    expect(service).toContain("dashboardSettings.claimNotificationEvent");
+    expect(service).toContain('"nixfred.infomarchy", "{}"');
   });
 });

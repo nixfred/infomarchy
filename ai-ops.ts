@@ -66,7 +66,8 @@ export function parseDiffNumstat(text: string): DiffSummary {
 export function parseCommitSummary(text: string): CommitSummary | null {
   const [hash, short, seconds, ...subjectParts] = String(text || "").trim().split("\t");
   const committedAt = Number(seconds) * 1000;
-  if (!/^[0-9a-f]{7,64}$/i.test(hash || "") || !/^[0-9a-f]{7,16}$/i.test(short || "") || !Number.isFinite(committedAt)) return null;
+  if (!/^[0-9a-f]{7,64}$/i.test(hash || "") || !/^[0-9a-f]{7,16}$/i.test(short || "") ||
+      !/^\d+$/.test(seconds || "") || !Number.isSafeInteger(committedAt) || committedAt <= 0) return null;
   return { hash, short, committedAt, subject: String(subjectParts.join(" ") || "").slice(0, 120) };
 }
 
@@ -80,7 +81,7 @@ export function attentionSignal(title: unknown, conflicts = 0): AttentionSignal 
   };
   if (/\b(crashed|crash)\b/i.test(detail)) return { state: "blocked", reason: "session appears to have crashed", action: "resolve", detail };
   if (/\b(denied|permission denied)\b/i.test(detail)) return { state: "blocked", reason: "an operation was denied", action: "resolve", detail };
-  if (/\b(error|failed|failure|blocked|conflict)\b/i.test(detail)) return { state: "blocked", reason: "session reports a failure", action: "resolve", detail };
+  if (/\b(failed|failure|blocked|conflict)\b/i.test(detail) || /\berror\s*:/i.test(detail)) return { state: "blocked", reason: "session reports a failure", action: "resolve", detail };
   if (/\b(permission|approve|approval)\b/i.test(detail)) return { state: "waiting", reason: "waiting for your permission", action: "answer", detail };
   if (/\b(confirm|confirmation)\b/i.test(detail)) return { state: "waiting", reason: "waiting for your confirmation", action: "answer", detail };
   if (/\b(question|answer|input required|needs input)\b/i.test(detail)) return { state: "waiting", reason: "waiting for your answer", action: "answer", detail };
@@ -167,6 +168,20 @@ export function resourceDelta(currentTicks: unknown, previousTicks: unknown, ela
   return 100 * ((current - previous) / 100) / elapsed;
 }
 
+// Kept beside forecastPercent so the window rule and the projection are tested
+// together; the QML dashboard consumes the result rather than re-deriving it.
+export function usageWindowMs(label: unknown): number {
+  const value = String(label || "");
+  if (/week|7-day/i.test(value)) return 7 * 86400000;
+  if (/session|5-hour/i.test(value)) return 5 * 3600000;
+  return 0;
+}
+export function limitForecast(limit: any, stamp = Date.now()): number | null {
+  if (!limit || typeof limit !== "object") return null;
+  const duration = usageWindowMs(limit.label ?? limit.title);
+  const remaining = Date.parse(String(limit.resetsAt || "")) - stamp;
+  return duration ? forecastPercent(limit.percent, remaining, duration) : null;
+}
 export function forecastPercent(percent: unknown, remainingMs: unknown, windowMs: unknown): number | null {
   const used = Number(percent), remaining = Number(remainingMs), duration = Number(windowMs);
   const elapsed = duration - remaining;

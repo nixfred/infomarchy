@@ -25,12 +25,48 @@ Scope {
   // Transient sanitized sample data for public screenshots. Never persisted.
   property bool demoMode: false
 
-  InfoModel { id: infoModel; refreshMs: 4000; demoMode: root.demoMode }
+  // Collecting costs ~20 subprocesses a tick (/proc scan, df, ping, iw, hyprctl,
+  // nvidia-smi, git per session, a full opencode.db scan). Do not pay it while
+  // SUPER+I has the dashboard hidden.
+  InfoModel {
+    id: infoModel
+    refreshMs: 4000
+    demoMode: root.demoMode
+    active: dashboardSettings.ready && dashboardSettings.dashboardVisible
+  }
   InfoSettings { id: dashboardSettings }
 
   function imageUrl(path) { return Util.fileUrl(path) }
   function refreshBackground() { if (!readlinkProc.running) readlinkProc.running = true }
   function setBackground(path) { root.background = String(path || "").trim() }
+
+  function dispatchNotifications() {
+    if (root.demoMode || !dashboardSettings.ready || !infoModel.ready) return
+    var events = (((infoModel.snap || {}).ai || {}).events || []).slice(0, 64)
+    var stamp = Number((infoModel.snap || {}).ts || Date.now())
+    for (var i = 0; i < events.length; i++) {
+      var event = events[i] || {}, key = String(event.key || "")
+      if (!dashboardSettings.claimNotificationEvent(key, stamp)) continue
+      if (event.attentionKey && !dashboardSettings.attentionVisible(String(event.attentionKey), stamp)) continue
+      if (!dashboardSettings.notificationsAllowed(String(event.provider || ""), stamp)) continue
+      var title = infoModel.plainText(event.title || "Infomarchy", 100)
+      var body = infoModel.plainText(event.body || "AI session changed", 240)
+      var urgency = event.urgency === "normal" ? "normal" : "low"
+      Quickshell.execDetached([
+        "omarchy-notification-send", "--app-name", "Infomarchy", "-u", urgency, "-t", "8000",
+        title, body, "--exec", "omarchy-shell", "shell", "toggle", "nixfred.infomarchy", "{}"
+      ])
+    }
+  }
+
+  Connections {
+    target: infoModel
+    function onSnapChanged() { root.dispatchNotifications() }
+  }
+  Connections {
+    target: dashboardSettings
+    function onReadyChanged() { if (dashboardSettings.ready) root.dispatchNotifications() }
+  }
 
   function applyThemePayload(colorsB64, shellB64) {
     try { Color.loadColors(Util.decodeBase64(colorsB64)) } catch (e) {}
@@ -94,6 +130,10 @@ Scope {
     function getDashboardVisible(): string { return dashboardSettings.dashboardVisible ? "true" : "false" }
     function setSection(id: string, v: string): void { dashboardSettings.setSection(id, ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
     function toggleSection(id: string): void { dashboardSettings.toggleSection(id) }
+    function setNotifications(v: string): void { dashboardSettings.setNotificationsEnabled(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
+    function toggleNotifications(): void { dashboardSettings.toggleNotificationsEnabled() }
+    function setQuietHours(v: string): void { dashboardSettings.setQuietHoursEnabled(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
+    function toggleQuietHours(): void { dashboardSettings.toggleQuietHoursEnabled() }
     function setDemo(v: string): void {
       root.demoMode = ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0
       infoModel.refresh()

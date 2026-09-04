@@ -1,13 +1,19 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { Database } from "bun:sqlite";
-const historyFixture = join(import.meta.dir, ".test-fixture");
-afterAll(() => rmSync(historyFixture, { recursive: true, force: true }));
-import { join } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, writePrivateStateFile } from "./collector.ts";
+import { tmpdir } from "os";
+import { join, relative } from "path";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles } from "./collector.ts";
 
-const fixture = join(import.meta.dir, ".test-fixture-races");
-afterAll(() => rmSync(fixture, { recursive: true, force: true }));
+const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
+const historyFixture = join(testRoot, "history");
+const fixture = join(testRoot, "races");
+afterAll(() => rmSync(testRoot, { recursive: true, force: true }));
+
+test("collector fixtures stay outside the live plugin tree", () => {
+  const relativeFixture = relative(import.meta.dir, fixture);
+  expect(relativeFixture === ".." || relativeFixture.startsWith("../")).toBe(true);
+});
 
 function decodeFrames(output: string): any {
   const frames = output.trim().split("\n").map(line => JSON.parse(line));
@@ -73,6 +79,8 @@ describe("external IP cache", () => {
     expect(parseExternalIpTrace("fl=1\nip=203.0.113.8\n")).toBe("203.0.113.8");
     expect(parseExternalIpTrace("ip=2001:db8::1\n")).toBe("2001:db8::1");
     expect(parseExternalIpTrace("ip=$(touch /tmp/nope)\n")).toBeNull();
+    expect(parseExternalIpTrace("ip=1.2.3.999\n")).toBeNull();
+    expect(parseExternalIpTrace("ip=:::1\n")).toBeNull();
     expect(parseExternalIpTrace("fl=1\n")).toBeNull();
   });
 
@@ -199,6 +207,42 @@ describe("live session topics", () => {
 });
 
 describe("collector security boundaries", () => {
+  test("redacts credentials from live-session titles and arguments before framing", () => {
+    const titleCredential = ["title", "credential", "value"].join("-");
+    const argumentCredential = ["session", "credential", "value"].join("-");
+    const rawTitle = `Authorization: Bearer ${titleCredential}`;
+    const presentation = sessionPresentation(
+      { address: "0xabc", title: rawTitle, class: "test", workspace: { id: 2 } },
+      ["aider", "--password", argumentCredential],
+    );
+    expect(presentation.window.title).toStartWith("Authorization: Bearer ");
+    expect(presentation.window.title.length).toBeLessThan(rawTitle.length);
+    expect(presentation.args).not.toContain(argumentCredential);
+    expect(JSON.stringify(presentation)).not.toContain(titleCredential);
+  });
+
+  test("redacts generic credential flags from live-session arguments", () => {
+    const separate = sessionPresentation(null, ["tool", "--token", "abcdefghijklmnop"]);
+    const assigned = sessionPresentation(null, ["tool", "--api-key=qrstuvwxyzabcdef"]);
+    expect(separate.args).toBe("--token [redacted]");
+    expect(assigned.args).toBe("--api-key=[redacted]");
+    expect(JSON.stringify([separate, assigned])).not.toMatch(/abcdefghijklmnop|qrstuvwxyzabcdef/);
+  });
+
+  test("redacts a complete separate credential argv value containing spaces", () => {
+    const presentation = sessionPresentation(null, ["tool", "--token", "two word secret"]);
+    expect(presentation.args).toBe("--token [redacted]");
+    expect(presentation.args).not.toContain("word secret");
+  });
+
+  test("redacts complete assigned credential argv values containing spaces", () => {
+    for (const flag of ["--token", "--api-key", "--password", "--secret"]) {
+      const presentation = sessionPresentation(null, ["tool", `${flag}=two word secret`]);
+      expect(presentation.args).toBe(`${flag}=[redacted]`);
+      expect(presentation.args).not.toContain("word secret");
+    }
+  });
+
   test("reads one opened regular file with byte and no-follow limits", () => {
     const root = join(fixture, "safe-read");
     mkdirSync(root, { recursive: true });
@@ -266,6 +310,18 @@ describe("prev.json instance files", () => {
   });
 });
 describe("history collection", () => {
+  test("preserves benign credential-related prose", () => {
+    const prompts = ["implement password reset flow", "design password recovery flow"];
+    expect(prompts.map(safePrompt)).toEqual(prompts);
+  });
+
+  test("redacts authorization headers and complete quoted secrets", () => {
+    const sanitized = safePrompt('Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.private-signature password: "two word secret"');
+    expect(sanitized).toBe("Authorization: Bearer [redacted] password: [redacted]");
+    expect(sanitized).not.toContain("private-signature");
+    expect(sanitized).not.toContain("word secret");
+  });
+
   test("parses Grok prompts and redacts secrets from recent tasks", async () => {
     const grokDir = join(historyFixture, ".grok", "sessions", encodeURIComponent(join(historyFixture, "project")));
     mkdirSync(grokDir, { recursive: true });
@@ -295,7 +351,7 @@ describe("history collection", () => {
   });
 
   test("parses OpenCode user prompts, sessions, projects, and redacts secrets", async () => {
-    const root = join(import.meta.dir, ".test-fixture-opencode");
+    const root = join(testRoot, "opencode");
     const data = join(root, "data");
     const dbDir = join(data, "opencode");
     mkdirSync(dbDir, { recursive: true });
@@ -327,5 +383,119 @@ describe("history collection", () => {
       text: "inspect with password: [redacted]",
     });
     rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe("degrading instead of crashing", () => {
+  const guard = join(import.meta.dir, ".test-fixture-guards");
+  afterAll(() => rmSync(guard, { recursive: true, force: true }));
+
+  test("a literal % in a grok project dir does not throw", () => {
+    // decodeURIComponent("100%home") throws — this used to abort the whole snapshot.
+    expect(decodeProjectDir("100%home%2Fpi")).toBe("100%home%2Fpi");
+    expect(decodeProjectDir("%2Fhome%2Fdev")).toBe("/home/dev");
+  });
+
+  test("oversized JSONL history keeps its tail rather than disappearing", () => {
+    mkdirSync(guard, { recursive: true });
+    const path = join(guard, "history.jsonl");
+    const line = JSON.stringify({ timestamp: 1, display: "x".repeat(200) }) + "\n";
+    let text = "";
+    while (Buffer.byteLength(text) < 40 * 1024) text += line;
+    text += JSON.stringify({ timestamp: 2, display: "NEWEST" }) + "\n";
+    writeFileSync(path, text);
+    // Under the cap: whole file.
+    expect(readHistoryTail(path, 8 * 1024 * 1024)!.length).toBe(text.length);
+    // Over the cap: the newest entries survive, and no partial first line leaks.
+    const tail = readHistoryTail(path, 4 * 1024)!;
+    expect(tail).toContain("NEWEST");
+    expect(tail.length).toBeLessThan(text.length);
+    for (const row of tail.split("\n").filter(Boolean)) expect(() => JSON.parse(row)).not.toThrow();
+  });
+
+  test("dropPartialFirstLine discards a truncated leading record", () => {
+    expect(dropPartialFirstLine('mp":1}\n{"ok":true}\n')).toBe('{"ok":true}\n');
+    expect(dropPartialFirstLine("no newline at all")).toBe("");
+  });
+});
+
+describe("codex project resolution", () => {
+  const codex = join(import.meta.dir, ".test-fixture-codex");
+  afterAll(() => rmSync(codex, { recursive: true, force: true }));
+
+  test("reads the session id out of a rollout filename", () => {
+    expect(rolloutSessionId("rollout-2026-08-30T17-03-16-01a0547b-d5fb-7923-afd8-5e3a8ee3e715.jsonl"))
+      .toBe("01a0547b-d5fb-7923-afd8-5e3a8ee3e715");
+    expect(rolloutSessionId("history.jsonl")).toBe("");
+  });
+
+  test("extracts cwd from the session_meta header only", () => {
+    expect(rolloutCwd('{"type":"session_meta","payload":{"session_id":"x","cwd":"/home/dev/Projects/thing"}}\n{"cwd":"/wrong"}'))
+      .toBe("/home/dev/Projects/thing");
+    expect(rolloutCwd('{"payload":{"cwd":"/tmp/a b"}}')).toBe("/tmp/a b");
+    expect(rolloutCwd("not json")).toBe("");
+  });
+
+  test("reads only the head of a large rollout file", () => {
+    mkdirSync(codex, { recursive: true });
+    const path = join(codex, "rollout-2026-01-01T00-00-00-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl");
+    writeFileSync(path, '{"type":"session_meta","payload":{"cwd":"/home/dev/Work"}}\n' + "z".repeat(512 * 1024));
+    const head = readRegularFileHead(path, 4096)!;
+    expect(head.length).toBe(4096);
+    expect(rolloutCwd(head)).toBe("/home/dev/Work");
+  });
+});
+
+describe("topic cache never pins its own failure", () => {
+  test("a hit requires a real summary", () => {
+    expect(topicCacheHit({ v: 2, fingerprint: "f", model: "m", summary: "Fixing the thing" }, "f", "m")).toBe("Fixing the thing");
+    expect(topicCacheHit({ v: 2, fingerprint: "f", model: "m", failedAt: 1 }, "f", "m")).toBe("");
+    expect(topicCacheHit({ v: 2, fingerprint: "f", model: "other", summary: "s" }, "f", "m")).toBe("");
+  });
+
+  test("pre-fix cache entries are discarded, not served forever", () => {
+    // Written before the failure marker existed: a local fallback parked in
+    // `summary` as though the model had produced it. No version stamp.
+    const poisoned = { fingerprint: "f", model: "m", summary: "Improving Pi now nixfred", checkedAt: 1 };
+    expect(topicCacheHit(poisoned, "f", "m")).toBe("");
+    expect(topicRetryBlocked(poisoned, "f", "m", 2)).toBe(false);
+  });
+
+  test("a failed generate backs off, then retries", () => {
+    const failed = { v: 2, fingerprint: "f", model: "m", failedAt: 1000 };
+    expect(topicRetryBlocked(failed, "f", "m", 1000 + 30_000)).toBe(true);
+    expect(topicRetryBlocked(failed, "f", "m", 1000 + 61_000)).toBe(false);
+    // New prompts mean a new fingerprint — always retry.
+    expect(topicRetryBlocked(failed, "different", "m", 1000 + 1)).toBe(false);
+  });
+
+  test("prunes dead sessions so prev-*.json cannot grow without bound", () => {
+    const cache: Record<string, any> = {};
+    for (let i = 0; i < 300; i++) cache[`claude:dead-${i}`] = { summary: "s", checkedAt: i };
+    cache["claude:alive"] = { summary: "live", checkedAt: 0 };
+    const pruned = pruneTopicCache(cache, new Set(["claude:alive"]), 64);
+    expect(Object.keys(pruned).length).toBe(64);
+    // The live session survives even though it has the oldest timestamp.
+    expect(pruned["claude:alive"]).toBeTruthy();
+  });
+});
+
+describe("state dir hygiene", () => {
+  const dir = join(import.meta.dir, ".test-fixture-tmpreap");
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("reaps temp files orphaned by a killed collector", () => {
+    mkdirSync(dir, { recursive: true });
+    const orphan = join(dir, ".prev-bg.json.3105095.269b5d36-3ca7-4aca-95d4-a627651b9a71.tmp");
+    writeFileSync(orphan, "{}");
+    const keep = join(dir, "prev-bg.json");
+    writeFileSync(keep, "{}");
+    // Fresh orphans are left alone (another collector may be mid-write).
+    expect(reapStateTempFiles(dir, 10 * 60 * 1000)).toBe(0);
+    expect(existsSync(orphan)).toBe(true);
+    // Stale ones go.
+    expect(reapStateTempFiles(dir, 0, Date.now() + 1000)).toBe(1);
+    expect(existsSync(orphan)).toBe(false);
+    expect(existsSync(keep)).toBe(true);
   });
 });

@@ -54,6 +54,8 @@ Cards also show the repository branch, clean/changed state, ahead/behind counts,
 
 Active Needs You signals get a faint breathing outline (the module chip glows too if the card is removed). Click the signal to focus it, **10M** to snooze it for ten minutes, or **×** to dismiss that signal for the lifetime of its process. Snoozes and dismissals persist between the wallpaper and fullscreen overlay.
 
+The card's alert controls send deduplicated Omarchy notifications when an agent is blocked, waiting for an answer, ready for review, crashes, or ends. Alerts are enabled globally by default; each currently active provider can be muted independently, and **QUIET 22–08** suppresses overnight delivery. Event fingerprints persist for seven days, so restarting the shell never replays old alerts. A disappeared session must be absent from two consecutive polls before Infomarchy reports that it ended. Clicking an alert opens the fullscreen desk.
+
 **Click a Needs You signal → jump straight to that agent's terminal.** From the fullscreen overlay, Infomarchy closes itself after focusing the session.
 
 **Click a card → Infomarchy focuses the terminal window hosting that agent.** It walks the process tree up to the Hyprland client, so it works through `kitty`, `alacritty`, `ghostty`, tmux, whatever.
@@ -75,7 +77,9 @@ Infomarchy reuses the cache that Omarchy's own `omarchy.agents` bar widget maint
 
 ### 🟢 Local AI
 
-Ollama up/down, every **loaded** model with its VRAM, GPU utilisation / memory / temperature, and lifetime totals per provider.
+Ollama up/down, every **loaded** model with its VRAM, GPU utilisation / memory / temperature, and lifetime totals per provider. Arrow controls select any locally installed model and show its parameter count, quantization, and disk size. **LOAD** pins the selected model in memory; each loaded row has its own **UNLOAD** action. Models at least 8 GiB—or larger than currently available accelerator/system memory—require a second **CONFIRM** click.
+
+Model changes go through a bounded stdin-framed helper. It validates the model name against Ollama's live `/api/tags` or `/api/ps` inventory before using the documented empty `/api/generate` request with `keep_alive: -1` (load) or `0` (unload). Infomarchy never pulls, deletes, or auto-loads a model.
 
 </td>
 </tr>
@@ -197,6 +201,8 @@ The screenshots above are the **Last Call** theme. A theme gallery is on the roa
 
 - **`collector.ts`** builds one snapshot. It reads `argv` for every pid (cheap), then lazily opens only agent processes and their ancestors, so a 1 000-process box costs ~0.2 s warm. Local files are opened once with no-follow/nonblocking semantics, must be regular files, and are read under byte/time limits. Rate baselines use private, atomic state files under `$XDG_STATE_HOME/infomarchy/prev-<instance>.json`. It never parses the multi-hundred-MB Claude/Codex session transcripts — only the small history/index files and OpenCode's local SQLite history.
 - **`resume-session.ts`** maps each supported provider to its installed CLI resume syntax and launches it through `xdg-terminal-exec`. Provider, ID, and project are separate process arguments; prompt text is never executed.
+- **`ollama-control.ts`** accepts one bounded JSON frame over stdin, validates the requested model against Ollama's inventory, and performs only explicit load/unload operations.
+- **`notification-events.ts`** derives bounded, stable attention and lifecycle events. The background service sends them through Omarchy's notification interface after persistent deduplication; the overlay never sends a duplicate copy.
 - **`InfoModel.qml`** owns the timer, the parse, the theme colours, and helpers (`focusWindow`, formatting).
 - **`InfoView.qml`** is pure presentation, hosted twice: on the **background** layer by `Infomarchy.qml`, and on the **overlay** layer by `Overlay.qml`. The background host keeps the `background` IPC target so Omarchy's wallpaper tooling is unaffected.
 
@@ -214,6 +220,8 @@ omarchy-shell infomarchy toggleDashboard                              # hide/sho
 omarchy-shell infomarchy setDashboardVisible true                     # explicit on/off control
 omarchy-shell infomarchy toggleSection machine                        # remove/restore one dashboard card
 omarchy-shell infomarchy setSection recent true                       # explicit section visibility
+omarchy-shell infomarchy toggleNotifications                         # all Infomarchy alerts on/off
+omarchy-shell infomarchy toggleQuietHours                            # fixed quiet window, 22:00–08:00
 omarchy-shell infomarchy setDemo true                                 # sanitized screenshot data; transient
 omarchy-shell infomarchy setDemo false                                # return to live local data
 ```
@@ -223,13 +231,15 @@ omarchy-shell infomarchy setDemo false                                # return t
 | poll interval | `refreshMs` in `Infomarchy.qml` / `Overlay.qml` | 4000 / 3000 ms |
 | wallpaper dim | `wallpaperOpacity` in `Infomarchy.qml` | 0.32 |
 | wallpaper dashboard | `SUPER+I` or wallpaper IPC above; state survives shell/plugin restarts | visible |
+| session notifications | Next Actions card or wallpaper IPC above | on |
+| notification quiet hours | Next Actions card or wallpaper IPC above | off (22:00–08:00 when enabled) |
 | space left for the bar | `topInset` in `InfoView.qml` | 40 px × font scale |
 | provider colours | `providerColor()` in `InfoModel.qml` | theme ANSI roles |
 | add a provider | one regex in `PROVIDERS` in `collector.ts` | — |
 
 ## Data handling
 
-Prompt and session data stays on the machine. Network checks are limited to the existing ping to `1.1.1.1`, the local Ollama API, a Cloudflare trace request for the public IP at most once every 15 minutes per dashboard surface, and—only when authenticated `gh` is installed—the newest GitHub Actions run for each active repository, cached for ten minutes. Multiplexer reporting reads only documented Herdr/Boomux/tmux identity variables; tmux inventory commands run only while tmux is already present, and Infomarchy never invokes Herdr or Boomux control APIs. Recent task text is credential-redacted before it reaches QML. Collector JSON is depth/node/byte bounded and streamed to QML in capped frames. Infomarchy has no screen-level privacy masking: prompts, projects, paths, host/network details, and session topics remain visible. The explicit `setDemo true` screenshot mode replaces the whole snapshot with documentation-only sample data and resets off whenever the shell restarts.
+Prompt and session data stays on the machine. Network checks are limited to the existing ping to `1.1.1.1`, the local Ollama API, a Cloudflare trace request for the public IP at most once every 15 minutes per dashboard surface, and—only when authenticated `gh` is installed—the newest GitHub Actions run for each active repository, cached for ten minutes. Ollama state changes happen only after an explicit card action and can only load or unload a model already present in the corresponding local inventory. Notifications are sent to the local Omarchy notification service; no session data is relayed to a remote notification provider. Multiplexer reporting reads only documented Herdr/Boomux/tmux identity variables; tmux inventory commands run only while tmux is already present, and Infomarchy never invokes Herdr or Boomux control APIs. Recent task text is credential-redacted before it reaches QML. Collector JSON is depth/node/byte bounded and streamed to QML in capped frames. Infomarchy has no screen-level privacy masking: prompts, projects, paths, host/network details, and session topics remain visible. The explicit `setDemo true` screenshot mode replaces the whole snapshot with documentation-only sample data and resets off whenever the shell restarts.
 
 ## FAQ
 

@@ -50,9 +50,10 @@ and screen placement are described in the work log/conversation.
 - [x] 13. Network: display the host's external IP and cache success/failure responsibly.
 - [x] 14. Persistence: SUPER+I visibility survives Infomarchy and unrelated shell/plugin restarts without flipping.
 - [x] 15. Layout: persistently reorder Usage, Local AI, and Machine with snappy vertical drag-and-drop.
-- [ ] 16. Local AI controls: select, load, and unload installed Ollama models safely from the card.
+- [x] 16. Local AI controls: select, load, and unload installed Ollama models safely from the card.
 - [x] 17. Live-session topics: derive exact-session context for each large agent card.
 - [x] 18. Recent Tasks scrolling: route wheel/touchpad input directly through clickable rows and enlarge the draggable track.
 - [x] 19. Recent Tasks input fix: replace row-covering MouseAreas with non-blocking hover/tap handlers and accelerate smooth scrolling.
 - [x] 20. Live-session cleanup: remove the duplicate compact workspace/session strip and keep only large per-session cards.
 - [x] 21. Real session synopsis: summarize several exact-session requests into a short phrase, optionally refined by an already-loaded Ollama model; never display the last prompt as the topic.
+- [x] 22. Proactive alerts: persistently deduplicate attention, crash, review, and ended-session notifications with global, quiet-hours, and per-provider controls.

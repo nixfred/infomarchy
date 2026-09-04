@@ -40,6 +40,14 @@ Item {
   readonly property var allSessions: ai.sessions || []
   readonly property var projects: ai.projects || []
   readonly property var sessions: !projectFilter ? allSessions : allSessions.filter(function(item) { return projectMatches(item) })
+  readonly property var activeNotificationProviders: {
+    var result = []
+    for (var i = 0; i < allSessions.length; i++) {
+      var provider = String(allSessions[i].provider || "").toLowerCase()
+      if (provider && result.indexOf(provider) < 0) result.push(provider)
+    }
+    return result
+  }
   readonly property var changeProjects: {
     var result = projects.filter(function(item) { return !!item.changes && projectMatches(item) })
     return result.sort(function(a, b) {
@@ -67,7 +75,11 @@ Item {
       return (String(row.text || "") + " " + String(row.project || "") + " " + String(row.provider || "")).toLowerCase().indexOf(query) >= 0
     })
     var limit = query || activityFilterActive ? 200 : 80
-    return chosen.slice(0, limit).sort(function(a, b) { return Number(settings.promptPinned(promptKey(b))) - Number(settings.promptPinned(promptKey(a))) || Number(b.ts || 0) - Number(a.ts || 0) })
+    // Sort BEFORE slicing. Slicing first dropped every pinned prompt older than
+    // the newest 80 rows — which defeats the only reason to pin one.
+    return chosen.slice().sort(function(a, b) {
+      return Number(settings.promptPinned(promptKey(b))) - Number(settings.promptPinned(promptKey(a))) || Number(b.ts || 0) - Number(a.ts || 0)
+    }).slice(0, limit)
   }
   readonly property int pad: Style.spacing.xl
   readonly property int gap: Style.spacing.lg
@@ -128,7 +140,10 @@ Item {
     return false
   }
   function usageWindowMs(label) { return /week|7-day/i.test(String(label || "")) ? 7 * 86400000 : /session|5-hour/i.test(String(label || "")) ? 5 * 3600000 : 0 }
+  // The collector ships forecast from ai-ops.limitForecast (tested). The local
+  // math stays only as a fallback for snapshots from an older collector.
   function usageProjection(limit) {
+    if (limit && limit.forecast !== undefined) return limit.forecast === null ? null : Number(limit.forecast)
     var duration = usageWindowMs(limit.label || limit.title), remaining = Date.parse(limit.resetsAt || "") - Date.now(), elapsed = duration - remaining
     if (!duration || !isFinite(remaining) || remaining < 0 || elapsed < duration * 0.03) return null
     return Math.max(0, Number(limit.percent || 0) * duration / elapsed)
@@ -140,6 +155,19 @@ Item {
   function activateKeyboardSession() {
     var session = sessions[keyboardSessionIndex]
     if (session && session.window && session.window.address) navigateTo(session.window.address)
+  }
+  // inspectedSession/selectedPrompt hold a copy of the delegate's modelData from
+  // click time. sessions is replaced on every 4s snapshot, so the drawer used to
+  // freeze — showing stale CPU/git and offering FOCUS on an exited window.
+  // Re-resolve against the current snapshot each tick and close it when the
+  // session is gone.
+  readonly property var liveInspectedSession: {
+    var pinnedSession = inspectedSession
+    if (!pinnedSession) return null
+    for (var i = 0; i < sessions.length; i++) {
+      if (sessions[i].pid === pinnedSession.pid && sessions[i].provider === pinnedSession.provider) return sessions[i]
+    }
+    return null
   }
   function toggleActivityCell(index) { activityCellFilter = activityCellFilter === index ? -1 : index }
   function toggleActivityProvider(provider) { activityProviderFilter = activityProviderFilter === provider ? "" : provider }
@@ -389,8 +417,12 @@ Item {
           title: "LIVE AI SESSIONS"
           hint: view.sessions.length + " running · left focus · right inspect" + (view.desk.error ? " · ⚠ " + view.desk.error : "")
           Flow {
+            id: sessionFlow
             width: parent.width
             spacing: Style.spacing.md
+            readonly property int targetColumns: 4
+            readonly property int minimumCardWidth: Math.round(210 * Style.fontScale)
+            readonly property int fittedCardWidth: Math.floor((width - spacing * (targetColumns - 1)) / targetColumns)
             Repeater {
               model: view.sessions
               delegate: Rectangle {
@@ -402,7 +434,9 @@ Item {
                 // Fall back to the title regex for snapshots from an older collector.
                 readonly property bool busy: modelData.busy === true || (modelData.busy !== false && modelData.window && /Processing|🧠|⚙|⏳|…/.test(String(modelData.window.title || "")))
                 property string previewSource: ""
-                width: Math.round(250 * Style.fontScale); height: scol.implicitHeight + Style.spacing.lg * 2
+                // Fill four columns when they remain readable; narrower layouts
+                // retain a minimum width and let Flow wrap naturally.
+                width: Math.max(sessionFlow.minimumCardWidth, sessionFlow.fittedCardWidth); height: scol.implicitHeight + Style.spacing.lg * 2
                 color: hover.containsMouse ? Util.alpha(tone, 0.16) : Util.alpha(tone, 0.08)
                 border.color: view.keyboardSessionIndex === index ? tone : Util.alpha(tone, hover.containsMouse ? 0.9 : 0.45); border.width: view.keyboardSessionIndex === index ? 2 : 1; radius: view.radius
                 Image { anchors.fill: parent; visible: hover.containsMouse && view.previewsEnabled && sc.previewSource !== ""; source: sc.previewSource; fillMode: Image.PreserveAspectCrop; opacity: 0.28 }
@@ -557,6 +591,29 @@ Item {
             ColumnLayout {
               width: parent.width
               spacing: Style.spacing.sm
+              Flow {
+                Layout.fillWidth: true
+                spacing: Style.spacing.xs
+                Tag {
+                  text: "ALERTS " + (view.settings.notificationsEnabled ? "ON" : "OFF")
+                  tone: view.settings.notificationsEnabled ? view.desk.green : view.textFaint
+                  MouseArea { anchors.fill: parent; enabled: view.interactive; cursorShape: Qt.PointingHandCursor; onClicked: view.settings.toggleNotificationsEnabled() }
+                }
+                Tag {
+                  text: "QUIET 22–08 " + (view.settings.quietHoursEnabled ? "ON" : "OFF")
+                  tone: view.settings.quietHoursEnabled ? view.desk.yellow : view.textFaint
+                  MouseArea { anchors.fill: parent; enabled: view.interactive; cursorShape: Qt.PointingHandCursor; onClicked: view.settings.toggleQuietHoursEnabled() }
+                }
+                Repeater {
+                  model: view.activeNotificationProviders
+                  delegate: Tag {
+                    required property string modelData
+                    text: view.desk.providerLabel(modelData) + " " + (view.settings.notificationProviderEnabled(modelData) ? "●" : "○")
+                    tone: view.settings.notificationProviderEnabled(modelData) ? view.desk.providerColor(modelData) : view.textFaint
+                    MouseArea { anchors.fill: parent; enabled: view.interactive; cursorShape: Qt.PointingHandCursor; onClicked: view.settings.toggleNotificationProvider(parent.modelData) }
+                  }
+                }
+              }
               Repeater {
                 model: view.visibleAttention.slice(0, 3)
                 delegate: Rectangle {
@@ -1089,6 +1146,7 @@ Item {
 
         // ---- local AI ----
         Card {
+          id: localAiCard
           Layout.row: view.settings.rightIndex("localAi")
           Layout.column: 0
           Layout.fillWidth: true
@@ -1097,6 +1155,78 @@ Item {
           draggable: true
           title: "LOCAL AI"
           readonly property var ol: (view.ai.providers || {}).ollama || ({})
+          readonly property var availableModels: ol && Array.isArray(ol.models) ? ol.models : []
+          readonly property var selectedModel: modelObject(view.settings.selectedOllamaModel)
+          property string pendingLargeModel: ""
+          property string loadNotice: ""
+
+          function modelName(item) { return String((item && typeof item === "object") ? (item.name || "") : (item || "")) }
+          function modelList() { return Array.isArray(availableModels) ? availableModels : [] }
+          function modelObject(name) {
+            var wanted = String(name || ""), models = modelList()
+            for (var i = 0; i < models.length; i++) {
+              var item = models[i], itemName = modelName(item)
+              if (itemName === wanted) return (item && typeof item === "object") ? item : ({ name: itemName, size: 0 })
+            }
+            if (models.length) {
+              var first = models[0]
+              return (first && typeof first === "object") ? first : ({ name: modelName(first), size: 0 })
+            }
+            return ({ name: "", size: 0 })
+          }
+          function modelIndex(name) {
+            var models = modelList()
+            for (var i = 0; i < models.length; i++) if (modelName(models[i]) === String(name || "")) return i
+            return -1
+          }
+          function ensureSelection() {
+            var models = modelList()
+            if (models.length && modelIndex(view.settings.selectedOllamaModel) < 0)
+              view.settings.setSelectedOllamaModel(modelName(models[0]))
+          }
+          function stepModel(delta) {
+            var models = modelList()
+            if (!models.length) return
+            var index = modelIndex(view.settings.selectedOllamaModel)
+            if (index < 0) index = 0
+            index = (index + Number(delta) + models.length) % models.length
+            view.settings.setSelectedOllamaModel(modelName(models[index]))
+            pendingLargeModel = ""
+            loadNotice = ""
+          }
+          function modelLoaded(name) {
+            var loaded = ol.loaded || []
+            for (var i = 0; i < loaded.length; i++) if (String(loaded[i].name || "") === String(name || "")) return true
+            return false
+          }
+          function needsConfirmation(model) {
+            var size = Number((model || {}).size || 0)
+            if (!size) return false
+            var gpu = view.machine.gpu || null
+            var gpuFree = gpu ? Math.max(0, Number(gpu.memTotal || 0) - Number(gpu.memUsed || 0)) : 0
+            var mem = view.machine.mem || {}, ramFree = Math.max(0, Number(mem.total || 0) - Number(mem.used || 0))
+            return size >= 8 * 1024 * 1024 * 1024 || (gpuFree > 0 && size > gpuFree) || (gpuFree === 0 && ramFree > 0 && size > ramFree * 0.65)
+          }
+          function requestLoad() {
+            var name = String(selectedModel.name || "")
+            if (!name || view.desk.ollamaBusy || modelLoaded(name)) return
+            if (needsConfirmation(selectedModel) && pendingLargeModel !== name) {
+              pendingLargeModel = name
+              loadNotice = "large model · press confirm to pin in memory"
+              return
+            }
+            pendingLargeModel = ""
+            loadNotice = ""
+            view.desk.controlOllama("load", name)
+          }
+          function requestUnload(name) {
+            if (view.desk.ollamaBusy) return
+            pendingLargeModel = ""
+            loadNotice = ""
+            view.desk.controlOllama("unload", name)
+          }
+          onOlChanged: ensureSelection()
+          Component.onCompleted: ensureSelection()
           hint: ol.up ? "ollama up · " + (ol.modelCount || 0) + " models" : "ollama down"
           ColumnLayout {
             width: parent.width
@@ -1104,14 +1234,44 @@ Item {
             Repeater {
               model: ((view.ai.providers || {}).ollama || {}).loaded || []
               delegate: RowLayout {
+                id: loadedModelRow
                 required property var modelData
                 Layout.fillWidth: true
                 Rectangle { width: 8; height: 8; radius: 4; color: view.desk.green }
                 PlainText { text: modelData.name; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; Layout.fillWidth: true; elide: Text.ElideRight }
                 PlainText { text: "vram " + view.desk.bytes(modelData.vram); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
+                Tag {
+                  text: view.desk.ollamaBusy && view.desk.ollamaModel === loadedModelRow.modelData.name ? "WORKING" : "UNLOAD"
+                  tone: view.desk.ollamaBusy ? view.textFaint : view.desk.red
+                  MouseArea { anchors.fill: parent; enabled: view.interactive && !view.desk.ollamaBusy; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: localAiCard.requestUnload(loadedModelRow.modelData.name) }
+                }
               }
             }
             PlainText { visible: !((((view.ai.providers || {}).ollama || {}).loaded || []).length); text: "no model loaded"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+            RowLayout {
+              visible: !!localAiCard.ol.up && (localAiCard.availableModels || []).length > 0
+              Layout.fillWidth: true
+              Tag { text: "‹"; tone: view.textDim; MouseArea { anchors.fill: parent; enabled: view.interactive && !view.desk.ollamaBusy && localAiCard.availableModels.length > 1; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: localAiCard.stepModel(-1) } }
+              ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 0
+                PlainText { Layout.fillWidth: true; text: localAiCard.selectedModel.name || "no installed model"; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; font.bold: true; elide: Text.ElideMiddle }
+                PlainText {
+                  Layout.fillWidth: true
+                  text: [localAiCard.selectedModel.parameterSize || "", localAiCard.selectedModel.quantization || "", localAiCard.selectedModel.size ? view.desk.bytes(localAiCard.selectedModel.size) : ""].filter(Boolean).join(" · ")
+                  color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight
+                }
+              }
+              Tag { text: "›"; tone: view.textDim; MouseArea { anchors.fill: parent; enabled: view.interactive && !view.desk.ollamaBusy && localAiCard.availableModels.length > 1; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: localAiCard.stepModel(1) } }
+              Tag {
+                text: localAiCard.modelLoaded(localAiCard.selectedModel.name) ? "LOADED" : localAiCard.pendingLargeModel === localAiCard.selectedModel.name ? "CONFIRM" : view.desk.ollamaBusy ? "WORKING" : "LOAD"
+                tone: localAiCard.modelLoaded(localAiCard.selectedModel.name) ? view.desk.green : localAiCard.pendingLargeModel === localAiCard.selectedModel.name ? view.desk.yellow : view.desk.cyan
+                MouseArea { anchors.fill: parent; enabled: view.interactive && !view.desk.ollamaBusy && !localAiCard.modelLoaded(localAiCard.selectedModel.name); cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: localAiCard.requestLoad() }
+              }
+            }
+            PlainText { Layout.fillWidth: true; visible: !!localAiCard.loadNotice; text: localAiCard.loadNotice; color: view.desk.yellow; font.family: view.mono; font.pixelSize: Style.font.caption; wrapMode: Text.Wrap }
+            PlainText { Layout.fillWidth: true; visible: !!view.desk.ollamaStatus; text: view.desk.ollamaStatus; color: view.desk.green; font.family: view.mono; font.pixelSize: Style.font.caption; wrapMode: Text.Wrap }
+            PlainText { Layout.fillWidth: true; visible: !!view.desk.ollamaError; text: view.desk.ollamaError; color: view.desk.red; font.family: view.mono; font.pixelSize: Style.font.caption; wrapMode: Text.Wrap }
             Meter {
               visible: !!view.machine.gpu
               Layout.fillWidth: true
@@ -1204,14 +1364,14 @@ Item {
     id: sessionInspector
     z: 100
     anchors.centerIn: parent
-    visible: !!view.inspectedSession && view.sectionEnabled("sessions")
+    visible: !!view.liveInspectedSession && view.sectionEnabled("sessions")
     width: Math.min(parent.width - view.gap * 4, Math.round(620 * Style.fontScale))
     implicitHeight: inspectorColumn.implicitHeight + view.pad * 2
     radius: view.radius
     color: Util.alpha(view.desk.themeBackground, 0.97)
-    border.color: Util.alpha(view.inspectedSession ? view.desk.providerColor(view.inspectedSession.provider) : view.desk.themeForeground, 0.8)
+    border.color: Util.alpha(view.liveInspectedSession ? view.desk.providerColor(view.liveInspectedSession.provider) : view.desk.themeForeground, 0.8)
     border.width: 1
-    readonly property var session: view.inspectedSession || ({})
+    readonly property var session: view.liveInspectedSession || ({})
     readonly property color tone: view.desk.providerColor(session.provider)
 
     MouseArea { anchors.fill: parent; acceptedButtons: Qt.AllButtons; onClicked: function(mouse) { mouse.accepted = true } }

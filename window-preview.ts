@@ -7,6 +7,7 @@ import {
   lstatSync,
   mkdtempSync,
   openSync,
+  readdirSync,
   rmSync,
   writeSync,
 } from "fs";
@@ -25,6 +26,36 @@ export interface PreviewTarget {
 export function validWindowAddress(value: unknown): string | null {
   const address = String(value || "").toLowerCase();
   return /^0x[0-9a-f]+$/.test(address) ? address : null;
+}
+
+export const PREVIEW_PREFIX = "infomarchy-preview-";
+export const PREVIEW_TTL_MS = 5 * 60 * 1000;
+
+export function expiredPreviewDirectories(names: string[], ages: Record<string, number>, ttlMs = PREVIEW_TTL_MS): string[] {
+  return names.filter(name => name.startsWith(PREVIEW_PREFIX) && Number(ages[name] ?? 0) > ttlMs);
+}
+
+// A successful capture keeps its directory so QML can load the PNG; nothing
+// used to delete it, so sustained hover leaked one directory every few seconds.
+// Sweep our own stale ones on each run instead of holding a daemon.
+export function reapPreviewDirectories(baseDirectory = tmpdir(), ttlMs = PREVIEW_TTL_MS, stamp = Date.now()): number {
+  let removed = 0;
+  let names: string[] = [];
+  try { names = readdirSync(baseDirectory); } catch { return 0; }
+  const uid = process.getuid?.();
+  for (const name of names) {
+    if (!name.startsWith(PREVIEW_PREFIX)) continue;
+    const path = join(baseDirectory, name);
+    try {
+      const stat = lstatSync(path);
+      if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
+      if (uid !== undefined && stat.uid !== uid) continue;
+      if (stamp - stat.mtimeMs <= ttlMs) continue;
+      rmSync(path, { recursive: true, force: true });
+      removed++;
+    } catch {}
+  }
+  return removed;
 }
 
 export function createPreviewTarget(baseDirectory = tmpdir()): PreviewTarget {
@@ -80,6 +111,7 @@ if (import.meta.main) {
   const client = clients.find((item: any) => String(item.address || "").toLowerCase() === address);
   const at = client?.at, size = client?.size;
   if (!Array.isArray(at) || !Array.isArray(size) || size[0] < 20 || size[1] < 20) process.exit(3);
+  reapPreviewDirectories();
   const target = createPreviewTarget();
   let keepTarget = false;
   try {
