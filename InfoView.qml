@@ -1373,6 +1373,10 @@ Item {
           readonly property var selectedModel: modelObject(view.settings.selectedOllamaModel)
           property string pendingLargeModel: ""
           property string loadNotice: ""
+          // One width for every action tag (LOAD / LOADED / CONFIRM / WORKING / UNLOAD)
+          // so the column lines up; arrows are a compact fixed pair beside it.
+          readonly property int actionWidth: Math.round(74 * Style.fontScale)
+          readonly property int arrowWidth: Math.round(22 * Style.fontScale)
 
           function modelName(item) { return String((item && typeof item === "object") ? (item.name || "") : (item || "")) }
           function modelList() { return Array.isArray(availableModels) ? availableModels : [] }
@@ -1455,10 +1459,12 @@ Item {
                 id: loadedModelRow
                 required property var modelData
                 Layout.fillWidth: true
+                spacing: Style.spacing.sm
                 Rectangle { width: 8; height: 8; radius: 4; color: view.desk.green }
                 PlainText { text: modelData.name; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; Layout.fillWidth: true; elide: Text.ElideRight }
                 PlainText { text: "vram " + view.desk.bytes(modelData.vram); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
                 Tag {
+                  Layout.preferredWidth: localAiCard.actionWidth
                   text: view.desk.ollamaBusy && view.desk.ollamaModel === loadedModelRow.modelData.name ? "WORKING" : "UNLOAD"
                   tone: view.desk.ollamaBusy ? view.textFaint : view.desk.red
                   MouseArea { anchors.fill: parent; enabled: view.interactive && !view.desk.ollamaBusy; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: localAiCard.requestUnload(loadedModelRow.modelData.name) }
@@ -1466,22 +1472,26 @@ Item {
               }
             }
             PlainText { visible: !((((view.ai.providers || {}).ollama || {}).loaded || []).length); text: "no model loaded"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+            // Same columns as a loaded row: indicator · name · meta · action. The
+            // selector arrows sit beside LOAD so every action shares one right edge.
             RowLayout {
               visible: !!localAiCard.ol.up && (localAiCard.availableModels || []).length > 0
               Layout.fillWidth: true
-              Tag { text: "‹"; tone: view.textDim; MouseArea { anchors.fill: parent; enabled: view.interactive && !view.desk.ollamaBusy && localAiCard.availableModels.length > 1; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: localAiCard.stepModel(-1) } }
-              ColumnLayout {
-                Layout.fillWidth: true
-                spacing: 0
-                PlainText { Layout.fillWidth: true; text: localAiCard.selectedModel.name || "no installed model"; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; font.bold: true; elide: Text.ElideMiddle }
-                PlainText {
-                  Layout.fillWidth: true
-                  text: [localAiCard.selectedModel.parameterSize || "", localAiCard.selectedModel.quantization || "", localAiCard.selectedModel.size ? view.desk.bytes(localAiCard.selectedModel.size) : ""].filter(Boolean).join(" · ")
-                  color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight
-                }
+              spacing: Style.spacing.sm
+              Rectangle { width: 8; height: 8; radius: 4; color: "transparent"; border.width: 1; border.color: view.textFaint }
+              PlainText { text: localAiCard.selectedModel.name || "no installed model"; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
+              PlainText {
+                text: [localAiCard.selectedModel.parameterSize || "", localAiCard.selectedModel.quantization || "", localAiCard.selectedModel.size ? view.desk.bytes(localAiCard.selectedModel.size) : ""].filter(Boolean).join(" · ")
+                color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight
+                Layout.maximumWidth: Math.round(150 * Style.fontScale)
               }
-              Tag { text: "›"; tone: view.textDim; MouseArea { anchors.fill: parent; enabled: view.interactive && !view.desk.ollamaBusy && localAiCard.availableModels.length > 1; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: localAiCard.stepModel(1) } }
+              RowLayout {
+                spacing: Style.spacing.xs
+                Tag { Layout.preferredWidth: localAiCard.arrowWidth; text: "‹"; tone: view.textDim; MouseArea { anchors.fill: parent; enabled: view.interactive && !view.desk.ollamaBusy && localAiCard.availableModels.length > 1; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: localAiCard.stepModel(-1) } }
+                Tag { Layout.preferredWidth: localAiCard.arrowWidth; text: "›"; tone: view.textDim; MouseArea { anchors.fill: parent; enabled: view.interactive && !view.desk.ollamaBusy && localAiCard.availableModels.length > 1; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: localAiCard.stepModel(1) } }
+              }
               Tag {
+                Layout.preferredWidth: localAiCard.actionWidth
                 text: localAiCard.modelLoaded(localAiCard.selectedModel.name) ? "LOADED" : localAiCard.pendingLargeModel === localAiCard.selectedModel.name ? "CONFIRM" : view.desk.ollamaBusy ? "WORKING" : "LOAD"
                 tone: localAiCard.modelLoaded(localAiCard.selectedModel.name) ? view.desk.green : localAiCard.pendingLargeModel === localAiCard.selectedModel.name ? view.desk.yellow : view.desk.cyan
                 MouseArea { anchors.fill: parent; enabled: view.interactive && !view.desk.ollamaBusy && !localAiCard.modelLoaded(localAiCard.selectedModel.name); cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: localAiCard.requestLoad() }
