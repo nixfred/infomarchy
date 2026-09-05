@@ -817,6 +817,28 @@ export function attachSessionTopics(sessions: any[], recentEntries: any[]): any[
   }
   return sessions;
 }
+// A "zombie" is a session nobody is looking at that has not done anything for
+// hours: no terminal a human could be sitting at (background, or no window and
+// nothing to attach to), not busy, and its newest prompt — or its launch, if
+// it never got one — older than STALE_AFTER_MS. Flagged, never auto-killed.
+export const STALE_AFTER_MS = 6 * 3600_000;
+export function sessionStaleness(session: any, stamp = now): { idleSince: number; idleMs: number; unattended: boolean; stale: boolean } {
+  const idleSince = Math.max(Number(session.topicAt || 0), Number(session.startedAt || 0)) || stamp;
+  const idleMs = Math.max(0, stamp - idleSince);
+  const hosts: any[] = Array.isArray(session.hosts) ? session.hosts : [];
+  const background = hosts.some(host => host && host.kind === "background");
+  const attachable = hosts.some(host => host && ((host.kind === "boomux" && host.shellId) || (host.kind === "background" && host.attachId)));
+  const unattended = background || (!session.window && !attachable);
+  return { idleSince, idleMs, unattended, stale: unattended && !session.busy && idleMs >= STALE_AFTER_MS };
+}
+export function attachStaleness(sessions: any[], stamp = now): any[] {
+  for (const session of sessions) {
+    const info = sessionStaleness(session, stamp);
+    session.idleSince = info.idleSince;
+    session.stale = info.stale;
+  }
+  return sessions;
+}
 
 // A generate call that times out must NOT be cached as if it had succeeded:
 // the local fallback would be pinned against this fingerprint forever and the
@@ -1071,9 +1093,10 @@ export function herdrWindowFor(host: SessionHost, clients: HerdrClient[]): any {
 // `claude agents --json` is Claude Code's own registry of every running
 // session on this machine: pid → session id, kind (interactive | background),
 // display name, live status. It replaces heuristics for Claude and makes a
-// background session reachable (`claude attach <id>`). Only asked when a
-// daemon is already running — the CLI would otherwise start a transient one.
-export type ClaudeAgent = { pid: number; sessionId: string; kind: string; name: string; status: string; state: string; cwd: string };
+// background session reachable (`claude attach <id>`). Measured 2026-09-05:
+// ~250 ms with or without a daemon, and it never starts one (the daemon runs
+// only while a background session is a client), so it is safe every tick.
+export type ClaudeAgent = { pid: number; sessionId: string; jobId: string; kind: string; name: string; status: string; state: string; cwd: string };
 export function parseClaudeAgents(text: string): Map<number, ClaudeAgent> {
   const result = new Map<number, ClaudeAgent>();
   const parsed = parseJsonBounded(String(text || ""), 5000, 8);
@@ -1085,6 +1108,9 @@ export function parseClaudeAgents(text: string): Map<number, ClaudeAgent> {
     result.set(pid, {
       pid,
       sessionId: cleanSessionId(item.sessionId ?? item.session_id ?? item.id),
+      // `claude attach|stop` take the SHORT job id ("2f866b35"), not the full
+      // session uuid — verified live: the uuid answers "No job matching".
+      jobId: cleanSessionId(item.id) || cleanSessionId(item.sessionId ?? item.session_id),
       kind: uiString(item.kind, 24).toLowerCase(),
       name: uiString(item.name, 80),
       status: uiString(item.status, 24).toLowerCase(),
@@ -1094,12 +1120,8 @@ export function parseClaudeAgents(text: string): Map<number, ClaudeAgent> {
   }
   return result;
 }
-function claudeDaemonPresent(): boolean {
-  for (const cmd of cmdByPid.values()) if (backgroundDaemonKind(cmd) || (/(^|\/)claude$/.test(cmd[0] || "") && cmd[1] === "daemon")) return true;
-  return false;
-}
 async function claudeAgents(): Promise<Map<number, ClaudeAgent>> {
-  if (!claudeDaemonPresent() || !Bun.which("claude")) return new Map();
+  if (!Bun.which("claude")) return new Map();
   return parseClaudeAgents(await run(["claude", "agents", "--json"], 2000));
 }
 // Boomux (best effort — documented behaviour, not observed live here): the
@@ -1260,8 +1282,8 @@ async function liveSessions(pids: number[]) {
       registryBlocked = registered.state === "blocked";
       if (registered.kind === "background") {
         const existing = hosts.find(host => host.kind === "background");
-        if (existing) { existing.label = "background · claude daemon"; existing.attachId = registered.sessionId; }
-        else hosts.push({ kind: "background", label: "background · claude daemon", attachId: registered.sessionId });
+        if (existing) { existing.label = "background · claude daemon"; existing.attachId = registered.jobId; }
+        else hosts.push({ kind: "background", label: "background · claude daemon", attachId: registered.jobId });
       }
     }
     const sample = processTreeSample(p.pid);
@@ -1275,6 +1297,7 @@ async function liveSessions(pids: number[]) {
       startedAt: p.start, uptimeSec: Math.max(0, (now - p.start) / 1000),
       session: sessionIds[0] || "", sessionIds,
       name: sessionName,
+      jobId: registered?.jobId || "",
       hosts,
       _registryBusy: registryBusy,
       _registryBlocked: registryBlocked,
@@ -1891,6 +1914,7 @@ async function runCollector() {
   for (const entry of recent) entry.activityCell = activityCellIndex(entry.ts, heatDays);
   inferSessionIdsFromRecent(sessions, recent);
   attachSessionTopics(sessions, recent);
+  attachStaleness(sessions);
   const topicSummaries = await refineSessionTopics(sessions, recent, ollama);
   const notificationState = deriveNotificationEvents(prev.sessionNotifications, sessions);
   const linkedRecent = linkRecentToLive(recent, sessions);

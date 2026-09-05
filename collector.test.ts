@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join, relative } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents, sessionStaleness, STALE_AFTER_MS } from "./collector.ts";
 
 const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
 const historyFixture = join(testRoot, "history");
@@ -796,8 +796,29 @@ describe("Claude's own session registry", () => {
     expect(map.size).toBe(3);
     expect(map.get(2149500)?.kind).toBe("background");
     expect(map.get(2149500)?.sessionId).toBe("2f866b35-c6d5-4204-a546-7d13608ae3ce");
+    expect(map.get(2149500)?.jobId).toBe("2f866b35");
+    expect(map.get(305287)?.jobId).toBe("0e60976f-fc28-4e82-819a-b61afe11b56d");
     expect(map.get(305287)?.status).toBe("busy");
     expect(map.get(7)?.sessionId).toBe("");
     expect(parseClaudeAgents("not json").size).toBe(0);
+  });
+});
+
+describe("zombie detection", () => {
+  const now = Date.UTC(2026, 8, 5, 12);
+  test("unattended + idle past the threshold is stale; attended or busy never is", () => {
+    const old = now - STALE_AFTER_MS - 60_000;
+    expect(sessionStaleness({ startedAt: old, topicAt: 0, hosts: [{ kind: "background", attachId: "2f866b35" }], window: null, busy: false }, now).stale).toBe(true);
+    expect(sessionStaleness({ startedAt: old, topicAt: 0, hosts: [], window: null, busy: false }, now).stale).toBe(true);
+    // Has a window a human can be sitting at → not a zombie however idle.
+    expect(sessionStaleness({ startedAt: old, topicAt: 0, hosts: [{ kind: "herdr" }], window: { address: "0x1" }, busy: false }, now).stale).toBe(false);
+    // Busy → not a zombie.
+    expect(sessionStaleness({ startedAt: old, topicAt: 0, hosts: [{ kind: "background", attachId: "x" }], window: null, busy: true }, now).stale).toBe(false);
+    // Recent prompt → not yet.
+    expect(sessionStaleness({ startedAt: old, topicAt: now - 3600_000, hosts: [{ kind: "background", attachId: "x" }], window: null, busy: false }, now).stale).toBe(false);
+  });
+  test("idleSince is the newest of launch and last prompt", () => {
+    expect(sessionStaleness({ startedAt: 1000, topicAt: 5000, hosts: [], window: null }, now).idleSince).toBe(5000);
+    expect(sessionStaleness({ startedAt: 7000, topicAt: 0, hosts: [], window: null }, now).idleSince).toBe(7000);
   });
 });

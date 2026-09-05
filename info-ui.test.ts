@@ -138,3 +138,15 @@ describe("background sessions are reachable", () => {
     expect(view).toContain('" · click attaches a terminal"');
   });
 });
+
+describe("zombie cleanup is explicit and two-click", () => {
+  test("cards flag STALE and the inspector offers STOP SESSION / END PROCESS with confirmation", () => {
+    const model = readFileSync(join(import.meta.dir, "InfoModel.qml"), "utf8");
+    const view = readFileSync(join(import.meta.dir, "InfoView.qml"), "utf8");
+    expect(view).toContain('text: "STALE · idle "');
+    expect(view).toContain('text: armed ? "CONFIRM STOP" : "STOP SESSION"');
+    expect(view).toContain('text: armed ? "CONFIRM END (SIGTERM)" : "END PROCESS"');
+    expect(model).toContain('["bun", root.stopPath, "claude-stop", String(item.jobId)]');
+    expect(model).toContain('["bun", root.stopPath, "term", String(Number(item.pid)), String(Math.round(Number(item.startedAt)))]');
+  });
+});

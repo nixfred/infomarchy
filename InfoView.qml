@@ -538,6 +538,8 @@ Item {
                         NumberAnimation { target: dot; property: "opacity"; from: 1; to: 0.2; duration: 700 }
                         NumberAnimation { target: dot; property: "opacity"; from: 0.2; to: 1; duration: 700 } } }
                     PlainText { text: view.desk.providerLabel(sc.modelData.provider); color: sc.tone; font.family: view.mono; font.bold: true; font.pixelSize: Style.font.body }
+                    // Unattended and idle for hours: probably a zombie. Right-click → inspector → STOP / END.
+                    Tag { visible: sc.modelData.stale === true; text: "STALE · idle " + view.desk.dur((Date.now() - Number(sc.modelData.idleSince || Date.now())) / 1000); tone: view.desk.yellow }
                     Item { Layout.fillWidth: true }
                     PlainText { text: view.desk.dur(sc.modelData.uptimeSec); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
                   }
@@ -1673,6 +1675,25 @@ Item {
           text: view.previewsEnabled ? "PREVIEWS ON" : "PREVIEWS OFF"
           tone: view.previewsEnabled ? view.desk.green : view.textFaint
           MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.previewsEnabled = !view.previewsEnabled }
+        }
+        // Cleanup, two clicks, only for sessions nobody is attached to.
+        Tag {
+          id: stopTag
+          property bool armed: false
+          visible: view.desk.canStopSession(sessionInspector.session)
+          text: armed ? "CONFIRM STOP" : "STOP SESSION"
+          tone: armed ? view.desk.red : view.desk.yellow
+          MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { if (stopTag.armed) { view.desk.stopSession(sessionInspector.session); view.inspectedSession = null } else stopTag.armed = true } }
+          Timer { interval: 4000; running: stopTag.armed; onTriggered: stopTag.armed = false }
+        }
+        Tag {
+          id: endTag
+          property bool armed: false
+          visible: !view.desk.canStopSession(sessionInspector.session) && sessionInspector.session.stale === true && view.desk.canEndProcess(sessionInspector.session)
+          text: armed ? "CONFIRM END (SIGTERM)" : "END PROCESS"
+          tone: armed ? view.desk.red : view.desk.yellow
+          MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { if (endTag.armed) { view.desk.endProcess(sessionInspector.session); view.inspectedSession = null } else endTag.armed = true } }
+          Timer { interval: 4000; running: endTag.armed; onTriggered: endTag.armed = false }
         }
         Item { Layout.fillWidth: true }
         PlainText { text: "right-click another card to inspect"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }

@@ -23,6 +23,7 @@ Item {
   property string ollamaControlPath: Qt.resolvedUrl("ollama-control.ts").toString().replace(/^file:\/\//, "")
   property string previewPath: Qt.resolvedUrl("window-preview.ts").toString().replace(/^file:\/\//, "")
   property string herdrFocusPath: Qt.resolvedUrl("herdr-focus.ts").toString().replace(/^file:\/\//, "")
+  property string stopPath: Qt.resolvedUrl("stop-session.ts").toString().replace(/^file:\/\//, "")
   property bool ollamaBusy: false
   property string ollamaStatus: ""
   property string ollamaError: ""
@@ -300,6 +301,30 @@ Item {
   // Focus the terminal window, then ask the multiplexer inside it to show the
   // agent's own pane. Herdr, tmux and (best effort) Boomux are handled; a host
   // we cannot address still gets the window focused.
+  // Explicit, two-click cleanup of a stale session. Graceful when Claude's
+  // daemon owns it (`claude stop`, conversation kept); otherwise SIGTERM the
+  // exact process the card described (pid + start time re-verified by the helper).
+  function canStopSession(session) {
+    var item = session || {}
+    return item.provider === "claude" && /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/.test(String(item.jobId || "")) &&
+      (item.hosts || []).some(function(h) { return h && h.kind === "background" })
+  }
+  function stopSession(session) {
+    var item = session || {}
+    if (!canStopSession(item)) return false
+    Quickshell.execDetached(["bun", root.stopPath, "claude-stop", String(item.jobId)])
+    return true
+  }
+  function canEndProcess(session) {
+    var item = session || {}
+    return Number.isInteger(Number(item.pid)) && Number(item.pid) > 1 && Number(item.startedAt) > 0
+  }
+  function endProcess(session) {
+    var item = session || {}
+    if (!canEndProcess(item)) return false
+    Quickshell.execDetached(["bun", root.stopPath, "term", String(Number(item.pid)), String(Math.round(Number(item.startedAt)))])
+    return true
+  }
   // A background (daemon-hosted) Claude session has no terminal at all; open
   // one attached to it. Returns false when there is nothing to attach to.
   function attachBackground(session) {
