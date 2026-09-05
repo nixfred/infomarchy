@@ -1379,7 +1379,9 @@ Item {
           // so the column lines up; arrows are a compact fixed pair beside it.
           readonly property int actionWidth: Math.round(74 * Style.fontScale)
           readonly property int arrowWidth: Math.round(22 * Style.fontScale)
-          readonly property int metaWidth: Math.round(118 * Style.fontScale)
+          // Meta text keeps its natural width up to this cap; the fixed arrow and
+          // action slots after it are what line the rows up.
+          readonly property int metaWidth: Math.round(170 * Style.fontScale)
 
           function modelName(item) { return String((item && typeof item === "object") ? (item.name || "") : (item || "")) }
           function modelList() { return Array.isArray(availableModels) ? availableModels : [] }
@@ -1465,7 +1467,7 @@ Item {
                 spacing: Style.spacing.sm
                 Rectangle { width: 8; height: 8; radius: 4; color: view.desk.green }
                 PlainText { text: modelData.name; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; Layout.fillWidth: true; elide: Text.ElideRight }
-                PlainText { text: "vram " + view.desk.bytes(modelData.vram); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; horizontalAlignment: Text.AlignRight; Layout.preferredWidth: localAiCard.metaWidth; elide: Text.ElideLeft }
+                PlainText { text: "vram " + view.desk.bytes(modelData.vram); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideLeft; Layout.maximumWidth: localAiCard.metaWidth }
                 // Reserve the selector's arrow slot so every action tag is one column.
                 Item { Layout.preferredWidth: localAiCard.arrowWidth * 2 + Style.spacing.xs; Layout.preferredHeight: 1 }
                 Tag {
@@ -1488,8 +1490,7 @@ Item {
               PlainText {
                 text: [localAiCard.selectedModel.parameterSize || "", localAiCard.selectedModel.quantization || "", localAiCard.selectedModel.size ? view.desk.bytes(localAiCard.selectedModel.size) : ""].filter(Boolean).join(" · ")
                 color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideLeft
-                horizontalAlignment: Text.AlignRight
-                Layout.preferredWidth: localAiCard.metaWidth
+                Layout.maximumWidth: localAiCard.metaWidth
               }
               RowLayout {
                 spacing: Style.spacing.xs
@@ -1560,17 +1561,24 @@ Item {
             Meter {
               Layout.fillWidth: true; Layout.preferredWidth: 1
               label: mc.net.wireless ? "WIFI " + (mc.net.ssid || "") : "NET " + (mc.net.dev || "—")
-              value: (mc.net.signal !== null && mc.net.signal !== undefined ? mc.net.signal + " dBm · " : "") + (mc.net.addr || "")
+              value: mc.net.signal !== null && mc.net.signal !== undefined ? mc.net.signal + " dBm" : (mc.net.dev ? "up" : "—")
               // -30 dBm great … -90 dBm dead
               fraction: mc.net.signal !== null && mc.net.signal !== undefined ? Math.max(0, Math.min(1, (Number(mc.net.signal) + 90) / 60)) : (mc.net.dev ? 1 : 0)
               tone: mc.net.signal !== null && mc.net.signal !== undefined && Number(mc.net.signal) < -75 ? view.desk.yellow : view.desk.green
             }
-            // Scalars on one line: WAN · throughput · ping · battery.
+            // Scalars on two footer lines: addresses, then rates · ping · battery.
             RowLayout {
               Layout.columnSpan: 2
               Layout.fillWidth: true
               spacing: Style.spacing.md
-              PlainText { text: "WAN " + (view.machine.externalIp || "—"); color: view.machine.externalIp ? view.desk.cyan : view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideMiddle; Layout.maximumWidth: Math.round(140 * Style.fontScale) }
+              PlainText { text: "WAN " + (view.machine.externalIp || "—"); color: view.machine.externalIp ? view.desk.cyan : view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideMiddle }
+              PlainText { visible: !!mc.net.addr; text: "LAN " + (mc.net.addr || ""); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideMiddle }
+              Item { Layout.fillWidth: true }
+            }
+            RowLayout {
+              Layout.columnSpan: 2
+              Layout.fillWidth: true
+              spacing: Style.spacing.md
               PlainText { text: "↓" + view.desk.rate(mc.net.rxRate) + " ↑" + view.desk.rate(mc.net.txRate); color: view.desk.green; font.family: view.mono; font.pixelSize: Style.font.caption; font.bold: true }
               PlainText { text: "⇄ " + (mc.ping.ok ? mc.ping.ms.toFixed(0) + " ms" : "timeout"); color: !mc.ping.ok ? view.desk.red : mc.ping.ms > 80 ? view.desk.yellow : view.desk.green; font.family: view.mono; font.pixelSize: Style.font.caption; font.bold: true }
               Item { Layout.fillWidth: true }
