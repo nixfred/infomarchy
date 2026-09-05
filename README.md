@@ -226,6 +226,7 @@ omarchy-shell infomarchy setDashboardVisible true                     # explicit
 omarchy-shell infomarchy toggleSection machine                        # remove/restore one dashboard card
 omarchy-shell infomarchy setSection recent true                       # explicit section visibility
 omarchy-shell infomarchy toggleNotifications                         # all Infomarchy alerts on/off
+omarchy-shell infomarchy geometry                                    # live layout widths as JSON (view, columns, LOCAL AI card/body/rows)
 omarchy-shell infomarchy toggleQuietHours                            # fixed quiet window, 22:00–08:00
 omarchy-shell infomarchy setDemo true                                 # sanitized screenshot data; transient
 omarchy-shell infomarchy setDemo false                                # return to live local data

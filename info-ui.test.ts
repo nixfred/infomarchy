@@ -160,3 +160,21 @@ describe("right column fits a 1080p desk", () => {
     expect(view).toContain("readonly property int metaWidth");
   });
 });
+
+describe("LOCAL AI rows stay inside the card body", () => {
+  const view = readFileSync(join(import.meta.dir, "InfoView.qml"), "utf8");
+  test("the provider chips are a Flow, so no rigid row can raise the column minimum above the body width", () => {
+    // Four rigid Tags in a RowLayout gave the column a 514 px minimum in a 512 px body: every
+    // row then laid out 2 px past the clip and lost its right border. A Flow has no minimum.
+    const start = view.indexOf("id: provRow");
+    const opener = view.lastIndexOf("{", start);
+    const type = view.slice(view.lastIndexOf("\n", opener) + 1, opener).trim();
+    expect(type).toBe("Flow");
+    expect(view.slice(start, view.indexOf("\n            }", start))).not.toContain("Item { Layout.fillWidth: true }");
+  });
+  test("the live geometry report is exposed over IPC for measuring, not guessing", () => {
+    expect(view).toContain("function geometryReport(): string");
+    const service = readFileSync(join(import.meta.dir, "Infomarchy.qml"), "utf8");
+    expect(service).toContain("function geometry(): string { return root.deskView ? root.deskView.geometryReport() : \"{}\" }");
+  });
+});

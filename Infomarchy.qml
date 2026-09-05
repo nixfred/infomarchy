@@ -27,6 +27,8 @@ Scope {
   // the overlay (a separate Scope with its own InfoModel) sees the same mode,
   // and the file is removed on every shell start.
   property bool demoMode: false
+  // The desk view on the primary screen, for the geometry IPC.
+  property var deskView: null
   readonly property string demoMarkerPath: (Quickshell.env("XDG_RUNTIME_DIR") || ("/run/user/" + Quickshell.env("UID"))) + "/infomarchy-demo"
   Process { id: demoMarkerWriter; property var pending: []; command: pending }
   function publishDemoMarker(on) {
@@ -146,6 +148,7 @@ Scope {
     function setDashboardVisible(v: string): void { dashboardSettings.setDashboardVisible(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
     function toggleDashboard(): void { dashboardSettings.toggleDashboardVisible() }
     function getDashboardVisible(): string { return dashboardSettings.dashboardVisible ? "true" : "false" }
+    function geometry(): string { return root.deskView ? root.deskView.geometryReport() : "{}" }
     function setSection(id: string, v: string): void { dashboardSettings.setSection(id, ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
     function toggleSection(id: string): void { dashboardSettings.toggleSection(id) }
     function setNotifications(v: string): void { dashboardSettings.setNotificationsEnabled(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
@@ -218,6 +221,7 @@ Scope {
         settings: dashboardSettings
         interactive: true
         keyboardAvailable: false
+        Component.onCompleted: if (!root.deskView) root.deskView = this
         visible: dashboardSettings.ready && dashboardSettings.dashboardVisible
       }
     }

@@ -10,6 +10,7 @@ All notable changes to Infomarchy. The format follows [Keep a Changelog](https:/
 - Sessions running under Claude Code's background daemon (`bg-pty-host`) are labelled **background · claude daemon** and dimmed instead of looking like a duplicate of the interactive session in the same repository.
 
 ### Fixed
+- **LOCAL AI pills lost their right border.** The provider-chips row was a `RowLayout` of rigid tags whose minimum (514 px) exceeded the card body (512 px); the column then laid every row out 2 px past the clip, cutting the right edge of LOAD/UNLOAD and the GPU bar. The chips are now a `Flow` (no minimum; wraps if labels grow). Found by measuring, not guessing: new `omarchy-shell infomarchy geometry` IPC reports the settled layout widths.
 - Attention rows and the inspector's FOCUS use the multiplexer-aware path.
 
 ## [0.4.1] — 2026-09-05

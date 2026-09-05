@@ -138,6 +138,22 @@ Item {
   readonly property int rightColumnWidth: Math.round(Math.max(300, Math.min(0.28 * width, 560)))
   readonly property int pad: Style.spacing.xl
   readonly property int gap: Style.spacing.lg
+  // Layout instrumentation — `omarchy-shell infomarchy geometry`. Widths the
+  // layout actually settled on; read these before touching any constant.
+  function geometryReport(): string {
+    return JSON.stringify({
+      view: width, gap: gap, pad: pad, fontScale: Style.fontScale,
+      rightColumnWidth: rightColumnWidth, rightColumn: rightColumn.width, rightColumnX: rightColumn.x,
+      leftColumn: leftColumn.width,
+      localAi: {
+        card: localAiCard.width, cardX: localAiCard.x, body: localAiCard.bodyWidth, column: localAiColumn.width,
+        selectorRow: selectorRow.width, selectorRowX: selectorRow.x, loadTagRight: loadTag.x + loadTag.width, loadTag: loadTag.width,
+        gpuMeter: gpuMeter.width, gpuMeterX: gpuMeter.x,
+        columnImplicit: localAiColumn.implicitWidth, provRow: provRow.width, provRowImplicit: provRow.implicitWidth,
+        selectorRowImplicit: selectorRow.implicitWidth
+      }
+    })
+  }
   readonly property int radius: Math.max(Style.cornerRadius, 0)
   readonly property color cardBg: Util.alpha(view.desk.themeBackground, 0.62)
   readonly property color cardBorder: Util.alpha(view.desk.themeForeground, 0.14)
@@ -260,6 +276,7 @@ Item {
     property bool glow: false
     property color glowTone: view.desk.yellow
     default property alias content: body.data
+    readonly property real bodyWidth: body.width
     color: view.cardBg
     border.color: view.cardBorder
     border.width: 1
@@ -476,6 +493,7 @@ Item {
 
       // LEFT COLUMN: sessions + heatmap + recent
       ColumnLayout {
+        id: leftColumn
         Layout.fillWidth: true
         Layout.fillHeight: true
         Layout.preferredWidth: 3
@@ -1173,6 +1191,7 @@ Item {
 
       // RIGHT COLUMN: usage + local AI + machine corner
       GridLayout {
+        id: rightColumn
         visible: view.sectionEnabled("usage") || view.sectionEnabled("localAi") || view.sectionEnabled("machine")
         Layout.fillHeight: true
         // A fixed column: content-driven widths let the column drift narrower
@@ -1458,6 +1477,7 @@ Item {
           Component.onCompleted: ensureSelection()
           hint: ol.up ? "ollama up · " + (ol.modelCount || 0) + " models" : "ollama down"
           ColumnLayout {
+            id: localAiColumn
             // Anchors, not a width binding: the rows must be handed exactly the
             // card's inner width so their fill items shrink instead of overflowing.
             anchors { left: parent.left; right: parent.right }
@@ -1486,6 +1506,7 @@ Item {
             // Same columns as a loaded row: indicator · name · meta · action. The
             // selector arrows sit beside LOAD so every action shares one right edge.
             RowLayout {
+              id: selectorRow
               visible: !!localAiCard.ol.up && (localAiCard.availableModels || []).length > 0
               Layout.fillWidth: true
               spacing: Style.spacing.sm
@@ -1503,6 +1524,7 @@ Item {
                 Tag { Layout.preferredWidth: localAiCard.arrowWidth; text: "›"; tone: view.textDim; MouseArea { anchors.fill: parent; enabled: view.interactive && !view.desk.ollamaBusy && localAiCard.availableModels.length > 1; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: localAiCard.stepModel(1) } }
               }
               Tag {
+                id: loadTag
                 Layout.preferredWidth: localAiCard.actionWidth
                 text: localAiCard.modelLoaded(localAiCard.selectedModel.name) ? "LOADED" : localAiCard.pendingLargeModel === localAiCard.selectedModel.name ? "CONFIRM" : view.desk.ollamaBusy ? "WORKING" : "LOAD"
                 tone: localAiCard.modelLoaded(localAiCard.selectedModel.name) ? view.desk.green : localAiCard.pendingLargeModel === localAiCard.selectedModel.name ? view.desk.yellow : view.desk.cyan
@@ -1513,6 +1535,7 @@ Item {
             PlainText { Layout.fillWidth: true; visible: !!view.desk.ollamaStatus; text: view.desk.ollamaStatus; color: view.desk.green; font.family: view.mono; font.pixelSize: Style.font.caption; wrapMode: Text.Wrap }
             PlainText { Layout.fillWidth: true; visible: !!view.desk.ollamaError; text: view.desk.ollamaError; color: view.desk.red; font.family: view.mono; font.pixelSize: Style.font.caption; wrapMode: Text.Wrap }
             Meter {
+              id: gpuMeter
               visible: !!view.machine.gpu
               Layout.fillWidth: true
               label: view.machine.gpu ? "GPU " + String(view.machine.gpu.name).replace(/NVIDIA |GeForce |Laptop GPU/g, "") : "GPU"
@@ -1520,15 +1543,19 @@ Item {
               fraction: view.machine.gpu ? view.machine.gpu.memUsed / Math.max(1, view.machine.gpu.memTotal) : 0
               tone: view.desk.green
             }
-            RowLayout {
+            // A Flow, never a RowLayout: four rigid chips in a RowLayout handed the
+            // whole column a 514 px minimum inside a 512 px body, so every row laid
+            // out 2 px past the clip and lost its right border (the "clipped LOAD").
+            // A Flow has no minimum width; if the labels ever grow it wraps instead.
+            Flow {
               id: provRow
               Layout.fillWidth: true
+              spacing: Style.spacing.sm
               readonly property var ps: view.ai.providers || ({})
               Tag { visible: !!(provRow.ps.claude && provRow.ps.claude.present); text: "claude " + (provRow.ps.claude ? provRow.ps.claude.prompts : 0) + "p"; tone: view.desk.providerColor("claude") }
               Tag { visible: !!(provRow.ps.codex && provRow.ps.codex.present); text: "codex " + (provRow.ps.codex ? provRow.ps.codex.threadCount : 0) + " threads"; tone: view.desk.providerColor("codex") }
               Tag { visible: !!(provRow.ps.grok && provRow.ps.grok.present); text: "grok " + (provRow.ps.grok ? provRow.ps.grok.sessions : 0) + " sess"; tone: view.desk.providerColor("grok") }
               Tag { visible: !!(provRow.ps.opencode && provRow.ps.opencode.present); text: "opencode " + (provRow.ps.opencode ? provRow.ps.opencode.sessions : 0) + " sess"; tone: view.desk.providerColor("opencode") }
-              Item { Layout.fillWidth: true }
             }
           }
         }
