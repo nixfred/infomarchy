@@ -116,3 +116,13 @@ describe("multiplexer-aware focus", () => {
     expect(view).toContain("view.desk.focusSession(sessionInspector.session)");
   });
 });
+
+describe("overlay shows the real desktop", () => {
+  test("SUPER+D paints the wallpaper, and SUPER+I applies inside the overlay", () => {
+    const overlay = readFileSync(join(import.meta.dir, "Overlay.qml"), "utf8");
+    expect(overlay).toContain("source: Util.fileUrl(root.background)");
+    expect(overlay).toContain("opacity: dashboardSettings.ready && dashboardSettings.dashboardVisible ? root.wallpaperOpacity : 1.0");
+    expect(overlay).toContain("visible: dashboardSettings.ready && dashboardSettings.dashboardVisible\n          onNavigated: root.close()");
+    expect(overlay).not.toContain("Util.alpha(infoModel.themeBackground, 0.88)");
+  });
+});

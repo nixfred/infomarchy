@@ -27,8 +27,21 @@ Scope {
     onFileChanged: reload()
   }
 
+  // SUPER+D means "show me the desktop": the real wallpaper, dimmed exactly as
+  // the background layer dims it, with the dashboard on top only when SUPER+I
+  // has it visible. The old 88% theme-colour scrim hid the wallpaper photo and
+  // ignored SUPER+I, so toggling the dashboard while the overlay was open
+  // changed the desk underneath without changing what was on screen.
+  property string background: ""
+  readonly property real wallpaperOpacity: 0.32
+  Process {
+    id: backgroundLink
+    command: ["readlink", "-f", Quickshell.env("HOME") + "/.local/state/omarchy/current/background"]
+    stdout: StdioCollector { onStreamFinished: root.background = String(text || "").trim() }
+  }
   function open(payload) {
     root.opened = true
+    backgroundLink.running = true
     demoMarker.reload()
     infoModel.refresh()
   }
@@ -60,7 +73,16 @@ Scope {
       Rectangle {
         id: keyCatcher
         anchors.fill: parent
-        color: Util.alpha(infoModel.themeBackground, 0.88)
+        color: infoModel.themeBackground
+        Image {
+          anchors.fill: parent
+          source: Util.fileUrl(root.background)
+          fillMode: Image.PreserveAspectCrop
+          asynchronous: true
+          cache: true
+          opacity: dashboardSettings.ready && dashboardSettings.dashboardVisible ? root.wallpaperOpacity : 1.0
+          Behavior on opacity { NumberAnimation { duration: 300 } }
+        }
         focus: root.opened
         Keys.onEscapePressed: root.close()
         Keys.onPressed: function(event) {
@@ -81,6 +103,8 @@ Scope {
           settings: dashboardSettings
           interactive: true
           topInset: Style.spacing.xl
+          // SUPER+I applies here too: hidden dashboard = plain wallpaper, same as the desk.
+          visible: dashboardSettings.ready && dashboardSettings.dashboardVisible
           onNavigated: root.close()
         }
       }

@@ -130,7 +130,7 @@ The three right-column cards—Usage, Local AI, and Machine—also have draggabl
 
 ### ⌨️ Two surfaces, one dashboard
 
-The wallpaper is interactive wherever no window covers it (double-click or right-click the empty desk opens Omarchy's wallpaper switcher, as stock does). Press **`SUPER + I`** to hide the wallpaper dashboard and see the clean desktop; press it again to restore the cards. When you're buried in terminals, **`SUPER + D`** summons the *same* dashboard as a fullscreen overlay on top of everything; `Esc` or a click on the backdrop dismisses it.
+The wallpaper is interactive wherever no window covers it (double-click or right-click the empty desk opens Omarchy's wallpaper switcher, as stock does). Press **`SUPER + I`** to hide the wallpaper dashboard and see the clean desktop; press it again to restore the cards. When you're buried in terminals, **`SUPER + D`** shows the desktop on top of everything — the wallpaper exactly as the desk paints it, with the dashboard when SUPER+I has it visible and the plain photo when it doesn't; `Esc` or a click on the backdrop dismisses it.
 
 The module strip doubles as a keyboard command strip in the overlay: **1–9** toggle modules, **J/K** (or arrows) select a live session, **Enter** focuses it, **A** clears activity filters, and **Esc** closes. The selected session gets a bright outline.
 
