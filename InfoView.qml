@@ -561,8 +561,7 @@ Item {
                   PlainText { Layout.fillWidth: true; visible: (sc.modelData.hosts || []).length > 0; text: "hosted in " + view.sessionHostLabel(sc.modelData) + (sc.modelData.window ? " · click jumps to the pane" : ((sc.modelData.hosts || []).some(function(h) { return h && h.kind === "background" && h.attachId }) ? " · click attaches a terminal" : " · no client window found")); color: sc.tone; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
                   PlainText { Layout.fillWidth: true; visible: !!sc.modelData.topic && !!(sc.modelData.window && sc.modelData.window.title); text: sc.modelData.window ? (sc.modelData.window.title || "") : ""; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
                   PlainText { Layout.fillWidth: true; visible: !!sc.modelData.git; text: sc.modelData.git ? ("git " + sc.modelData.git.branch + (sc.modelData.git.dirty ? " · " + sc.modelData.git.dirty + " changed" : " · clean") + (sc.modelData.git.ahead ? " · ↑" + sc.modelData.git.ahead : "") + (sc.modelData.git.behind ? " · ↓" + sc.modelData.git.behind : "") + (sc.modelData.git.conflicts ? " · " + sc.modelData.git.conflicts + " conflicts" : "")) : ""; color: sc.modelData.git && sc.modelData.git.conflicts ? view.desk.red : sc.modelData.git && sc.modelData.git.dirty ? view.desk.yellow : view.desk.green; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
-                  PlainText { Layout.fillWidth: true; text: "pid " + sc.modelData.pid + (sc.modelData.name ? "  ·  " + sc.modelData.name : "") + (sc.modelData.window ? "  ·  ws " + sc.modelData.window.workspace : "  ·  no window"); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
-                  PlainText { Layout.fillWidth: true; text: "cpu " + (sc.modelData.resources && sc.modelData.resources.cpuPct !== null ? sc.modelData.resources.cpuPct.toFixed(1) + "%" : "—") + " · ram " + view.desk.bytes((sc.modelData.resources || {}).rss) + " · " + ((sc.modelData.resources || {}).processes || 0) + " proc" + ((sc.modelData.resources || {}).gpuMemory ? " · gpu " + view.desk.bytes(sc.modelData.resources.gpuMemory) : ""); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+                  PlainText { Layout.fillWidth: true; text: "pid " + sc.modelData.pid + (sc.modelData.name ? " · " + sc.modelData.name : "") + (sc.modelData.window ? " · ws " + sc.modelData.window.workspace : " · no window") + " · cpu " + (sc.modelData.resources && sc.modelData.resources.cpuPct !== null ? sc.modelData.resources.cpuPct.toFixed(1) + "%" : "—") + " · ram " + view.desk.bytes((sc.modelData.resources || {}).rss) + " · " + ((sc.modelData.resources || {}).processes || 0) + " proc" + ((sc.modelData.resources || {}).gpuMemory ? " · gpu " + view.desk.bytes(sc.modelData.resources.gpuMemory) : ""); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
                 }
                 MouseArea {
                   id: hover; anchors.fill: parent; hoverEnabled: true; enabled: view.interactive
@@ -795,26 +794,19 @@ Item {
                   color: Util.alpha(tone, projectHover.hovered || view.projectFilter === key ? 0.15 : 0.06)
                   border.color: Util.alpha(tone, view.projectFilter === key ? 0.85 : 0.35)
                   border.width: view.projectFilter === key ? 2 : 1
-                  ColumnLayout {
+                  RowLayout {
                     id: projectColumn
                     anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: Style.spacing.sm }
-                    spacing: Style.spacing.xs
-                    RowLayout {
+                    spacing: Style.spacing.sm
+                    Tag { text: view.projectStatusLabel(projectRow.modelData); tone: projectRow.tone }
+                    PlainText { text: projectRow.modelData.project || projectRow.key; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; font.bold: true; elide: Text.ElideMiddle; Layout.maximumWidth: Math.round(120 * Style.fontScale) }
+                    PlainText {
                       Layout.fillWidth: true
-                      Tag { text: view.projectStatusLabel(projectRow.modelData); tone: projectRow.tone }
-                      PlainText { Layout.fillWidth: true; text: projectRow.modelData.project || projectRow.key; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; font.bold: true; elide: Text.ElideMiddle }
-                      PlainText { text: (projectRow.modelData.agents || []).length + " AI"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+                      text: (projectRow.git.branch || "no branch") + (projectRow.git.dirty ? " · " + projectRow.git.dirty + " changed" : " · clean") + (projectRow.git.ahead ? " · ↑" + projectRow.git.ahead : "") + (projectRow.git.behind ? " · ↓" + projectRow.git.behind : "") + (projectRow.git.conflicts ? " · " + projectRow.git.conflicts + " conflicts" : "") + " · " + view.ciLabel(projectRow.modelData)
+                      color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight
                     }
-                    RowLayout {
-                      Layout.fillWidth: true
-                      PlainText { text: view.ciLabel(projectRow.modelData); color: projectRow.tone; font.family: view.mono; font.pixelSize: Style.font.caption; font.bold: true }
-                      PlainText {
-                        Layout.fillWidth: true
-                        text: (projectRow.git.branch || "no branch") + (projectRow.git.dirty ? " · " + projectRow.git.dirty + " changed" : " · clean") + (projectRow.git.ahead ? " · ↑" + projectRow.git.ahead : "") + (projectRow.git.behind ? " · ↓" + projectRow.git.behind : "") + (projectRow.git.conflicts ? " · " + projectRow.git.conflicts + " conflicts" : "") + (projectRow.change.commitSubject ? " · " + projectRow.change.commitSubject : "")
-                        color: projectRow.tone; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight
-                      }
-                      Tag { visible: view.desk.canOpenProject(projectRow.modelData.cwd); text: "OPEN"; tone: view.desk.green; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.desk.openProject(projectRow.modelData.cwd) } }
-                    }
+                    PlainText { text: (projectRow.modelData.agents || []).length + " AI"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+                    Tag { visible: view.desk.canOpenProject(projectRow.modelData.cwd); text: "OPEN"; tone: view.desk.green; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.desk.openProject(projectRow.modelData.cwd) } }
                   }
                   HoverHandler { id: projectHover; enabled: view.interactive; cursorShape: Qt.PointingHandCursor }
                   TapHandler { enabled: view.interactive; onTapped: view.projectFilter = view.projectFilter === projectRow.key ? "" : projectRow.key }
@@ -841,7 +833,7 @@ Item {
             Canvas {
               id: heat
               width: parent.width
-              height: Math.round(7 * 16 * Style.fontScale)
+              height: Math.round(7 * 13 * Style.fontScale)
               property var cells: (view.ai.heatmap || {}).cells || []
               property real startTs: (view.ai.heatmap || {}).start || 0
               property var days: (view.ai.heatmap || {}).days || []
