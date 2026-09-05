@@ -133,6 +133,9 @@ Item {
       return Number(settings.promptPinned(promptKey(b))) - Number(settings.promptPinned(promptKey(a))) || Number(b.ts || 0) - Number(a.ts || 0)
     }).slice(0, limit)
   }
+  // Columns are fractions of the view, never constants: a fixed right column
+  // wider than the space left of the screen edge ran clean off the desk.
+  readonly property int rightColumnWidth: Math.round(Math.max(300, Math.min(0.28 * width, 560)))
   readonly property int pad: Style.spacing.xl
   readonly property int gap: Style.spacing.lg
   readonly property int radius: Math.max(Style.cornerRadius, 0)
@@ -476,6 +479,7 @@ Item {
         Layout.fillWidth: true
         Layout.fillHeight: true
         Layout.preferredWidth: 3
+        Layout.maximumWidth: view.width - view.rightColumnWidth - view.gap * 5
         spacing: view.gap
 
         // ---- live sessions ----
@@ -1173,9 +1177,9 @@ Item {
         Layout.fillHeight: true
         // A fixed column: content-driven widths let the column drift narrower
         // whenever card text became shrinkable, and rows then overran the border.
-        Layout.preferredWidth: Math.round(370 * Style.fontScale)
-        Layout.maximumWidth: Math.round(370 * Style.fontScale)
-        Layout.minimumWidth: Math.round(370 * Style.fontScale)
+        Layout.preferredWidth: view.rightColumnWidth
+        Layout.maximumWidth: view.rightColumnWidth
+        Layout.minimumWidth: view.rightColumnWidth
         columns: 1
         rowSpacing: view.gap
         columnSpacing: 0
