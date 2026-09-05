@@ -166,8 +166,12 @@ Item {
       }
       if (frame.type !== "end" || Number(frame.chars) !== outputBuffer.length) { fail("incomplete collector snapshot"); return }
       try {
-        root.snap = JSON.parse(outputBuffer)
+        // ready first: onSnapChanged consumers (notification dispatch) check
+        // it, and the first snapshot after a restart carried events that were
+        // dropped because ready flipped a line too late.
+        var parsed = JSON.parse(outputBuffer)
         root.ready = true
+        root.snap = parsed
         root.error = ""
         frameComplete = true
         outputBuffer = ""
@@ -237,6 +241,26 @@ Item {
       Quickshell.execDetached(["hyprctl", "dispatch", 'hl.dsp.focus({ window = "address:0x' + addr + '" })'])
     else
       Quickshell.execDetached(["hyprctl", "dispatch", "focuswindow", "address:0x" + addr])
+  }
+
+  // An agent inside tmux may live on a window/pane the client is not showing.
+  // After focusing the terminal, select that pane so the agent is on screen.
+  // Both values come from the collector and are validated here again.
+  function focusTmuxPane(server, paneId) {
+    var pane = String(paneId || ""), sock = String(server || "")
+    if (!/^%\d{1,9}$/.test(pane)) return false
+    if (sock && !/^\/[A-Za-z0-9_.\/-]{1,255}$/.test(sock)) return false
+    var command = sock ? ["tmux", "-S", sock, "switch-client", "-t", pane] : ["tmux", "switch-client", "-t", pane]
+    Quickshell.execDetached(command)
+    return true
+  }
+  function focusSession(session) {
+    var item = session || {}
+    if (!(item.window && item.window.address)) return false
+    focusWindow(item.window.address)
+    var tmux = (item.hosts || []).filter(function(host) { return host && host.kind === "tmux" && host.paneId })[0]
+    if (tmux && tmux.attached && !tmux.activePane) focusTmuxPane(tmux.server, tmux.paneId)
+    return true
   }
 
   function moveWindowToWorkspace(address, workspace) {

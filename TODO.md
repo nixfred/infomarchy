@@ -59,3 +59,6 @@ and screen placement are described in the work log/conversation.
 - [x] 22. Proactive alerts: persistently deduplicate attention, crash, review, and ended-session notifications with global, quiet-hours, and per-provider controls.
 
 - [ ] Settings ownership: wallpaper and overlay each hold an InfoSettings copy of dashboard.json and write the whole file; two near-simultaneous writes (a notification claim + a section toggle) can clobber one another. Centralize writes in the service or read-merge-write with a revision. (Second-reviewer finding, 2026-09-05.)
+- [ ] Stable keyed session model: the sessions Repeater is rebuilt on every snapshot (Qt clears delegates on model replacement), which restarts animations and drops per-card state; preview paths are cached at the view level as a stopgap. (Astra finding, 2026-09-05.)
+- [ ] Automatic topic refinement can race an explicit UNLOAD within the same tick and reload the model; refinement is loopback-only and capped at 6 requests, but a suppress-after-unload signal would close it fully. (Astra finding, 2026-09-05.)
+- [ ] Many live sessions on a small monitor can push lower cards off screen; panels are deliberately non-scrolling, so cap visible session cards and show "+N more". (Astra finding, 2026-09-05.)

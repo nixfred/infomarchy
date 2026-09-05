@@ -612,3 +612,36 @@ describe("prompt text never leaves the machine by default", () => {
     expect(safePrompt("rotate the api key in the secret manager")).toBe("rotate the api key in the secret manager");
   });
 });
+
+describe("third-pass findings (Astra, 2026-09-05)", () => {
+  test("a deeply nested value smuggled into a passthrough field cannot blank the desk", () => {
+    let pid: any = 1;
+    for (let i = 0; i < 22; i++) pid = { x: pid };
+    // Passes the input budget on its own, used to exceed depth once nested in the snapshot.
+    expect(() => frameSnapshot({ ai: { providers: { grok: { active: [{ pid, cwd: "/tmp" }] } } } })).not.toThrow();
+  });
+
+  test("explicitly labeled credentials are redacted whatever their length", () => {
+    expect(safePrompt("token: example_plain_secret_123")).toBe("token: [redacted]");
+    expect(safePrompt("password: hunter2")).toBe("password: [redacted]");
+    expect(safePrompt("the token bucket algorithm")).toBe("the token bucket algorithm");
+  });
+
+  test("only the executable identifies an agent unless it is an interpreter", () => {
+    expect(providerOf(["cat", "/tmp/claude"])).toBeNull();
+    expect(providerOf(["vim", "/home/x/notes/codex"])).toBeNull();
+    expect(providerOf(["/usr/bin/claude", "--resume", "x"])).toBe("claude");
+    expect(providerOf(["node", "/opt/claude.js"])).toBe("claude");
+    expect(providerOf(["bun", "run", "/x/codex"])).toBe("codex");
+  });
+
+  test("history inference never hands out an id another live agent owns", () => {
+    const sessions = [
+      { provider: "codex", cwd: "~/p", startedAt: 1000, sessionIds: ["aaaaaaaa-bbbb-cccc-dddd-000000000001"], session: "aaaaaaaa-bbbb-cccc-dddd-000000000001" },
+      { provider: "codex", cwd: "~/p", startedAt: 1000, sessionIds: [], session: "" },
+    ];
+    const recentRows = [{ provider: "codex", project: "~/p", session: "aaaaaaaa-bbbb-cccc-dddd-000000000001", ts: 2000, text: "x" }];
+    inferSessionIdsFromRecent(sessions, recentRows);
+    expect(sessions[1].sessionIds).toEqual([]);
+  });
+});

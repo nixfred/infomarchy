@@ -103,12 +103,18 @@ Item {
   function attentionKey(item) { return String(item.provider || "") + ":" + String(item.pid || "") + ":" + String(item.attention || "") + ":" + String(item.attentionReason || "") }
   function promptKey(item) { return String(item.provider || "") + ":" + String(item.session || "") + ":" + String(item.ts || "") }
   function projectKey(item) { return String(item.repoRoot || item.repo || item.cwd || item.project || "") }
-  function projectMatches(item) { return !projectFilter || projectKey(item) === projectFilter }
+  function projectMatches(item) {
+    if (!projectFilter) return true
+    var key = projectKey(item)
+    // History rows carry the agent's cwd, which may be a subdirectory of the
+    // repository the filter was set from.
+    return key === projectFilter || key.indexOf(projectFilter + "/") === 0
+  }
   function projectTone(item) {
-    return item.status === "blocked" ? view.desk.red : item.status === "running" ? view.desk.cyan : item.status === "behind" || item.status === "changed" ? view.desk.yellow : view.desk.green
+    return item.status === "blocked" ? view.desk.red : item.status === "running" ? view.desk.cyan : item.status === "behind" || item.status === "changed" ? view.desk.yellow : item.status === "unknown" ? view.textFaint : view.desk.green
   }
   function projectStatusLabel(item) {
-    return item.status === "blocked" ? "BLOCKED" : item.status === "running" ? "ACTIVE" : item.status === "behind" ? "BEHIND" : item.status === "changed" ? "CHANGED" : "HEALTHY"
+    return item.status === "blocked" ? "BLOCKED" : item.status === "running" ? "ACTIVE" : item.status === "behind" ? "BEHIND" : item.status === "changed" ? "CHANGED" : item.status === "unknown" ? "NO REPO" : "HEALTHY"
   }
   function ciLabel(item) {
     var ci = item.ci || {}, state = String(ci.state || "unavailable")
@@ -507,7 +513,7 @@ Item {
                   acceptedButtons: Qt.LeftButton | Qt.RightButton
                   onClicked: function(mouse) {
                     if (mouse.button === Qt.RightButton) view.inspectedSession = sc.modelData
-                    else if (sc.modelData.window) view.navigateTo(sc.modelData.window.address)
+                    else if (sc.modelData.window) { view.desk.focusSession(sc.modelData); view.navigated() }
                   }
                 }
               }
@@ -550,7 +556,15 @@ Item {
               width: parent.width
               spacing: Style.spacing.sm
               Repeater {
-                model: view.changeProjects.slice(0, 3)
+                model: {
+                  var shown = view.changeProjects.slice(0, 3)
+                  // Marking a row seen re-sorts it; keep the one being inspected on screen.
+                  if (view.expandedChangeKey && !shown.some(function(item) { return view.projectKey(item) === view.expandedChangeKey })) {
+                    var expanded = view.changeProjects.filter(function(item) { return view.projectKey(item) === view.expandedChangeKey })
+                    if (expanded.length) shown = shown.slice(0, 2).concat(expanded)
+                  }
+                  return shown
+                }
                 delegate: Rectangle {
                   id: changeRow
                   required property var modelData
@@ -1236,9 +1250,13 @@ Item {
             var size = Number((model || {}).size || 0)
             if (!size) return false
             var gpu = view.machine.gpu || null
-            var gpuFree = gpu ? Math.max(0, Number(gpu.memTotal || 0) - Number(gpu.memUsed || 0)) : 0
+            var gpuPresent = !!(gpu && Number(gpu.memTotal || 0) > 0)
+            var gpuFree = gpuPresent ? Math.max(0, Number(gpu.memTotal || 0) - Number(gpu.memUsed || 0)) : 0
             var mem = view.machine.mem || {}, ramFree = Math.max(0, Number(mem.total || 0) - Number(mem.used || 0))
-            return size >= 8 * 1024 * 1024 * 1024 || (gpuFree > 0 && size > gpuFree) || (gpuFree === 0 && ramFree > 0 && size > ramFree * 0.65)
+            // A full GPU is still a GPU: confirm when the model will not fit in what is free.
+            if (size >= 8 * 1024 * 1024 * 1024) return true
+            if (gpuPresent) return size > gpuFree
+            return ramFree > 0 && size > ramFree * 0.65
           }
           function requestLoad() {
             var name = String(selectedModel.name || "")
@@ -1475,7 +1493,7 @@ Item {
           visible: !!(sessionInspector.session.window && sessionInspector.session.window.address)
           text: "FOCUS WINDOW"
           tone: sessionInspector.tone
-          MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.navigateTo(sessionInspector.session.window.address) }
+          MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: { view.desk.focusSession(sessionInspector.session); view.navigated() } }
         }
         Tag {
           visible: view.desk.canOpenProject(sessionInspector.session.cwd)
@@ -1523,7 +1541,7 @@ Item {
       PlainText { Layout.fillWidth: true; text: promptDrawer.prompt.text || ""; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.body; wrapMode: Text.Wrap }
       RowLayout {
         spacing: Style.spacing.sm
-        Tag { text: "COPY PROMPT"; tone: view.desk.cyan; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.desk.copyText(promptDrawer.prompt.text) } }
+        Tag { text: "COPY EXCERPT"; tone: view.desk.cyan; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.desk.copyText(promptDrawer.prompt.text) } }
         Tag { text: view.settings.promptPinned(view.promptKey(promptDrawer.prompt)) ? "UNPIN" : "PIN"; tone: view.desk.yellow; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.settings.togglePromptPin(view.promptKey(promptDrawer.prompt)) } }
         Tag { visible: view.desk.canOpenProject(promptDrawer.prompt.project); text: "OPEN PROJECT"; tone: view.desk.green; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.desk.openProject(promptDrawer.prompt.project) } }
         Item { Layout.fillWidth: true }

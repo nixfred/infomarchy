@@ -44,6 +44,7 @@ const MAX_SNAPSHOT_BYTES = 960 * 1024;
 const OUTPUT_FRAME_CHARS = 12 * 1024;
 const currentAgentRaw: Record<string, number> = {};
 const currentCiByRepo: Record<string, any> = {};
+let currentOpencodeTotals: any = null;
 
 // ---------------------------------------------------------------- helpers
 export function readRegularFileLimited(p: string, maxBytes = MAX_FILE_BYTES, maxMs = 75): string | null {
@@ -268,9 +269,10 @@ function uiString(value: unknown, limit = 512): string {
   // Objects and arrays from external JSON are never text; "[object Object]"
   // on a card is a bug, and a shadowed toString used to throw here.
   if (value === null || value === undefined || typeof value === "object" || typeof value === "function") return "";
-  return String(value).slice(0, limit)
-    .replace(/[<>&]/g, character => character === "<" ? "‹" : character === ">" ? "›" : "＆")
-    .replace(/[\u0000-\u001f\u007f]/g, " ");
+  // Every Text in the dashboard is textFormat: PlainText, so markup needs no
+  // escaping — and escaping "&" turned ~/R&D into a directory that does not
+  // exist when the same string fed Open Project / Resume / the clipboard.
+  return String(value).slice(0, limit).replace(/[\u0000-\u001f\u007f]/g, " ");
 }
 // Arrays carry the recent-prompt rows (up to 1000 for heatmap drill-down);
 // a 256 cap here silently threw away 3/4 of them while recentTruncated still
@@ -468,8 +470,13 @@ const PROVIDERS: [string, RegExp][] = [
   ["copilot", /(^|\/)copilot$/],
   ["ollama", /(^|\/)ollama$/],
 ];
+const INTERPRETERS = /(^|\/)(node|nodejs|bun|deno|python[0-9.]*|uv|npx|bunx|sh|bash|zsh|fish|env)$/;
 export function providerOf(cmd: string[]): string | null {
-  for (const arg of cmd.slice(0, 3)) {
+  // Only argv[0] identifies a program. argv[1..2] count solely when argv[0]
+  // is an interpreter/launcher, otherwise `cat /tmp/claude` or
+  // `vim notes/codex` becomes a phantom agent with repo scans and alerts.
+  const candidates = INTERPRETERS.test(cmd[0] || "") ? cmd.slice(0, 3) : cmd.slice(0, 1);
+  for (const arg of candidates) {
     for (const [name, re] of PROVIDERS) if (re.test(arg)) {
       if (name === "ollama" && !(cmd[1] === "run" || cmd[1] === "runner")) return null; // only chats/runners, not the daemon
       // Codex app-server / mcp-server are long-lived daemons, not a desk session.
@@ -493,7 +500,10 @@ export function cmdIsTurnInhibitor(cmd: string[]): boolean {
   if (!/(^|\/)systemd-inhibit$/.test(bin)) return false;
   return cmd.some(a => /agent turn in progress/i.test(a));
 }
-function shortPath(p: string) { return p.startsWith(HOME) ? "~" + p.slice(HOME.length) : p; }
+function shortPath(p: string) {
+  // Exact HOME or HOME + "/" only: /home/pi2/x is not inside /home/pi.
+  return p === HOME ? "~" : p.startsWith(HOME + "/") ? "~" + p.slice(HOME.length) : p;
+}
 // Grok names session dirs after a percent-encoded cwd. A literal "%" in the
 // project path makes decodeURIComponent throw, which used to abort the whole
 // snapshot. Fall back to the raw directory name instead.
@@ -532,6 +542,10 @@ export type SessionHost = {
   window?: string;
   pane?: string;
   attached?: boolean;
+  // True when an attached client is currently showing this very pane; only
+  // then does the terminal's title describe this agent.
+  activePane?: boolean;
+  server?: string;
 };
 // Extract only documented multiplexer identity variables. Never serialize or
 // search the rest of /proc/<pid>/environ, which may contain credentials.
@@ -845,7 +859,9 @@ async function refineSessionTopics(sessions: any[], recentEntries: any[], ollama
         method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(TOPIC_TIMEOUT_MS),
         body: JSON.stringify({ model, prompt, stream: false, options: { temperature: 0.1, num_predict: 20 } }),
       });
-      generated = response.ok ? cleanGeneratedSummary((await response.json() as any).response) : "";
+      const text = response.ok ? await boundedStream(response.body, 64 * 1024) : null;
+      const payload = text === null ? null : parseJsonBounded(text, 256, 6);
+      generated = payload && typeof payload === "object" ? cleanGeneratedSummary(payload.response) : "";
     } catch {}
     if (generated) {
       session.topic = generated;
@@ -861,17 +877,22 @@ async function refineSessionTopics(sessions: any[], recentEntries: any[], ollama
 
 export function inferSessionIdsFromRecent(sessions: any[], recentEntries: any[]): void {
   const unresolvedByKey = new Map<string, any[]>();
+  const liveByKey = new Map<string, number>();
+  const owned = new Set<string>();
   for (const session of sessions) {
-    if ((session.sessionIds || []).length || !session.cwd || session.cwd === "/") continue;
     const key = `${session.provider}\0${session.cwd}`;
+    liveByKey.set(key, (liveByKey.get(key) || 0) + 1);
+    for (const id of session.sessionIds || []) { const clean = cleanSessionId(id); if (clean) owned.add(`${session.provider}\0${clean}`); }
+    if ((session.sessionIds || []).length || !session.cwd || session.cwd === "/") continue;
     const group = unresolvedByKey.get(key) || [];
     group.push(session);
     unresolvedByKey.set(key, group);
   }
   for (const [key, group] of unresolvedByKey) {
     // Two live agents in the same provider/project are indistinguishable from
-    // history alone. Refuse to guess; their prompt rows remain safely dim.
-    if (group.length !== 1) continue;
+    // history alone — including one that already resolved its own id, whose
+    // prompts would otherwise be handed to its neighbour. Refuse to guess.
+    if (group.length !== 1 || (liveByKey.get(key) || 0) !== 1) continue;
     const session = group[0];
     // recent is newest-first, so a plain find() returned the NEWEST prompt in
     // the project — which can belong to a later session that already exited.
@@ -880,6 +901,7 @@ export function inferSessionIdsFromRecent(sessions: any[], recentEntries: any[])
     let candidate: any = null;
     for (const entry of recentEntries) {
       if (`${entry.provider}\0${entry.project}` !== key || !cleanSessionId(entry.session)) continue;
+      if (owned.has(`${entry.provider}\0${cleanSessionId(entry.session)}`)) continue;
       const ts = Number(entry.ts || 0);
       if (ts < startedAt - 5000 || ts > startedAt + 30 * 60_000) continue;
       if (!candidate || ts < Number(candidate.ts || 0)) candidate = entry;
@@ -923,13 +945,16 @@ async function repoState(cwd: string) {
   if (!cwd) return { root: "", state: null, changes: null, ci: null };
   const [root, status, diff, commitLine, ci] = await Promise.all([
     run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], 700),
-    run(["git", "-C", cwd, "status", "--porcelain=v2", "--branch"], 900),
+    run(["git", "-C", cwd, "-c", "core.quotePath=off", "status", "--porcelain=v2", "--branch"], 900),
     run(["git", "-C", cwd, "diff", "--numstat", "HEAD", "--"], 900),
     run(["git", "-C", cwd, "log", "-1", "--format=%H%x09%h%x09%ct%x09%s"], 700),
     githubCiState(cwd),
   ]);
   const state = parseGitStatus(status), stats = parseDiffNumstat(diff), commit = parseCommitSummary(commitLine);
-  const fingerprint = String(Bun.hash(JSON.stringify([commit?.hash || "", status, diff])));
+  // Status and numstat cannot tell one edit from another edit of the same
+  // size; fold in the mtimes of the reported paths so "seen" tracks content.
+  const stamps = (state?.files || []).slice(0, 12).map(file => { try { return lstatSync(join(root.trim() || cwd, file)).mtimeMs; } catch { return 0; } });
+  const fingerprint = String(Bun.hash(JSON.stringify([commit?.hash || "", status, diff, stamps])));
   return {
     root: root.trim(), state,
     changes: state || commit ? {
@@ -1055,6 +1080,8 @@ async function liveSessions(pids: number[]) {
       const host = hosts.find(item => item.kind === "tmux")!;
       host.session = pane.session; host.window = pane.window; host.pane = pane.pane; host.paneId = pane.paneId;
       host.attached = !!attachedWindow;
+      host.activePane = tmux.windows.has(pane.server + "\0pane\0" + pane.paneId);
+      host.server = pane.server;
       host.label = "tmux " + pane.session + ":" + pane.window + "." + pane.pane;
       if (!w && attachedWindow) w = attachedWindow;
     }
@@ -1091,6 +1118,10 @@ async function liveSessions(pids: number[]) {
     }
   }
   for (const s of sessions) {
+    // A tmux window title describes the pane the client is showing. For a
+    // pane that is not on screen, the title is somebody else's.
+    const tmuxHostOf = (s.hosts || []).find((host: any) => host.kind === "tmux");
+    if (tmuxHostOf && tmuxHostOf.attached && !tmuxHostOf.activePane && s.window) s.window = { ...s.window, title: "" };
     const titleBusy = !!(s.window && titleLooksBusy(s.window.title));
     // Grok's terminal title sticks on 🧠 after the turn. Trust the inhibitor.
     s.busy = s.provider === "grok" ? turnBusy.has(s.pid) : (titleBusy || turnBusy.has(s.pid));
@@ -1146,7 +1177,9 @@ export function safePrompt(value: unknown): string {
     // Credential CLI flags, with either a separate value or --flag=value.
     .replace(/(--(?:api[-_]?key|access[-_]?token|auth[-_]?token|token|password|passwd|secret))\b(\s+|=)(?:"[^"]*"|'[^']*'|[^\s"']+)/gi, "$1$2[redacted]")
     // Credentials pasted as explicit assignments or natural-language "token/key: value" pairs.
-    .replace(/\b(api[_ -]?key|access[_ -]?token|auth[_ -]?token|password|passwd|secret)\b(\s*(?:is|=|:)\s*)(?:"[^"]{8,}"|'[^']{8,}'|[^\s"']{8,})/gi, "$1$2[redacted]")
+    // An explicitly labeled credential is redacted whatever its length —
+    // "password: hunter2" is still a password.
+    .replace(/\b(api[_ -]?key|access[_ -]?token|auth[_ -]?token|token|password|passwd|secret)\b(\s*(?:is|=|:)\s*)(?:"[^"]+"|'[^']+'|[^\s"']+)/gi, "$1$2[redacted]")
     .slice(0, 140);
 }
 function heatmapInit() {
@@ -1249,7 +1282,11 @@ function codexHistory() {
   }
   const threads: any[] = [];
   for (const l of (read(join(base, "session_index.jsonl")) || "").split("\n").filter(Boolean)) {
-    try { const e = parseJsonBounded(l, 2048, 12); if (e) threads.push({ id: e.id, name: e.thread_name, updatedAt: Date.parse(e.updated_at) }); } catch {}
+    try {
+      const e = parseJsonBounded(l, 2048, 12);
+      const updatedAt = e ? Date.parse(uiString(e.updated_at, 64)) : NaN;
+      if (e && Number.isFinite(updatedAt)) threads.push({ id: cleanSessionId(e.id), name: uiString(e.thread_name, 120), updatedAt });
+    } catch {}
   }
   threads.sort((a, b) => b.updatedAt - a.updatedAt);
   return { present: true, prompts, threads: threads.slice(0, 8), threadCount: threads.length };
@@ -1278,18 +1315,38 @@ function grokHistory() {
   }
   const activeSessions = active.filter((a: any) => a && typeof a === "object")
     .slice(0, MAX_COLLECTION_ITEMS)
-    .map((a: any) => ({ pid: a.pid, cwd: shortPath(String(a.cwd || "")), openedAt: Date.parse(String(a.opened_at || "")) }));
+    .map((a: any) => ({
+      pid: Number.isInteger(a.pid) && a.pid > 0 ? a.pid : null,
+      cwd: shortPath(uiString(a.cwd, 512)),
+      openedAt: (() => { const t = Date.parse(uiString(a.opened_at, 64)); return Number.isFinite(t) ? t : null; })(),
+    }))
+    .filter((a: any) => a.pid !== null);
   return { present: true, sessions: sessionIds.size, active: activeSessions };
 }
 function opencodeHistory() {
   const dataRoot = process.env.XDG_DATA_HOME || join(HOME, ".local/share");
   const path = join(dataRoot, "opencode/opencode.db");
   // Every other history reader opens with O_NOFOLLOW; a symlinked database
-  // would let any SQLite file masquerade as prompt history.
-  try { if (lstatSync(path).isSymbolicLink()) return { present: false }; } catch { return { present: false }; }
+  // would let any SQLite file masquerade as prompt history, and a FIFO would
+  // block the native open.
+  let identity = "";
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isFile()) return { present: false };
+    identity = `${stat.size}:${Math.round(stat.mtimeMs)}`;
+  } catch { return { present: false }; }
   let db: Database | null = null;
   try {
     db = new Database(path, { readonly: true });
+    // Heatmap/counts need every prompt of the week but only its timestamp;
+    // the detailed (text) query below is capped and feeds the Recent list.
+    for (const row of db.query(`
+      SELECT time_created AS ts FROM message
+       WHERE time_created >= ? AND json_valid(data) AND json_extract(data, '$.role') = 'user'
+    `).all(start7) as any[]) {
+      const ts = Number(row.ts || 0);
+      if (ts) { bump(ts, "opencode"); cnt("opencode", ts); }
+    }
     // Only the last seven days are ever displayed, and never more than 1000
     // rows; scanning and JSON-decoding the whole table every tick did not
     // scale. json_valid() keeps one corrupt row from zeroing the provider.
@@ -1305,10 +1362,13 @@ function opencodeHistory() {
        ORDER BY m.time_created DESC, m.id DESC
        LIMIT 2000
     `).all(start7) as any[];
-    const totals = db.query(`
+    // Lifetime totals walk the whole table; recompute only when the file changed.
+    const cachedTotals = prev.opencodeTotals && prev.opencodeTotals.identity === identity ? prev.opencodeTotals : null;
+    const totals = cachedTotals || { identity, ...(db.query(`
       SELECT COUNT(*) AS prompts, COUNT(DISTINCT session_id) AS sessions
         FROM message WHERE json_valid(data) AND json_extract(data, '$.role') = 'user'
-    `).get() as any;
+    `).get() as any) };
+    currentOpencodeTotals = { identity, prompts: Number(totals.prompts) || 0, sessions: Number(totals.sessions) || 0 };
     const sessions = new Set<string>();
     let prompts = 0;
     for (const row of rows) {
@@ -1317,10 +1377,9 @@ function opencodeHistory() {
       prompts++;
       const session = cleanSessionId(row.session);
       if (session) sessions.add(session);
-      bump(ts, "opencode"); cnt("opencode", ts);
       if (plausibleTimestamp(ts)) recent.push({ provider: "opencode", ts, project: shortPath(String(row.project || "")), text: safePrompt(row.text), session });
     }
-    return { present: true, prompts: Math.max(prompts, Number(totals?.prompts) || 0), sessions: Math.max(sessions.size, Number(totals?.sessions) || 0) };
+    return { present: true, prompts: Math.max(prompts, currentOpencodeTotals.prompts), sessions: Math.max(sessions.size, currentOpencodeTotals.sessions) };
   } catch (error) {
     return { present: true, prompts: 0, sessions: 0, error: String(error) };
   } finally {
@@ -1407,8 +1466,13 @@ function agentsUsage() {
 
 // ---------------------------------------------------------------- main
 export function frameSnapshot(value: unknown): string {
-  if (!structureWithinBudget(value, MAX_JSON_NODES, MAX_JSON_DEPTH)) throw new Error("snapshot structure exceeded budget");
-  const payload = JSON.stringify(sanitizeForUi(value));
+  // sanitizeForUi caps depth at 12 and every collection, so an input that
+  // passed its own bounds but sits deeper inside the snapshot (a 22-level
+  // object smuggled in as a pid) can no longer trip the budget check into
+  // replacing the whole desk with an error frame.
+  const sanitized = sanitizeForUi(value);
+  if (!structureWithinBudget(sanitized, MAX_JSON_NODES, MAX_JSON_DEPTH)) throw new Error("snapshot structure exceeded budget");
+  const payload = JSON.stringify(sanitized);
   if (Buffer.byteLength(payload, "utf8") > MAX_SNAPSHOT_BYTES) throw new Error("snapshot exceeded byte budget");
   const lines: string[] = [];
   for (let offset = 0; offset < payload.length; offset += OUTPUT_FRAME_CHARS) {
@@ -1572,6 +1636,7 @@ async function runCollector() {
       externalIp: externalIpS,
       topicSummaries,
       ciByRepo: currentCiByRepo,
+      opencodeTotals: currentOpencodeTotals,
       sessionNotifications: notificationState.tracked,
     }));
   } catch {}

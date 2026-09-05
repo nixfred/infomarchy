@@ -109,3 +109,12 @@ describe("usage forecast", () => {
     expect(limitForecast({ label: "SESSION", percent: 0.1, resetsAt: new Date(stamp + 4.99 * 3600000).toISOString() }, stamp)).toBeNull();
   });
 });
+
+describe("project health honesty", () => {
+  test("missing git state is unknown, not healthy", () => {
+    const [project] = projectHealth([{ provider: "claude", pid: 1, cwd: "~/x", repoRoot: "", git: null, ci: null, project: "x" }]);
+    expect(project.status).toBe("unknown");
+    const [clean] = projectHealth([{ provider: "claude", pid: 1, cwd: "~/y", repoRoot: "~/y", git: { dirty: 0, behind: 0, conflicts: 0 }, ci: null, project: "y" }]);
+    expect(clean.status).toBe("healthy");
+  });
+});

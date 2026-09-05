@@ -120,10 +120,13 @@ export function projectHealth(sessions: any[]): any[] {
   return [...groups.entries()].map(([key, group]) => {
     const first = group[0] || {}, git = first.git || null, ci = first.ci || null;
     const ciState = String(ci?.state || "").toLowerCase();
-    const status = (git?.conflicts || /failure|failed|cancelled|timed_out|action_required/.test(ciState)) ? "blocked" :
+    // No git state (not a repository, git missing, timed out, or beyond the
+    // per-tick cap) is UNKNOWN, never "healthy · clean".
+    const status = !git ? "unknown" :
+      (git.conflicts || /failure|failed|cancelled|timed_out|action_required/.test(ciState)) ? "blocked" :
       /queued|in_progress|pending|requested|waiting/.test(ciState) ? "running" :
-      Number(git?.behind || 0) > 0 ? "behind" :
-      Number(git?.dirty || 0) > 0 ? "changed" : "healthy";
+      Number(git.behind || 0) > 0 ? "behind" :
+      Number(git.dirty || 0) > 0 ? "changed" : "healthy";
     return {
       key,
       project: first.project || key.split("/").pop() || key,
@@ -141,7 +144,7 @@ export function projectHealth(sessions: any[]): any[] {
       })),
     };
   }).sort((a, b) => {
-    const rank: Record<string, number> = { blocked: 0, running: 1, behind: 2, changed: 3, healthy: 4 };
+    const rank: Record<string, number> = { blocked: 0, running: 1, behind: 2, changed: 3, healthy: 4, unknown: 5 };
     return (rank[a.status] ?? 9) - (rank[b.status] ?? 9) || a.project.localeCompare(b.project);
   });
 }

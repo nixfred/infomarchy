@@ -60,9 +60,12 @@ Scope {
     var stamp = Number((infoModel.snap || {}).ts || Date.now())
     for (var i = 0; i < events.length; i++) {
       var event = events[i] || {}, key = String(event.key || "")
-      if (!dashboardSettings.claimNotificationEvent(key, stamp)) continue
+      // Decide eligibility BEFORE claiming the key: a signal that arrives
+      // during quiet hours or while its provider is muted used to be marked
+      // delivered and never shown once alerts were allowed again.
       if (event.attentionKey && !dashboardSettings.attentionVisible(String(event.attentionKey), stamp)) continue
       if (!dashboardSettings.notificationsAllowed(String(event.provider || ""), stamp)) continue
+      if (!dashboardSettings.claimNotificationEvent(key, stamp)) continue
       var title = infoModel.plainText(event.title || "Infomarchy", 100)
       var body = infoModel.plainText(event.body || "AI session changed", 240)
       var urgency = event.urgency === "normal" ? "normal" : "low"
@@ -76,6 +79,7 @@ Scope {
   Connections {
     target: infoModel
     function onSnapChanged() { root.dispatchNotifications() }
+    function onReadyChanged() { if (infoModel.ready) root.dispatchNotifications() }
   }
   Connections {
     target: dashboardSettings
