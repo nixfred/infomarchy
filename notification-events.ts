@@ -18,6 +18,9 @@ export type TrackedSession = {
   attention: string;
   attentionReason: string;
   misses: number;
+  // Increments each time attention goes from clear to set, so the same
+  // request made twice hours apart notifies twice instead of once.
+  episode: number;
 };
 
 function clean(value: unknown, limit = 120): string {
@@ -43,6 +46,7 @@ function tracked(session: any): TrackedSession {
     attention: clean(session?.attention, 24).toLowerCase(),
     attentionReason: clean(session?.attentionReason, 160),
     misses: 0,
+    episode: 0,
   };
 }
 
@@ -56,7 +60,7 @@ function attentionEvent(session: TrackedSession): NotificationEvent | null {
   const reason = session.attentionReason || "session needs attention";
   const attentionKey = `${session.provider}:${session.pid}:${session.attention}:${reason}`;
   return {
-    key: `attention:${session.id}:${session.attention}:${reason}`,
+    key: `attention:${session.id}:${session.attention}:${reason}:${session.episode}`,
     provider: session.provider,
     title,
     body: `${session.project} · ${reason}`,
@@ -69,9 +73,14 @@ export function deriveNotificationEvents(previous: unknown, currentSessions: any
   const prior = Array.isArray(previous) ? previous.slice(0, 256).filter(item => item && typeof item === "object") as TrackedSession[] : [];
   const current = (Array.isArray(currentSessions) ? currentSessions : []).slice(0, 256).map(tracked);
   const currentIds = new Set(current.map(item => item.id));
+  const priorById = new Map(prior.map(item => [String(item.id || ""), item]));
   const events: NotificationEvent[] = [];
 
   for (const session of current) {
+    const before = priorById.get(session.id);
+    const previousEpisode = Math.max(0, Number(before?.episode) || 0);
+    const previousAttention = clean(before?.attention, 24);
+    session.episode = session.attention && !previousAttention ? previousEpisode + 1 : previousEpisode;
     const event = attentionEvent(session);
     if (event) events.push(event);
   }

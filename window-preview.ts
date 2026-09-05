@@ -31,8 +31,16 @@ export function validWindowAddress(value: unknown): string | null {
 export const PREVIEW_PREFIX = "infomarchy-preview-";
 export const PREVIEW_TTL_MS = 5 * 60 * 1000;
 
+// Only names mkdtemp could have produced: prefix + exactly six [A-Za-z0-9].
+// A prefix-only check would have recursively deleted any same-prefix
+// directory the user happened to own.
+export const PREVIEW_DIR_NAME = /^infomarchy-preview-[A-Za-z0-9]{6}$/;
 export function expiredPreviewDirectories(names: string[], ages: Record<string, number>, ttlMs = PREVIEW_TTL_MS): string[] {
-  return names.filter(name => name.startsWith(PREVIEW_PREFIX) && Number(ages[name] ?? 0) > ttlMs);
+  return names.filter(name => PREVIEW_DIR_NAME.test(name) && Number(ages[name] ?? 0) > ttlMs);
+}
+// A directory is ours only if it holds nothing but the preview file we write.
+export function looksLikeOurPreviewDirectory(entries: string[]): boolean {
+  return entries.length <= 1 && entries.every(entry => entry === "preview.png");
 }
 
 // A successful capture keeps its directory so QML can load the PNG; nothing
@@ -44,13 +52,14 @@ export function reapPreviewDirectories(baseDirectory = tmpdir(), ttlMs = PREVIEW
   try { names = readdirSync(baseDirectory); } catch { return 0; }
   const uid = process.getuid?.();
   for (const name of names) {
-    if (!name.startsWith(PREVIEW_PREFIX)) continue;
+    if (!PREVIEW_DIR_NAME.test(name)) continue;
     const path = join(baseDirectory, name);
     try {
       const stat = lstatSync(path);
       if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
       if (uid !== undefined && stat.uid !== uid) continue;
       if (stamp - stat.mtimeMs <= ttlMs) continue;
+      if (!looksLikeOurPreviewDirectory(readdirSync(path))) continue;
       rmSync(path, { recursive: true, force: true });
       removed++;
     } catch {}
@@ -79,6 +88,16 @@ export function createPreviewTarget(baseDirectory = tmpdir()): PreviewTarget {
   }
 }
 
+const STAGE_TIMEOUT_MS = 4000;
+// A hung hyprctl/grim/magick used to leave the QML preview Process running
+// forever. Every stage gets a deadline; on expiry the child is killed and the
+// helper exits non-zero.
+async function withDeadline<T>(promise: Promise<T>, proc: { kill: (signal?: any) => void }, ms = STAGE_TIMEOUT_MS): Promise<T | null> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const expiry = new Promise<null>(resolve => { timer = setTimeout(() => { try { proc.kill("SIGKILL"); } catch {} resolve(null); }, ms); });
+  try { return await Promise.race([promise, expiry]); }
+  finally { if (timer) clearTimeout(timer); }
+}
 async function readBounded(stream: ReadableStream<Uint8Array>, limit = MAX_PREVIEW_BYTES): Promise<Uint8Array> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
@@ -107,8 +126,11 @@ if (import.meta.main) {
   const address = validWindowAddress(process.argv[2]);
   if (!address || !Bun.which("grim") || !Bun.which("magick")) process.exit(2);
   const clientsProc = Bun.spawn(["hyprctl", "clients", "-j"], { stdout: "pipe", stderr: "ignore" });
-  const clients = JSON.parse(await new Response(clientsProc.stdout).text());
-  const client = clients.find((item: any) => String(item.address || "").toLowerCase() === address);
+  const clientsRaw = await withDeadline(readBounded(clientsProc.stdout, MAX_PREVIEW_BYTES), clientsProc);
+  if (!clientsRaw) process.exit(6);
+  let clients: any[] = [];
+  try { const parsed = JSON.parse(new TextDecoder().decode(clientsRaw)); clients = Array.isArray(parsed) ? parsed : []; } catch { process.exit(6); }
+  const client = clients.find((item: any) => item && typeof item === "object" && String(item.address || "").toLowerCase() === address);
   const at = client?.at, size = client?.size;
   if (!Array.isArray(at) || !Array.isArray(size) || size[0] < 20 || size[1] < 20) process.exit(3);
   reapPreviewDirectories();
@@ -117,20 +139,16 @@ if (import.meta.main) {
   try {
     const geometry = `${at[0]},${at[1]} ${size[0]}x${size[1]}`;
     const grim = Bun.spawn(["grim", "-g", geometry, "-"], { stdout: "pipe", stderr: "ignore" });
-    const [grimExit, raw] = await Promise.all([
-      grim.exited,
-      readBounded(grim.stdout, MAX_RAW_CAPTURE_BYTES),
-    ]);
+    const grimResult = await withDeadline(Promise.all([grim.exited, readBounded(grim.stdout, MAX_RAW_CAPTURE_BYTES)]), grim);
+    const [grimExit, raw] = grimResult || [1, new Uint8Array(0)];
     if (grimExit !== 0 || raw.byteLength === 0) process.exitCode = 4;
     else {
       const magick = Bun.spawn(
         ["magick", "png:-", "-resize", "160x90!", "-blur", "0x10", "-scale", "320x180!", "png:-"],
         { stdin: new Blob([raw]), stdout: "pipe", stderr: "ignore" },
       );
-      const [magickExit, preview] = await Promise.all([
-        magick.exited,
-        readBounded(magick.stdout),
-      ]);
+      const magickResult = await withDeadline(Promise.all([magick.exited, readBounded(magick.stdout)]), magick);
+      const [magickExit, preview] = magickResult || [1, new Uint8Array(0)];
       if (magickExit !== 0 || preview.byteLength === 0) process.exitCode = 5;
       else {
         let offset = 0;

@@ -12,6 +12,10 @@ Item {
   required property InfoModel desk
   required property InfoSettings settings
   property bool interactive: true
+  // The background layer is created with WlrKeyboardFocus.None, so a text
+  // field there can never receive keystrokes. The host sets this false and
+  // the search box becomes a pointer to the overlay instead of a dead input.
+  property bool keyboardAvailable: true
   property int activityCellFilter: -1
   property string activityProviderFilter: ""
   property var inspectedSession: null
@@ -19,6 +23,9 @@ Item {
   property string usageProviderFilter: ""
   property bool usageForecastMode: false
   property bool previewsEnabled: false
+  // Delegates are rebuilt on every snapshot; without this, a hovered card
+  // recaptured its preview every poll. Keyed by window address.
+  property var previewCache: ({})
   property int keyboardSessionIndex: -1
   property string promptSearch: ""
   property string expandedChangeKey: ""
@@ -347,7 +354,7 @@ Item {
     border.color: Util.alpha(selected ? view.desk.green : view.desk.themeForeground, selected ? 0.45 : 0.13)
     border.width: 1
     SequentialAnimation on opacity {
-      running: sectionChip.needsAttention
+      running: sectionChip.needsAttention && sectionChip.visible
       loops: Animation.Infinite
       NumberAnimation { from: 0.72; to: 1; duration: 1200; easing.type: Easing.InOutSine }
       NumberAnimation { from: 1; to: 0.72; duration: 1200; easing.type: Easing.InOutSine }
@@ -438,7 +445,7 @@ Item {
                 // Prefer collector.busy (Grok's title sticks on 🧠 after the turn).
                 // Fall back to the title regex for snapshots from an older collector.
                 readonly property bool busy: modelData.busy === true || (modelData.busy !== false && modelData.window && /Processing|🧠|⚙|⏳|…/.test(String(modelData.window.title || "")))
-                property string previewSource: ""
+                property string previewSource: view.previewCache[String((sc.modelData.window || {}).address || "")] || ""
                 // Fill four columns when they remain readable; narrower layouts
                 // retain a minimum width and let Flow wrap naturally.
                 width: Math.max(sessionFlow.minimumCardWidth, sessionFlow.fittedCardWidth); height: scol.implicitHeight + Style.spacing.lg * 2
@@ -449,7 +456,16 @@ Item {
                 Process {
                   id: previewProc
                   command: ["bun", Qt.resolvedUrl("window-preview.ts").toString().replace(/^file:\/\//, ""), (sc.modelData.window || {}).address || ""]
-                  stdout: StdioCollector { onStreamFinished: { var path = String(text || "").trim(); if (path) sc.previewSource = "file://" + path + "?" + Date.now() } }
+                  stdout: StdioCollector { onStreamFinished: {
+                    var path = String(text || "").trim()
+                    if (!path) return
+                    var source = "file://" + path + "?" + Date.now(), address = String((sc.modelData.window || {}).address || "")
+                    var next = {}
+                    for (var key in view.previewCache) next[key] = view.previewCache[key]
+                    next[address] = source
+                    view.previewCache = next
+                    sc.previewSource = source
+                  } }
                 }
                 ColumnLayout {
                   id: scol
@@ -458,7 +474,7 @@ Item {
                   RowLayout {
                     Layout.fillWidth: true
                     Rectangle { id: dot; width: 8; height: 8; radius: 4; color: sc.tone
-                      SequentialAnimation { running: sc.busy; loops: Animation.Infinite
+                      SequentialAnimation { running: sc.busy && sc.visible; loops: Animation.Infinite
                         onRunningChanged: if (!running) dot.opacity = 1
                         NumberAnimation { target: dot; property: "opacity"; from: 1; to: 0.2; duration: 700 }
                         NumberAnimation { target: dot; property: "opacity"; from: 0.2; to: 1; duration: 700 } } }
@@ -941,8 +957,9 @@ Item {
               font.family: view.mono
               font.pixelSize: Style.font.bodySmall
               clip: true
+              enabled: view.keyboardAvailable
               onTextChanged: view.promptSearch = text
-              PlainText { visible: !parent.text && !parent.activeFocus; text: "search prompt, project, or provider…"; color: view.textFaint; font: parent.font }
+              PlainText { visible: !parent.text && !parent.activeFocus; text: view.keyboardAvailable ? "search prompt, project, or provider…" : "search in the overlay · SUPER+D"; color: view.textFaint; font: parent.font }
             }
             PlainText {
               id: clearSearch

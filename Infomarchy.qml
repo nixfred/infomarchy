@@ -22,8 +22,18 @@ Scope {
   property string background: ""
   // How much of the wallpaper survives under the glass. 0 = solid theme bg.
   property real wallpaperOpacity: 0.32
-  // Transient sanitized sample data for public screenshots. Never persisted.
+  // Transient sanitized sample data for public screenshots. Never persisted
+  // across a login: the flag lives as a marker file under XDG_RUNTIME_DIR so
+  // the overlay (a separate Scope with its own InfoModel) sees the same mode,
+  // and the file is removed on every shell start.
   property bool demoMode: false
+  readonly property string demoMarkerPath: (Quickshell.env("XDG_RUNTIME_DIR") || ("/run/user/" + Quickshell.env("UID"))) + "/infomarchy-demo"
+  Process { id: demoMarkerWriter; property var pending: []; command: pending }
+  function publishDemoMarker(on) {
+    demoMarkerWriter.pending = on ? ["touch", root.demoMarkerPath] : ["rm", "-f", root.demoMarkerPath]
+    demoMarkerWriter.running = true
+  }
+  Component.onCompleted: publishDemoMarker(false)
 
   // Collecting costs ~20 subprocesses a tick (/proc scan, df, ping, iw, hyprctl,
   // nvidia-smi, git per session, a full opencode.db scan). Do not pay it while
@@ -140,6 +150,7 @@ Scope {
     function toggleQuietHours(): void { dashboardSettings.toggleQuietHoursEnabled() }
     function setDemo(v: string): void {
       root.demoMode = ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0
+      root.publishDemoMarker(root.demoMode)
       infoModel.refresh()
     }
     function getDemo(): string { return root.demoMode ? "true" : "false" }
@@ -202,6 +213,7 @@ Scope {
         desk: infoModel
         settings: dashboardSettings
         interactive: true
+        keyboardAvailable: false
         visible: dashboardSettings.ready && dashboardSettings.dashboardVisible
       }
     }

@@ -57,3 +57,5 @@ and screen placement are described in the work log/conversation.
 - [x] 20. Live-session cleanup: remove the duplicate compact workspace/session strip and keep only large per-session cards.
 - [x] 21. Real session synopsis: summarize several exact-session requests into a short phrase, optionally refined by an already-loaded Ollama model; never display the last prompt as the topic.
 - [x] 22. Proactive alerts: persistently deduplicate attention, crash, review, and ended-session notifications with global, quiet-hours, and per-provider controls.
+
+- [ ] Settings ownership: wallpaper and overlay each hold an InfoSettings copy of dashboard.json and write the whole file; two near-simultaneous writes (a notification claim + a section toggle) can clobber one another. Centralize writes in the service or read-merge-write with a revision. (Second-reviewer finding, 2026-09-05.)

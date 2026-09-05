@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, closeSync, constants, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { createPreviewTarget, validWindowAddress, reapPreviewDirectories, expiredPreviewDirectories, PREVIEW_PREFIX } from "./window-preview";
+import { createPreviewTarget, validWindowAddress, reapPreviewDirectories, expiredPreviewDirectories, looksLikeOurPreviewDirectory, PREVIEW_PREFIX } from "./window-preview";
 
 const cleanup: string[] = [];
 afterEach(() => {
@@ -97,9 +97,23 @@ describe("blurred window previews", () => {
 });
 
 describe("preview temp dirs are reaped", () => {
-  test("only expired, prefixed directories are selected", () => {
-    const ages = { [PREVIEW_PREFIX + "old"]: 10 * 60_000, [PREVIEW_PREFIX + "new"]: 1_000, "unrelated-old": 10 * 60_000 };
-    expect(expiredPreviewDirectories(Object.keys(ages), ages, 5 * 60_000)).toEqual([PREVIEW_PREFIX + "old"]);
+  test("only expired directories with an exact mkdtemp-shaped name are selected", () => {
+    const ages = { [PREVIEW_PREFIX + "Ab3xYz"]: 10 * 60_000, [PREVIEW_PREFIX + "Qw9rTu"]: 1_000, [PREVIEW_PREFIX + "not-created-by-this-plugin"]: 10 * 60_000, "unrelated-old": 10 * 60_000 };
+    expect(expiredPreviewDirectories(Object.keys(ages), ages, 5 * 60_000)).toEqual([PREVIEW_PREFIX + "Ab3xYz"]);
+  });
+
+  test("a same-prefix directory holding other files is never deleted", () => {
+    expect(looksLikeOurPreviewDirectory([])).toBe(true);
+    expect(looksLikeOurPreviewDirectory(["preview.png"])).toBe(true);
+    expect(looksLikeOurPreviewDirectory(["preview.png", "notes.txt"])).toBe(false);
+    expect(looksLikeOurPreviewDirectory(["important.db"])).toBe(false);
+    const base = mkdtempSync(join(tmpdir(), "infomarchy-reap-test-"));
+    try {
+      const foreign = join(base, PREVIEW_PREFIX + "Zz9Yy8");
+      mkdirSync(foreign); writeFileSync(join(foreign, "keep-me"), "user data");
+      expect(reapPreviewDirectories(base, 0, Date.now() + 1000)).toBe(0);
+      expect(lstatSync(join(foreign, "keep-me")).isFile()).toBe(true);
+    } finally { rmSync(base, { recursive: true, force: true }); }
   });
 
   test("a successful capture's directory does not leak forever", () => {

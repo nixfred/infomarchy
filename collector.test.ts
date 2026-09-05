@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join, relative } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed } from "./collector.ts";
 
 const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
 const historyFixture = join(testRoot, "history");
@@ -67,7 +67,12 @@ describe("multiplexer session identity", () => {
   test("parses bounded tmux inventory and resolves the nearest pane", () => {
     const panes = parseTmuxPanes("320\t%7\twork\t2\t1\t/home/user/project\t1\ninvalid\n");
     expect(panes).toEqual([{ pid: 320, paneId: "%7", session: "work", window: "2", pane: "1", cwd: "/home/user/project", active: true, server: "" }]);
-    expect(parseTmuxClients("410\twork\n")).toEqual([{ pid: 410, session: "work", server: "" }]);
+    expect(parseTmuxClients("410\twork\n")).toEqual([{ pid: 410, session: "work", server: "", paneId: "" }]);
+    // Clients report their current pane so two terminals on one session resolve separately.
+    expect(parseTmuxClients("410\twork\t%7\n411\twork\t%9\n")).toEqual([
+      { pid: 410, session: "work", server: "", paneId: "%7" },
+      { pid: 411, session: "work", server: "", paneId: "%9" },
+    ]);
     expect(tmuxPaneForAncestors([900, 500, 320, 1], panes)?.paneId).toBe("%7");
     expect(tmuxPaneForAncestors([900], panes, "%7")?.session).toBe("work");
     expect(tmuxPaneForAncestors([900], panes, "%8")).toBeNull();
@@ -515,5 +520,95 @@ describe("machine parsers refuse garbage", () => {
     ]);
     expect(parseDfRows("Mounted on Size Used Avail\n/ x y z\n/ 1 2")).toEqual([]);
     expect(parseDfRows("")).toEqual([]);
+  });
+});
+
+describe("second-reviewer findings (2026-09-04)", () => {
+  test("parsed JSON cannot smuggle coercion traps", () => {
+    const value = parseJsonBounded('{"name":{"toString":0,"valueOf":0},"list":[{"cwd":{"toString":0}}],"ok":"x"}');
+    expect(() => String(value.name)).not.toThrow();
+    expect(() => String(value.list[0].cwd)).not.toThrow();
+    expect(value.ok).toBe("x");
+  });
+
+  test("timestamps in the future or before 2000 are rejected everywhere", () => {
+    const stamp = Date.UTC(2026, 8, 4);
+    expect(plausibleTimestamp(stamp - 1000, stamp)).toBe(true);
+    expect(plausibleTimestamp(stamp + 30_000, stamp)).toBe(true);
+    expect(plausibleTimestamp(stamp + 3_600_000, stamp)).toBe(false);
+    expect(plausibleTimestamp(Date.UTC(2099, 0, 1), stamp)).toBe(false);
+    expect(plausibleTimestamp(0, stamp)).toBe(false);
+    expect(plausibleTimestamp("nope", stamp)).toBe(false);
+  });
+
+  test("usage caches are normalized to displayed fields with hard bounds", () => {
+    const big: Record<string, any> = {};
+    for (let i = 0; i < 5000; i++) big["model-" + i] = { input: i, output: i, nested: { deeper: { deepest: i } } };
+    const usage = normalizeUsage({
+      name: "Codex", limits: [null, "junk", { label: "WEEKLY", percent: "0.5", resetsAt: "2026-09-10T00:00:00Z" }],
+      modelUsage: big, recentDays: Array.from({ length: 400 }, (_, i) => ({ day: i, prompts: i })), todayPrompts: "12",
+    }, Date.UTC(2026, 8, 4));
+    expect(usage.limits.length).toBe(1);
+    expect(usage.limits[0].percent).toBe(0.5);
+    expect(usage.limits[0].forecast).toBeGreaterThan(0.5);
+    expect(Object.keys(usage.modelUsage).length).toBe(32);
+    expect(usage.recentDays.length).toBe(31);
+    expect(usage.todayPrompts).toBe(12);
+    expect(normalizeUsageLimit(null)).toBeNull();
+  });
+
+  test("a snapshot larger than 128 KiB reaches the consumer intact", async () => {
+    // Bun's process.stdout.write is async; exiting right after it truncated
+    // pipes at exactly 131072 bytes. Build a history big enough to cross that.
+    const home = join(import.meta.dir, ".test-fixture-bigsnap");
+    rmSync(home, { recursive: true, force: true });
+    mkdirSync(join(home, ".claude"), { recursive: true });
+    const lines: string[] = [];
+    const base = Date.now() - 60_000;
+    for (let i = 0; i < 1100; i++) lines.push(JSON.stringify({ timestamp: base - i * 1000, display: "prompt " + i + " " + "words ".repeat(40), project: "/proj/" + (i % 7), sessionId: "aaaaaaaa-bbbb-cccc-dddd-" + String(100000000000 + i) }));
+    writeFileSync(join(home, ".claude", "history.jsonl"), lines.join("\n") + "\n");
+    try {
+      const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts"), "--id", "bigsnap"], {
+        stdout: "pipe", stderr: "ignore",
+        env: { HOME: home, USER: "tester", XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", OLLAMA_HOST: "http://127.0.0.1:9" },
+      });
+      const output = await new Response(proc.stdout).text();
+      await proc.exited;
+      expect(output.length).toBeGreaterThan(131072);
+      const frames = output.trim().split("\n").map(line => JSON.parse(line));
+      const end = frames[frames.length - 1];
+      expect(end.type).toBe("end");
+      const data = frames.filter(f => f.type === "chunk").map(f => f.data).join("");
+      expect(data.length).toBe(end.chars);
+      expect(JSON.parse(data).ai.recent.length).toBe(1000);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("prompt text never leaves the machine by default", () => {
+  test("only loopback Ollama hosts qualify for automatic topic refinement", () => {
+    expect(ollamaHostIsLocal(undefined)).toBe(true);
+    expect(ollamaHostIsLocal("http://127.0.0.1:11434")).toBe(true);
+    expect(ollamaHostIsLocal("localhost:11434")).toBe(true);
+    expect(ollamaHostIsLocal("http://[::1]:11434")).toBe(true);
+    expect(ollamaHostIsLocal("http://100.68.193.41:11434")).toBe(false);
+    expect(ollamaHostIsLocal("https://shared.example")).toBe(false);
+    expect(ollamaHostIsLocal("not a url at all ::")).toBe(false);
+    expect(topicRefinementAllowed({ OLLAMA_HOST: "http://100.68.193.41:11434" } as any)).toBe(false);
+    expect(topicRefinementAllowed({ OLLAMA_HOST: "http://100.68.193.41:11434", INFOMARCHY_ALLOW_REMOTE_OLLAMA: "1" } as any)).toBe(true);
+  });
+
+  test("redaction covers env assignments, URLs, PEM, JWT and cloud keys", () => {
+    expect(safePrompt("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")).toBe("AWS_SECRET_ACCESS_KEY=[redacted]");
+    // Only the credential inside an authenticated URL is masked; the rest stays readable.
+    expect(safePrompt("DATABASE_URL=postgres://admin:hunter2@example/db")).toBe("DATABASE_URL=postgres://admin:[redacted]@example/db");
+    expect(safePrompt("connect to postgres://admin:hunter2@example/db please")).toBe("connect to postgres://admin:[redacted]@example/db please");
+    expect(safePrompt("-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXk\n-----END OPENSSH PRIVATE KEY-----")).toBe("[redacted private key]");
+    expect(safePrompt("header eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c")).toBe("header eyJ[redacted]");
+    expect(safePrompt("key AKIAIOSFODNN7EXAMPLE used")).toBe("key AKIA[redacted] used");
+    // Ordinary text with the same words is left alone.
+    expect(safePrompt("rotate the api key in the secret manager")).toBe("rotate the api key in the secret manager");
   });
 });

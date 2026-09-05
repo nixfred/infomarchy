@@ -37,7 +37,10 @@ const MAX_COLLECTION_ITEMS = 256;
 const MAX_MODELS = 128;
 const MAX_JSON_NODES = 50_000;
 const MAX_JSON_DEPTH = 24;
-const MAX_SNAPSHOT_BYTES = 1536 * 1024;
+// InfoModel.qml caps accumulation at 2 MiB counted as 2 bytes per UTF-16 code
+// unit, i.e. 1,048,576 code units. UTF-8 byte length is always >= code units,
+// so a byte cap below that with framing headroom can never be rejected there.
+const MAX_SNAPSHOT_BYTES = 960 * 1024;
 const OUTPUT_FRAME_CHARS = 12 * 1024;
 const currentAgentRaw: Record<string, number> = {};
 const currentCiByRepo: Record<string, any> = {};
@@ -121,6 +124,12 @@ function readRegularFileTail(path: string, maxBytes: number, maxMs = 150): strin
   } catch { return null; }
   finally { if (fd >= 0) try { closeSync(fd); } catch {} }
 }
+// JSON.parse happily yields {"toString":0}: an own property shadowing
+// Object.prototype, so String(x) / Date.parse(x) throw "No default value".
+// Every external JSON source (history lines, usage caches, Ollama, hyprctl,
+// gh, hostile files) passes through here, so strip the shadowing keys once
+// instead of guarding hundreds of coercion sites.
+const COERCION_TRAPS = ["toString", "valueOf", "__proto__", "constructor", "prototype", "toJSON"];
 export function structureWithinBudget(value: unknown, maxNodes = MAX_JSON_NODES, maxDepth = MAX_JSON_DEPTH): boolean {
   const stack: Array<{ value: any; depth: number }> = [{ value, depth: 0 }];
   let nodes = 0;
@@ -128,6 +137,8 @@ export function structureWithinBudget(value: unknown, maxNodes = MAX_JSON_NODES,
     const item = stack.pop()!;
     if (++nodes > maxNodes || item.depth > maxDepth) return false;
     if (!item.value || typeof item.value !== "object") continue;
+    if (!Array.isArray(item.value))
+      for (const trap of COERCION_TRAPS) if (Object.prototype.hasOwnProperty.call(item.value, trap)) delete item.value[trap];
     const values = Array.isArray(item.value) ? item.value : Object.values(item.value);
     if (values.length > MAX_COLLECTION_ITEMS * 8) return false;
     for (const child of values) stack.push({ value: child, depth: item.depth + 1 });
@@ -230,6 +241,8 @@ async function run(cmd: string[], timeoutMs = 1500, cwd?: string): Promise<strin
       const out = await Promise.race([boundedStream(proc.stdout, MAX_COMMAND_BYTES), deadline]);
       if (out === null) { try { proc.kill("SIGKILL"); } catch {}; return ""; }
       await Promise.race([proc.exited, new Promise(resolve => setTimeout(resolve, 250))]);
+      // Closed stdout but still alive (a daemonizing helper): do not leave it behind.
+      if (proc.exitCode === null && proc.signalCode === null) { try { proc.kill("SIGKILL"); } catch {} }
       return out;
     } finally {
       if (expired) clearTimeout(expired);
@@ -247,18 +260,26 @@ async function fetchJson(url: string, ms = 600): Promise<any> {
   } catch { return null; }
 }
 function finiteSize(value: unknown): number {
+  if (typeof value !== "number" && typeof value !== "string") return 0;
   const number = Number(value);
   return Number.isFinite(number) && number >= 0 ? Math.min(number, Number.MAX_SAFE_INTEGER) : 0;
 }
 function uiString(value: unknown, limit = 512): string {
-  return String(value ?? "").slice(0, limit)
+  // Objects and arrays from external JSON are never text; "[object Object]"
+  // on a card is a bug, and a shadowed toString used to throw here.
+  if (value === null || value === undefined || typeof value === "object" || typeof value === "function") return "";
+  return String(value).slice(0, limit)
     .replace(/[<>&]/g, character => character === "<" ? "‹" : character === ">" ? "›" : "＆")
     .replace(/[\u0000-\u001f\u007f]/g, " ");
 }
+// Arrays carry the recent-prompt rows (up to 1000 for heatmap drill-down);
+// a 256 cap here silently threw away 3/4 of them while recentTruncated still
+// said false. Byte and node budgets bound the frame regardless.
+const MAX_UI_ARRAY_ITEMS = 1024;
 function sanitizeForUi(value: any, depth = 0): any {
   if (depth > 12) return null;
   if (typeof value === "string") return uiString(value);
-  if (Array.isArray(value)) return value.slice(0, MAX_COLLECTION_ITEMS).map(item => sanitizeForUi(item, depth + 1));
+  if (Array.isArray(value)) return value.slice(0, MAX_UI_ARRAY_ITEMS).map(item => sanitizeForUi(item, depth + 1));
   if (value && typeof value === "object") {
     const result: Record<string, any> = {};
     for (const [rawKey, item] of Object.entries(value).slice(0, MAX_COLLECTION_ITEMS)) {
@@ -369,7 +390,10 @@ async function net() {
 async function ping() {
   const out = await run(["ping", "-n", "-c", "1", "-W", "1", "1.1.1.1"], 1500);
   const m = out.match(/time=([\d.]+)/);
-  return { host: "1.1.1.1", label: "cloudflare", ms: m ? +m[1] : null, ok: !!m };
+  const ms = m ? Number(m[1]) : NaN;
+  // Infinity serializes as null and QML then calls null.toFixed(); require a sane value.
+  const ok = Number.isFinite(ms) && ms >= 0 && ms < 60_000;
+  return { host: "1.1.1.1", label: "cloudflare", ms: ok ? ms : null, ok };
 }
 function battery() {
   for (const d of ls("/sys/class/power_supply")) {
@@ -542,7 +566,7 @@ export function tmuxSocketFromEnvironment(environ = ""): string {
   return socket.length > 0 && socket.length <= 256 && socket.startsWith("/") && !/[\u0000-\u001f\u007f]/.test(socket) ? socket : "";
 }
 export type TmuxPane = { pid: number; paneId: string; session: string; window: string; pane: string; cwd: string; active: boolean; server: string };
-export type TmuxClient = { pid: number; session: string; server: string };
+export type TmuxClient = { pid: number; session: string; server: string; paneId: string };
 export function parseTmuxPanes(text: string, server = ""): TmuxPane[] {
   const result: TmuxPane[] = [];
   for (const line of String(text || "").split("\n").slice(0, MAX_COLLECTION_ITEMS)) {
@@ -556,8 +580,8 @@ export function parseTmuxPanes(text: string, server = ""): TmuxPane[] {
 export function parseTmuxClients(text: string, server = ""): TmuxClient[] {
   const result: TmuxClient[] = [];
   for (const line of String(text || "").split("\n").slice(0, MAX_COLLECTION_ITEMS)) {
-    const [rawPid, rawSession] = line.split("\t"), pid = Number(rawPid), session = contextValue(rawSession, 64);
-    if (Number.isInteger(pid) && pid > 1 && session) result.push({ pid, session, server });
+    const [rawPid, rawSession, rawPane] = line.split("\t"), pid = Number(rawPid), session = contextValue(rawSession, 64);
+    if (Number.isInteger(pid) && pid > 1 && session) result.push({ pid, session, server, paneId: contextId(rawPane) });
   }
   return result;
 }
@@ -774,14 +798,32 @@ export function pruneTopicCache(cache: Record<string, any>, liveKeys: Set<string
   return Object.fromEntries([...kept, ...rest].slice(0, limit));
 }
 
+// Topic refinement POSTs recent prompt text to the Ollama host. That is
+// fine for a model on this machine; it is silent data egress when OLLAMA_HOST
+// points at a shared GPU box. Refine only against loopback unless the user
+// opts in explicitly. Explicit LOAD/UNLOAD clicks are not affected.
+export function ollamaHostIsLocal(hostValue: unknown): boolean {
+  const raw = String(hostValue || "http://127.0.0.1:11434").trim();
+  try {
+    const url = new URL(raw.startsWith("http://") || raw.startsWith("https://") ? raw : "http://" + raw);
+    const host = url.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+    return host === "localhost" || host === "::1" || /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host) || host === "0.0.0.0";
+  } catch { return false; }
+}
+export function topicRefinementAllowed(env = process.env): boolean {
+  return env.INFOMARCHY_ALLOW_REMOTE_OLLAMA === "1" || ollamaHostIsLocal(env.OLLAMA_HOST);
+}
 async function refineSessionTopics(sessions: any[], recentEntries: any[], ollama: any): Promise<Record<string, any>> {
   const previous = prev.topicSummaries && typeof prev.topicSummaries === "object" ? prev.topicSummaries : {};
   const next: Record<string, any> = {};
   for (const [key, entry] of Object.entries(previous)) if (entry && (entry as any).v === TOPIC_CACHE_VERSION) next[key] = entry;
   const liveKeys = new Set<string>();
-  const model = String((ollama.loaded || [])[0]?.name || "");
+  const model = topicRefinementAllowed() ? String((ollama.loaded || [])[0]?.name || "") : "";
   const host = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
   const base = host.startsWith("http") ? host : "http://" + host;
+  // Never fan out an unbounded number of generate requests at one local model.
+  const MAX_TOPIC_REQUESTS = 6;
+  let requests = 0;
   await Promise.all(sessions.map(async session => {
     const entries = exactSessionEntries(session, recentEntries);
     if (!entries.length) return;
@@ -794,6 +836,7 @@ async function refineSessionTopics(sessions: any[], recentEntries: any[], ollama
     const hit = topicCacheHit(cached, fingerprint, model);
     if (hit) { session.topic = hit; return; }
     if (topicRetryBlocked(cached, fingerprint, model, now)) return;
+    if (++requests > MAX_TOPIC_REQUESTS) return;
     let generated = "";
     try {
       const prompt = "Summarize the current work as a specific 3-7 word gerund phrase. Do not quote a request. No punctuation or preamble.\nProject: " +
@@ -830,11 +873,17 @@ export function inferSessionIdsFromRecent(sessions: any[], recentEntries: any[])
     // history alone. Refuse to guess; their prompt rows remain safely dim.
     if (group.length !== 1) continue;
     const session = group[0];
-    const candidate = recentEntries.find(entry =>
-      `${entry.provider}\0${entry.project}` === key &&
-      cleanSessionId(entry.session) &&
-      Number(entry.ts || 0) >= Number(session.startedAt || 0) - 5000
-    );
+    // recent is newest-first, so a plain find() returned the NEWEST prompt in
+    // the project — which can belong to a later session that already exited.
+    // Take the prompt closest after launch, and only within a short window.
+    const startedAt = Number(session.startedAt || 0);
+    let candidate: any = null;
+    for (const entry of recentEntries) {
+      if (`${entry.provider}\0${entry.project}` !== key || !cleanSessionId(entry.session)) continue;
+      const ts = Number(entry.ts || 0);
+      if (ts < startedAt - 5000 || ts > startedAt + 30 * 60_000) continue;
+      if (!candidate || ts < Number(candidate.ts || 0)) candidate = entry;
+    }
     const id = cleanSessionId(candidate?.session);
     if (!id) continue;
     session.session = id;
@@ -952,7 +1001,10 @@ async function tmuxState(winByPid: Map<number, any>, pids: number[]): Promise<{ 
   }
   if (!sockets.size) sockets.add("");
   const formatPane = "#{pane_pid}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_current_path}\t#{pane_active}";
-  const formatClient = "#{client_pid}\t#{session_name}";
+  // Two clients on one session usually sit on different panes; key by the
+  // client's current pane so a card focuses the terminal actually showing it,
+  // and fall back to the session only when no client is on that pane.
+  const formatClient = "#{client_pid}\t#{session_name}\t#{pane_id}";
   const panes: TmuxPane[] = [];
   for (const socket of [...sockets]) {
     const prefix = socket ? ["tmux", "-S", socket] : ["tmux"];
@@ -962,8 +1014,11 @@ async function tmuxState(winByPid: Map<number, any>, pids: number[]): Promise<{ 
     ]);
     panes.push(...parseTmuxPanes(paneText, socket));
     for (const client of parseTmuxClients(clientText, socket)) {
-      const window = windowForProcess(client.pid, winByPid), key = client.server + "\0" + client.session;
-      if (window && !windows.has(key)) windows.set(key, window);
+      const window = windowForProcess(client.pid, winByPid);
+      if (!window) continue;
+      if (client.paneId) { const paneKey = client.server + "\0pane\0" + client.paneId; if (!windows.has(paneKey)) windows.set(paneKey, window); }
+      const key = client.server + "\0" + client.session;
+      if (!windows.has(key)) windows.set(key, window);
     }
   }
   return { panes, windows };
@@ -995,7 +1050,7 @@ async function liveSessions(pids: number[]) {
     const tmuxSocket = tmuxSocketFromEnvironment(environ);
     const pane = tmuxPaneForAncestors(processAncestors(p.pid), tmux.panes, tmuxHost?.paneId || "", tmuxSocket);
     if (pane) {
-      const attachedWindow = tmux.windows.get(pane.server + "\0" + pane.session) || null;
+      const attachedWindow = tmux.windows.get(pane.server + "\0pane\0" + pane.paneId) || tmux.windows.get(pane.server + "\0" + pane.session) || null;
       if (!tmuxHost) hosts.push({ kind: "tmux", label: "tmux" });
       const host = hosts.find(item => item.kind === "tmux")!;
       host.session = pane.session; host.window = pane.window; host.pane = pane.pane; host.paneId = pane.paneId;
@@ -1005,7 +1060,9 @@ async function liveSessions(pids: number[]) {
     }
     const sessionIds = processSessionIds(p.pid, prov, p.cmd);
     const sample = processTreeSample(p.pid);
-    currentAgentRaw[String(p.pid)] = sample.ticks;
+    // A reused pid with a fresh process must not inherit the old baseline.
+    const agentKey = `${p.pid}:${Math.round(p.start)}`;
+    currentAgentRaw[agentKey] = sample.ticks;
     const presentation = sessionPresentation(w, p.cmd);
     sessions.push({
       provider: prov, pid: p.pid, cwd: shortPath(p.cwd), project: basename(p.cwd || "") || "/",
@@ -1016,7 +1073,7 @@ async function liveSessions(pids: number[]) {
       window: presentation.window,
       args: presentation.args,
       resources: {
-        cpuPct: resourceDelta(sample.ticks, prev.agents?.[String(p.pid)], dt),
+        cpuPct: resourceDelta(sample.ticks, prev.agents?.[agentKey], dt),
         rss: sample.rss,
         processes: sample.pids.length,
         gpuMemory: sample.pids.reduce((sum, child) => sum + (gpuByPid.get(child) || 0), 0) || null,
@@ -1040,15 +1097,25 @@ async function liveSessions(pids: number[]) {
     if (!s.busy && s.window && titleLooksBusy(s.window.title) && s.provider === "grok")
       s.window = { ...s.window, title: "" };
   }
+  // Each repo costs four git spawns plus an occasional gh. Bound the fan-out;
+  // sessions beyond the cap simply show no repo state rather than spawning
+  // hundreds of processes per tick.
+  const MAX_REPOS_PER_TICK = 24;
   const repos = new Map<string, Promise<{ root: string; state: any; changes: any; ci: any }>>();
-  for (const session of sessions) if (session._cwd && !repos.has(session._cwd)) repos.set(session._cwd, repoState(session._cwd));
+  for (const session of sessions) {
+    if (!session._cwd || repos.has(session._cwd)) continue;
+    if (repos.size >= MAX_REPOS_PER_TICK) break;
+    repos.set(session._cwd, repoState(session._cwd));
+  }
   await Promise.all(sessions.map(async session => {
     const repo = session._cwd ? await repos.get(session._cwd) : null;
     session.repoRoot = repo?.root ? shortPath(repo.root) : "";
     session.git = repo?.state || null;
     session.changes = repo?.changes || null;
     session.ci = repo?.ci || null;
-    const signal = attentionSignal(session.window?.title, session.git?.conflicts || 0);
+    // Title words like "permission" or "failed" describe the TASK while the
+    // agent is still working. Only an idle agent can be blocked/waiting/done.
+    const signal = session.busy ? null : attentionSignal(session.window?.title, session.git?.conflicts || 0);
     session.attention = signal?.state || "";
     session.attentionReason = signal?.reason || "";
     session.attentionAction = signal?.action || "";
@@ -1061,7 +1128,17 @@ async function liveSessions(pids: number[]) {
 
 // ---------------------------------------------------------------- AI history
 export function safePrompt(value: unknown): string {
-  return String(value || "")
+  return String(typeof value === "object" ? "" : (value || ""))
+    // PEM blocks, JWTs, authenticated URLs, cloud-style keys and env-style
+    // credential assignments. Best-effort by design: it cannot know every
+    // format, so the README says "redacted" not "guaranteed".
+    .replace(/-----BEGIN[^-]{0,40}PRIVATE KEY-----[\s\S]*?(?:-----END[^-]{0,40}PRIVATE KEY-----|$)/g, "[redacted private key]")
+    .replace(/\beyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\b/g, "eyJ[redacted]")
+    .replace(/(\b[a-z][a-z0-9+.-]*:\/\/[^\s\/:@"']+:)[^\s\/@"']+@/gi, "$1[redacted]@")
+    .replace(/\b(AKIA|ASIA)[A-Z0-9]{16}\b/g, "$1[redacted]")
+    .replace(/\b(AIza)[A-Za-z0-9_-]{20,}\b/g, "$1[redacted]")
+    .replace(/\b(xox[abprs]-)[A-Za-z0-9-]{10,}\b/g, "$1[redacted]")
+    .replace(/\b([A-Z][A-Z0-9_]*(?:SECRET|TOKEN|PASSWORD|PASSWD|API_KEY|APIKEY|PRIVATE_KEY|ACCESS_KEY|AUTH)[A-Z0-9_]*)(\s*=\s*)(?:"[^"]{4,}"|'[^']{4,}'|[^\s"']{4,})/g, "$1$2[redacted]")
     // Common token formats. Keep a small prefix so the redaction is still recognizable.
     .replace(/\b(sk-(?:proj-|ant-)?|gh[opusr]_)[A-Za-z0-9_-]{12,}\b/gi, "$1[redacted]")
     .replace(/\b(ntn_)[A-Za-z0-9_-]{12,}\b/gi, "$1[redacted]")
@@ -1098,7 +1175,13 @@ function bump(ts: number, prov: string) {
 const recent: any[] = [];
 const todayStart = (() => { const d = new Date(now); d.setHours(0, 0, 0, 0); return d.getTime(); })();
 const counts: Record<string, { today: number; week: number; total: number }> = {};
+// A row dated 2099 used to count as today AND sort above every real task.
+export function plausibleTimestamp(ts: unknown, stamp = now): boolean {
+  const time = Number(ts);
+  return Number.isFinite(time) && time > 946_684_800_000 && time <= stamp + 60_000;
+}
 function cnt(prov: string, ts: number) {
+  if (!plausibleTimestamp(ts)) return;
   const c = counts[prov] ||= { today: 0, week: 0, total: 0 };
   c.total++; if (ts >= todayStart) c.today++; if (ts >= start7) c.week++;
 }
@@ -1111,7 +1194,7 @@ function claudeHistory() {
     try {
       const e = parseJsonBounded(l, 2048, 12); const ts = +e?.timestamp; if (!ts) continue;
       bump(ts, "claude"); cnt("claude", ts);
-      recent.push({ provider: "claude", ts, project: shortPath(e.project || ""), text: safePrompt(e.display), session: e.sessionId });
+      if (plausibleTimestamp(ts)) recent.push({ provider: "claude", ts, project: shortPath(e.project || ""), text: safePrompt(e.display), session: e.sessionId });
     } catch {}
   }
   return { present: true, prompts: lines.length };
@@ -1134,13 +1217,16 @@ function codexSessionDirectories(base: string): Map<string, string> {
   const result = new Map<string, string>();
   const root = join(base, "sessions");
   const files: string[] = [];
-  // sessions/YYYY/MM/DD/rollout-*.jsonl
-  for (const year of ls(root).sort().reverse().slice(0, 4))
+  // sessions/YYYY/MM/DD/rollout-*.jsonl — newest day first; stop as soon as the
+  // cap is reached so a day with a huge number of rollouts is not enumerated.
+  outer: for (const year of ls(root).sort().reverse().slice(0, 4))
     for (const month of ls(join(root, year)).sort().reverse().slice(0, 12))
-      for (const day of ls(join(root, year, month)).sort().reverse().slice(0, 31))
-        for (const file of ls(join(root, year, month, day)))
-          if (file.endsWith(".jsonl")) files.push(join(root, year, month, day, file));
-  for (const path of files.sort().reverse().slice(0, MAX_COLLECTION_ITEMS)) {
+      for (const day of ls(join(root, year, month)).sort().reverse().slice(0, 31)) {
+        const names = ls(join(root, year, month, day)).filter(file => file.endsWith(".jsonl")).sort().reverse().slice(0, MAX_COLLECTION_ITEMS);
+        for (const file of names) files.push(join(root, year, month, day, file));
+        if (files.length >= MAX_COLLECTION_ITEMS) break outer;
+      }
+  for (const path of files.slice(0, MAX_COLLECTION_ITEMS)) {
     const id = rolloutSessionId(basename(path));
     if (!id || result.has(id)) continue;
     const cwd = rolloutCwd(readRegularFileHead(path, 4096) || "");
@@ -1158,7 +1244,7 @@ function codexHistory() {
   for (const l of hist.split("\n").filter(Boolean)) {
     try { const e = parseJsonBounded(l, 2048, 12); const ts = (+e?.ts || 0) * 1000; if (!ts) continue; prompts++;
       bump(ts, "codex"); cnt("codex", ts);
-      recent.push({ provider: "codex", ts, project: directories.get(cleanSessionId(e.session_id)) || "", text: safePrompt(e.text), session: e.session_id });
+      if (plausibleTimestamp(ts)) recent.push({ provider: "codex", ts, project: directories.get(cleanSessionId(e.session_id)) || "", text: safePrompt(e.text), session: e.session_id });
     } catch {}
   }
   const threads: any[] = [];
@@ -1186,7 +1272,7 @@ function grokHistory() {
         const session = String(e.session_id || "");
         if (session) sessionIds.add(session);
         bump(ts, "grok"); cnt("grok", ts);
-        recent.push({ provider: "grok", ts, project, text: safePrompt(e.prompt), session });
+        if (plausibleTimestamp(ts)) recent.push({ provider: "grok", ts, project, text: safePrompt(e.prompt), session });
       } catch {}
     }
   }
@@ -1198,21 +1284,31 @@ function grokHistory() {
 function opencodeHistory() {
   const dataRoot = process.env.XDG_DATA_HOME || join(HOME, ".local/share");
   const path = join(dataRoot, "opencode/opencode.db");
-  if (!existsSync(path)) return { present: false };
+  // Every other history reader opens with O_NOFOLLOW; a symlinked database
+  // would let any SQLite file masquerade as prompt history.
+  try { if (lstatSync(path).isSymbolicLink()) return { present: false }; } catch { return { present: false }; }
   let db: Database | null = null;
   try {
     db = new Database(path, { readonly: true });
+    // Only the last seven days are ever displayed, and never more than 1000
+    // rows; scanning and JSON-decoding the whole table every tick did not
+    // scale. json_valid() keeps one corrupt row from zeroing the provider.
     const rows = db.query(`
       SELECT m.session_id AS session, m.time_created AS ts, s.directory AS project,
         (SELECT json_extract(p.data, '$.text')
            FROM part p
-          WHERE p.message_id = m.id AND json_extract(p.data, '$.type') = 'text'
+          WHERE p.message_id = m.id AND json_valid(p.data) AND json_extract(p.data, '$.type') = 'text'
           ORDER BY p.time_created, p.id LIMIT 1) AS text
         FROM message m
         JOIN session s ON s.id = m.session_id
-       WHERE json_extract(m.data, '$.role') = 'user'
+       WHERE m.time_created >= ? AND json_valid(m.data) AND json_extract(m.data, '$.role') = 'user'
        ORDER BY m.time_created DESC, m.id DESC
-    `).all() as any[];
+       LIMIT 2000
+    `).all(start7) as any[];
+    const totals = db.query(`
+      SELECT COUNT(*) AS prompts, COUNT(DISTINCT session_id) AS sessions
+        FROM message WHERE json_valid(data) AND json_extract(data, '$.role') = 'user'
+    `).get() as any;
     const sessions = new Set<string>();
     let prompts = 0;
     for (const row of rows) {
@@ -1222,9 +1318,9 @@ function opencodeHistory() {
       const session = cleanSessionId(row.session);
       if (session) sessions.add(session);
       bump(ts, "opencode"); cnt("opencode", ts);
-      recent.push({ provider: "opencode", ts, project: shortPath(String(row.project || "")), text: safePrompt(row.text), session });
+      if (plausibleTimestamp(ts)) recent.push({ provider: "opencode", ts, project: shortPath(String(row.project || "")), text: safePrompt(row.text), session });
     }
-    return { present: true, prompts, sessions: sessions.size };
+    return { present: true, prompts: Math.max(prompts, Number(totals?.prompts) || 0), sessions: Math.max(sessions.size, Number(totals?.sessions) || 0) };
   } catch (error) {
     return { present: true, prompts: 0, sessions: 0, error: String(error) };
   } finally {
@@ -1242,7 +1338,8 @@ async function ollamaState() {
     present: true, up: true,
     loaded: loaded.filter((model: any) => model && typeof model === "object")
       .map((model: any) => ({ name: uiString(model.name, 256), vram: finiteSize(model.size_vram),
-        size: finiteSize(model.size), until: uiString(model.expires_at, 64) })),
+        size: finiteSize(model.size), until: uiString(model.expires_at, 64) }))
+      .filter((model: any) => !!model.name),
     models: models.filter((model: any) => model && typeof model === "object")
       .map((model: any) => ({
         name: uiString(model.name || model.model, 256),
@@ -1255,23 +1352,55 @@ async function ollamaState() {
     modelCount: models.length,
   };
 }
+const MAX_USAGE_FILES = 16;
+const MAX_USAGE_FILE_BYTES = 512 * 1024;
+export function normalizeUsageLimit(limit: any, stamp = now): any | null {
+  if (!limit || typeof limit !== "object") return null;
+  const percent = Number(limit.percent);
+  return {
+    label: uiString(limit.label ?? limit.title, 64),
+    title: uiString(limit.title ?? limit.label, 64),
+    percent: Number.isFinite(percent) ? Math.max(0, Math.min(10, percent)) : 0,
+    resetsAt: uiString(limit.resetsAt, 40),
+    forecast: limitForecast(limit, stamp),
+  };
+}
+export function normalizeUsage(j: any, stamp = now): any {
+  const count = (value: unknown) => { const n = Number(value); return Number.isFinite(n) && n >= 0 ? n : 0; };
+  const modelUsage: Record<string, any> = {};
+  for (const [key, value] of Object.entries(j.modelUsage && typeof j.modelUsage === "object" ? j.modelUsage : {}).slice(0, 32)) {
+    const name = uiString(key, 64); if (!name) continue;
+    modelUsage[name] = value && typeof value === "object"
+      ? Object.fromEntries(Object.entries(value).slice(0, 8).map(([k, v]) => [uiString(k, 32), typeof v === "string" ? uiString(v, 64) : count(v)]))
+      : count(value);
+  }
+  const recentDays = (Array.isArray(j.recentDays) ? j.recentDays : []).slice(0, 31)
+    .map((day: any) => day && typeof day === "object"
+      ? Object.fromEntries(Object.entries(day).slice(0, 8).map(([k, v]) => [uiString(k, 32), typeof v === "string" ? uiString(v, 32) : count(v)]))
+      : count(day));
+  return {
+    name: uiString(j.name, 64), ready: j.ready !== false, tierLabel: uiString(j.tierLabel, 32),
+    // Ship the projection from the tested implementation instead of letting
+    // the QML re-derive it (the copy there had drifted out of test coverage).
+    limits: (Array.isArray(j.limits) ? j.limits : []).slice(0, 16).map((limit: any) => normalizeUsageLimit(limit, stamp)).filter(Boolean),
+    todayPrompts: count(j.todayPrompts), todaySessions: count(j.todaySessions), todayTotalTokens: count(j.todayTotalTokens),
+    totalPrompts: count(j.totalPrompts), totalSessions: count(j.totalSessions), updatedAt: count(j.updatedAt),
+    modelUsage, recentDays, usageStatusText: uiString(j.usageStatusText, 160),
+  };
+}
 function agentsUsage() {
   // Omarchy's own agents plugin caches rate limits + token usage here; reuse it when present.
+  // Every field is normalized to what the cards display: two individually valid
+  // caches could otherwise push the aggregate snapshot over its node budget and
+  // blank the desk, and 256 x 8 MiB files was a plausible 2 GiB read per tick.
   const dir = join(XDG_STATE, "omarchy/agents/usage");
   const out: Record<string, any> = {};
-  for (const f of ls(dir).slice(0, MAX_COLLECTION_ITEMS)) {
-    if (!f.endsWith(".json")) continue;
-    const j = readJson(join(dir, f)); if (!j) continue;
-    out[f.replace(/\.json$/, "")] = {
-      name: j.name, ready: j.ready, tierLabel: j.tierLabel,
-      // Ship the projection from the tested implementation instead of letting
-      // the QML re-derive it (the copy there had drifted out of test coverage).
-      limits: (Array.isArray(j.limits) ? j.limits : []).slice(0, MAX_COLLECTION_ITEMS)
-        .map((limit: any) => (limit && typeof limit === "object") ? { ...limit, forecast: limitForecast(limit, now) } : limit),
-      todayPrompts: j.todayPrompts, todaySessions: j.todaySessions, todayTotalTokens: j.todayTotalTokens,
-      totalPrompts: j.totalPrompts, totalSessions: j.totalSessions, updatedAt: j.updatedAt,
-      modelUsage: j.modelUsage || {}, recentDays: j.recentDays || [], usageStatusText: j.usageStatusText,
-    };
+  for (const f of ls(dir).filter(name => name.endsWith(".json")).sort().slice(0, MAX_USAGE_FILES)) {
+    const text = read(join(dir, f), MAX_USAGE_FILE_BYTES);
+    const j = text === null ? null : parseJsonBounded(text, 4000, 12);
+    if (!j || typeof j !== "object") continue;
+    const key = uiString(f.replace(/\.json$/, ""), 32);
+    if (key) out[key] = normalizeUsage(j);
   }
   return out;
 }
@@ -1390,7 +1519,7 @@ function demoSnapshot(stamp = Date.now()) {
 
 async function runCollector() {
   if (process.argv.includes("--demo")) {
-    process.stdout.write(frameSnapshot(demoSnapshot()));
+    await emit(frameSnapshot(demoSnapshot()));
     return;
   }
   const pids = scanProcs();
@@ -1409,6 +1538,7 @@ async function runCollector() {
   // Default view still shows 40. Keep enough week rows in the snapshot for
   // heatmap drill-down without allowing an unbounded history payload.
   const dashboardRecent = linkedRecent.slice(0, Math.max(40, Math.min(1000, weekRecentCount)));
+  const recentTruncated = linkedRecent.length > dashboardRecent.length;
 
   // Hyprland >= 0.56 takes Lua in `hyprctl dispatch`; older takes "dispatcher arg".
   let hyprLua = false;
@@ -1429,7 +1559,7 @@ async function runCollector() {
       collisions: repoCollisions(sessions),
       counts, providers: { claude, codex, grok, opencode, ollama }, usage: agentsUsage(),
       heatmap: { start: start7, days: heatDays, cells: heat.map(c => [c.n, c.p]) },
-      recent: dashboardRecent, recentTruncated: weekRecentCount > 1000,
+      recent: dashboardRecent, recentTruncated,
     },
   };
 
@@ -1445,14 +1575,20 @@ async function runCollector() {
       sessionNotifications: notificationState.tracked,
     }));
   } catch {}
-  process.stdout.write(frameSnapshot(snapshot));
+  await emit(frameSnapshot(snapshot));
 }
 
+// process.stdout.write() is asynchronous in Bun. Exiting right after it
+// truncated pipes at exactly 128 KiB and wrote nothing at all to a file
+// (measured 2026-09-04). Bun.write() resolves only once the bytes are handed
+// to the fd, so it is the only safe way to combine output with process.exit.
+async function emit(text: string): Promise<void> {
+  await Bun.write(Bun.stdout, text);
+}
 if (import.meta.main) {
   try { await runCollector(); }
-  catch { process.stdout.write(protocolError("collector failed safely")); }
+  catch { try { await emit(protocolError("collector failed safely")); } catch {} }
   // Orphaned grandchildren of killed tools can hold our pipes open; a pending
   // read on one keeps Bun alive indefinitely. The frame is written — leave.
-  await Bun.write(Bun.stdout, "");
   process.exit(0);
 }

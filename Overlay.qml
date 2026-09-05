@@ -12,11 +12,24 @@ Scope {
   id: root
   property bool opened: false
 
-  InfoModel { id: infoModel; refreshMs: 3000; active: root.opened; instance: "overlay" }
+  InfoModel { id: infoModel; refreshMs: 3000; active: root.opened; instance: "overlay"; demoMode: demoMarker.present }
   InfoSettings { id: dashboardSettings }
+  // Demo mode is set on the wallpaper service; a screenshot taken with the
+  // overlay open must not leak live prompts. Mirror the runtime marker.
+  FileView {
+    id: demoMarker
+    property bool present: false
+    path: (Quickshell.env("XDG_RUNTIME_DIR") || ("/run/user/" + Quickshell.env("UID"))) + "/infomarchy-demo"
+    watchChanges: true
+    printErrors: false
+    onLoaded: present = true
+    onLoadFailed: present = false
+    onFileChanged: reload()
+  }
 
   function open(payload) {
     root.opened = true
+    demoMarker.reload()
     infoModel.refresh()
   }
   function close() { root.opened = false }

@@ -202,8 +202,13 @@ Item {
   }
   function claimNotificationEvent(key, stamp) {
     var eventKey = String(key || ""), now = Number(stamp || Date.now())
-    if (!eventKey || eventKey.length > 512 || !isFinite(now) || notificationEvents[eventKey]) return false
-    var recent = [], cutoff = now - 7 * 86400000
+    if (!eventKey || eventKey.length > 512 || !isFinite(now)) return false
+    var cutoff = now - 7 * 86400000
+    // A key older than the window is expired, not claimed — otherwise a
+    // stored key outlived its seven days until some other event pruned it.
+    var seenAt = Number(notificationEvents[eventKey] || 0)
+    if (seenAt > 0 && seenAt >= cutoff && seenAt <= now) return false
+    var recent = []
     for (var name in notificationEvents) {
       var at = Number(notificationEvents[name] || 0)
       if (name.length <= 512 && isFinite(at) && at >= cutoff && at <= now) recent.push({ key: name, at: at })
@@ -236,7 +241,9 @@ Item {
   function markChangeSeen(key, fingerprint) {
     if (!key || !fingerprint || changeSeen(key, fingerprint)) return false
     var next = {}
-    for (var name in seenChanges) next[name] = seenChanges[name]
+    // Copy everything EXCEPT this key, then append it, so the just-updated
+    // repository is newest in insertion order and survives prunedSeen().
+    for (var name in seenChanges) if (name !== key) next[name] = seenChanges[name]
     next[key] = fingerprint
     seenChanges = next
     persist()
