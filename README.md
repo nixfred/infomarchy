@@ -135,9 +135,12 @@ The module strip doubles as a keyboard command strip in the overlay: **1–9** t
 ## Install
 
 ```bash
+sudo pacman -S --needed bun   # the collector runs on bun; Omarchy does not ship it
 omarchy plugin add https://github.com/nixfred/infomarchy.git --enable --yes
 omarchy restart shell    # first time only: services load at shell start
 ```
+
+If bun is missing the desk says so in red at the top and in the sessions card, and fills in on the next refresh after you install it — no restart needed.
 
 The plugin declares itself as a clone of `omarchy.background`, so Omarchy hands it the wallpaper role. Your chosen wallpaper is still there — dimmed to 32% behind the glass — and `omarchy theme bg set …` keeps working.
 
@@ -171,7 +174,7 @@ omarchy restart shell
 
 ## Requirements
 
-Omarchy Quattro with third-party shell plugin support, `bun` (ships with Omarchy), `iw`, `iproute2`, and `ping`. Optional: `nvidia-smi` (GPU row hides without it), authenticated GitHub CLI `gh` (for the latest CI result), the `omarchy.agents` bar widget (for the usage card), Ollama (for the local-AI card), and Herdr/Boomux/tmux when those hosts are actually used. Infomarchy does not start or configure a multiplexer. Hyprland 0.56+ (Lua dispatch) and older (`focuswindow`) are both handled.
+Omarchy Quattro with third-party shell plugin support, `bun` (**not** part of the Omarchy base install — `sudo pacman -S bun`), `iw`, `iproute2`, and `ping`. Optional: `nvidia-smi` (GPU row hides without it), authenticated GitHub CLI `gh` (for the latest CI result), the `omarchy.agents` bar widget (for the usage card), Ollama (for the local-AI card), and Herdr/Boomux/tmux when those hosts are actually used. Infomarchy does not start or configure a multiplexer. Hyprland 0.56+ (Lua dispatch) and older (`focuswindow`) are both handled.
 
 ## It follows your theme
 

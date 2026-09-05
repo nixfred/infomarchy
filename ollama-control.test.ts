@@ -37,4 +37,34 @@ describe("Ollama model controls", () => {
     async function* chunks() { yield new TextEncoder().encode("1234"); yield new TextEncoder().encode("5"); }
     expect(await readBoundedInput(chunks(), 4)).toBeNull();
   });
+
+  test("stops at the frame newline instead of waiting for EOF", async () => {
+    // Quickshell never closes the helper's stdin. A reader that needs EOF
+    // parses nothing until the shell exits.
+    let pulled = 0;
+    async function* endless() {
+      yield new TextEncoder().encode('{"action":"unload",');
+      yield new TextEncoder().encode('"model":"x:y"}\ntrailing garbage that must never be read');
+      while (true) { pulled++; yield new TextEncoder().encode("x"); }
+    }
+    expect(await readBoundedInput(endless())).toBe('{"action":"unload","model":"x:y"}');
+    expect(pulled).toBe(0);
+  });
+
+  test("the helper process exits promptly while stdin is still open", async () => {
+    const proc = Bun.spawn(["bun", new URL("./ollama-control.ts", import.meta.url).pathname], {
+      stdin: "pipe", stdout: "pipe", stderr: "ignore",
+      env: { ...process.env, OLLAMA_HOST: "http://127.0.0.1:9" },
+    });
+    proc.stdin.write('{"action":"unload","model":"x:y"}\n');
+    await proc.stdin.flush();
+    // stdin deliberately left open — this is exactly what the shell does.
+    const started = performance.now();
+    const exit = await Promise.race([proc.exited, Bun.sleep(4000).then(() => "timeout" as const)]);
+    proc.kill();
+    expect(exit).not.toBe("timeout");
+    expect(performance.now() - started).toBeLessThan(3500);
+    const out = JSON.parse(await new Response(proc.stdout).text());
+    expect(out.ok).toBe(false);
+  });
 });

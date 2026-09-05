@@ -110,14 +110,22 @@ export async function controlOllama(
   }
 }
 
+// Quickshell keeps the helper's stdin open for the life of the Process, so a
+// reader that waits for EOF never returns: the request was parsed only after
+// the shell exited, the card stayed on WORKING forever and a bun process was
+// left behind per click. The frame is newline-terminated (see InfoModel.qml),
+// so stop at the first newline exactly like copy-text.ts does.
 export async function readBoundedInput(stream: AsyncIterable<Uint8Array | string>, limit = MAX_INPUT_BYTES): Promise<string | null> {
   const chunks: Uint8Array[] = [];
   let total = 0;
   for await (const raw of stream) {
     const chunk = typeof raw === "string" ? new TextEncoder().encode(raw) : raw;
-    total += chunk.byteLength;
+    const newline = chunk.indexOf(0x0a);
+    const piece = newline >= 0 ? chunk.subarray(0, newline) : chunk;
+    total += piece.byteLength;
     if (total > limit) return null;
-    chunks.push(chunk);
+    chunks.push(piece);
+    if (newline >= 0) break;
   }
   const bytes = new Uint8Array(total);
   let offset = 0;
@@ -136,5 +144,7 @@ if (import.meta.main) {
     result = { ok: false, action: "", model: "", message: "Invalid Ollama control frame" };
   }
   process.stdout.write(JSON.stringify(result) + "\n");
-  process.exitCode = result.ok ? 0 : 1;
+  // Exit explicitly: the still-open stdin pipe from Quickshell would otherwise
+  // keep the event loop alive, and StdioCollector{waitForEnd} never fires.
+  process.exit(result.ok ? 0 : 1);
 }

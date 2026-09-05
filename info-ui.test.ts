@@ -79,7 +79,9 @@ describe("interactive information modules", () => {
     expect(settings).toContain("function notificationsAllowed");
     expect(settings).toContain("function toggleNotificationProvider");
     expect(view).toContain('text: "ALERTS "');
-    expect(view).toContain('text: "QUIET 22–08 "');
+    // The chip must reflect the configured window, not a hardcoded 22–08.
+    expect(view).toContain('text: "QUIET " + (view.settings.quietStartHour < 10 ? "0" : "") + view.settings.quietStartHour');
+    expect(view).not.toContain('"QUIET 22–08 "');
     expect(service).toContain('"omarchy-notification-send"');
     expect(service).toContain("dashboardSettings.claimNotificationEvent");
     expect(service).toContain('"nixfred.infomarchy", "{}"');

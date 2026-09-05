@@ -28,11 +28,15 @@ Scope {
   // Collecting costs ~20 subprocesses a tick (/proc scan, df, ping, iw, hyprctl,
   // nvidia-smi, git per session, a full opencode.db scan). Do not pay it while
   // SUPER+I has the dashboard hidden.
+  // Notifications are dispatched from THIS model's snapshots, so stopping it
+  // outright while SUPER+I hides the desk would also silence every "agent
+  // needs your answer" toast. Keep collecting at a quarter of the cadence
+  // while hidden if alerts are on; stop entirely only when they are off too.
   InfoModel {
     id: infoModel
-    refreshMs: 4000
+    refreshMs: dashboardSettings.dashboardVisible ? 4000 : 16000
     demoMode: root.demoMode
-    active: dashboardSettings.ready && dashboardSettings.dashboardVisible
+    active: dashboardSettings.ready && (dashboardSettings.dashboardVisible || dashboardSettings.notificationsEnabled)
   }
   InfoSettings { id: dashboardSettings }
 

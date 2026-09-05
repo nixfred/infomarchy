@@ -551,6 +551,13 @@ export function tmuxPaneForAncestors(ancestors: number[], panes: TmuxPane[], pan
   if (exact) return exact;
   return null;
 }
+// /proc/<pid>/environ was read up to three times per agent per tick (session
+// ids, tmux socket, multiplexer hosts). Read once; the value is per-process.
+const environCache = new Map<number, string>();
+function environOf(pid: number): string {
+  if (!environCache.has(pid)) environCache.set(pid, read(`/proc/${pid}/environ`) || "");
+  return environCache.get(pid)!;
+}
 // Extract only known session identifiers. /proc/*/environ can contain secrets,
 // so the collector never serializes or scans arbitrary environment values.
 export function sessionIdFrom(provider: string, cmd: string[], environ = ""): string {
@@ -623,7 +630,7 @@ function openSessionIds(pid: number, provider: string): string[] {
 function processSessionIds(pid: number, provider: string, cmd: string[]): string[] {
   const ids = new Set<string>();
   function inspectProcess(candidate: number, candidateCmd: string[]) {
-    const envOrArg = sessionIdFrom(provider, candidateCmd, read(`/proc/${candidate}/environ`) || "");
+    const envOrArg = sessionIdFrom(provider, candidateCmd, environOf(candidate));
     if (envOrArg) ids.add(envOrArg);
     for (const id of openSessionIds(candidate, provider)) ids.add(id);
   }
@@ -921,7 +928,7 @@ async function tmuxState(winByPid: Map<number, any>, pids: number[]): Promise<{ 
   const sockets = new Set<string>();
   for (const pid of pids) {
     if (!providerOf(cmdByPid.get(pid) || [])) continue;
-    const socket = tmuxSocketFromEnvironment(read(`/proc/${pid}/environ`) || "");
+    const socket = tmuxSocketFromEnvironment(environOf(pid));
     if (socket) sockets.add(socket);
     if (sockets.size >= 8) break;
   }
@@ -960,7 +967,7 @@ async function liveSessions(pids: number[]) {
     // Direct terminals share ancestry with the agent. Multiplexer servers do
     // not, so tmux is resolved through its pane and attached client below.
     let w: any = windowForProcess(p.pid, winByPid);
-    const environ = read(`/proc/${p.pid}/environ`) || "";
+    const environ = environOf(p.pid);
     const hosts = sessionHostsFromEnvironment(environ);
     const tmuxHost = hosts.find(host => host.kind === "tmux");
     const tmuxSocket = tmuxSocketFromEnvironment(environ);

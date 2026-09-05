@@ -396,6 +396,11 @@ Item {
           MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.projectFilter = "" }
         }
         Tag { text: "1–9 MODULES · J/K SESSION · ENTER FOCUS · A CLEAR"; tone: view.textFaint }
+        Tag {
+          visible: view.desk.bunChecked && !view.desk.bunAvailable
+          text: "⚠ " + view.desk.missingDependencyHint
+          tone: view.desk.red
+        }
       }
 
       RowLayout {
@@ -491,7 +496,17 @@ Item {
                 }
               }
             }
-            PlainText { visible: view.sessions.length === 0; text: view.desk.ready ? "no agents running — go start something" : "collecting…"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.body }
+            PlainText {
+              visible: view.sessions.length === 0
+              Layout.fillWidth: true
+              wrapMode: Text.Wrap
+              text: view.desk.bunChecked && !view.desk.bunAvailable ? view.desk.missingDependencyHint
+                : view.desk.ready ? "no agents running — go start something"
+                : view.desk.error ? "collector error · " + view.desk.error
+                : "collecting…"
+              color: view.desk.bunChecked && !view.desk.bunAvailable ? view.desk.red : view.textFaint
+              font.family: view.mono; font.pixelSize: Style.font.body
+            }
           }
         }
 
@@ -600,7 +615,7 @@ Item {
                   MouseArea { anchors.fill: parent; enabled: view.interactive; cursorShape: Qt.PointingHandCursor; onClicked: view.settings.toggleNotificationsEnabled() }
                 }
                 Tag {
-                  text: "QUIET 22–08 " + (view.settings.quietHoursEnabled ? "ON" : "OFF")
+                  text: "QUIET " + (view.settings.quietStartHour < 10 ? "0" : "") + view.settings.quietStartHour + "–" + (view.settings.quietEndHour < 10 ? "0" : "") + view.settings.quietEndHour + " " + (view.settings.quietHoursEnabled ? "ON" : "OFF")
                   tone: view.settings.quietHoursEnabled ? view.desk.yellow : view.textFaint
                   MouseArea { anchors.fill: parent; enabled: view.interactive; cursorShape: Qt.PointingHandCursor; onClicked: view.settings.toggleQuietHoursEnabled() }
                 }

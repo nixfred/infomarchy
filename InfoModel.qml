@@ -26,6 +26,13 @@ Item {
   property string ollamaError: ""
   property string ollamaModel: ""
   property string ollamaAction: ""
+  // Omarchy does not ship bun (verified against omarchy-base.packages and
+  // omarchy-other.packages, 2026-09-04). Without it every helper here is dead
+  // and the desk used to sit on "collecting…" forever with a one-word hint.
+  // Probe on every refresh so installing bun later heals without a restart.
+  property bool bunAvailable: true
+  property bool bunChecked: false
+  readonly property string missingDependencyHint: "bun is not installed — run:  sudo pacman -S bun   then the desk fills in on the next refresh"
   // Explicit, transient screenshot/demo data. It never persists and defaults
   // off on every shell start; normal operation always displays live data.
   property bool demoMode: false
@@ -196,7 +203,23 @@ Item {
       if (!collector.frameComplete) root.error = collector.lastStderr || (exitCode === 0 ? "collector ended without a complete snapshot" : "collector exited " + exitCode)
     }
   }
-  function refresh() { if (root.active && !collector.running) collector.running = true }
+  function refresh() {
+    if (!root.active || collector.running || bunProbe.running) return
+    // Once bun is known-good, skip the probe; re-probe every tick only while
+    // it is missing so an install is picked up without a shell restart.
+    if (root.bunChecked && root.bunAvailable) collector.running = true
+    else bunProbe.running = true
+  }
+  Process {
+    id: bunProbe
+    command: ["sh", "-c", "command -v bun >/dev/null 2>&1"]
+    onExited: function(exitCode) {
+      root.bunChecked = true
+      root.bunAvailable = exitCode === 0
+      if (root.bunAvailable) { if (!collector.running) collector.running = true }
+      else root.error = root.missingDependencyHint
+    }
+  }
 
   Timer {
     interval: root.refreshMs

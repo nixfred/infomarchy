@@ -113,13 +113,24 @@ Item {
     for (var i = 0; i < maxPins; i++) next[keys[i]] = true
     return next
   }
+  // seenChanges is keyed by repository path and was never pruned; every repo
+  // an agent ever touched stayed forever. Keep a bounded, most-recent set.
+  readonly property int maxSeenChanges: 64
+  function prunedSeen(seen) {
+    var keys = []
+    for (var key in seen) if (typeof seen[key] === "string" && seen[key]) keys.push(key)
+    var next = {}
+    // Insertion order is preserved by JS engines for string keys; newest last.
+    for (var i = Math.max(0, keys.length - maxSeenChanges); i < keys.length; i++) next[keys[i]] = seen[keys[i]]
+    return next
+  }
   function persist() {
     configFile.setText(JSON.stringify({
       version: 4,
       sections: sections,
       attentionMuted: prunedMuted(attentionMuted),
       pinnedPrompts: prunedPins(pinnedPrompts),
-      seenChanges: seenChanges,
+      seenChanges: prunedSeen(seenChanges),
       notificationEvents: notificationEvents,
       notificationProviders: notificationProviders,
       notificationsEnabled: notificationsEnabled,
