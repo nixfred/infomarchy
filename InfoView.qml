@@ -1171,9 +1171,11 @@ Item {
       GridLayout {
         visible: view.sectionEnabled("usage") || view.sectionEnabled("localAi") || view.sectionEnabled("machine")
         Layout.fillHeight: true
-        Layout.preferredWidth: Math.round(330 * Style.fontScale)
-        Layout.maximumWidth: Math.round(380 * Style.fontScale)
-        Layout.minimumWidth: Math.round(290 * Style.fontScale)
+        // A fixed column: content-driven widths let the column drift narrower
+        // whenever card text became shrinkable, and rows then overran the border.
+        Layout.preferredWidth: Math.round(370 * Style.fontScale)
+        Layout.maximumWidth: Math.round(370 * Style.fontScale)
+        Layout.minimumWidth: Math.round(370 * Style.fontScale)
         columns: 1
         rowSpacing: view.gap
         columnSpacing: 0
