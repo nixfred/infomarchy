@@ -11,9 +11,11 @@ import {
 } from "fs";
 import { randomUUID } from "crypto";
 import { join, basename } from "path";
+import { isIP } from "net";
 import { Database } from "bun:sqlite";
 import { localDayIndex, localDayStarts } from "./history-time";
-import { attentionState, parseGitStatus, repoCollisions, workspaceGroups, resourceDelta, limitForecast } from "./ai-ops";
+import { attentionSignal, parseCommitSummary, parseDiffNumstat, parseGitStatus, projectHealth, repoCollisions, workspaceGroups, resourceDelta, limitForecast } from "./ai-ops";
+import { deriveNotificationEvents } from "./notification-events";
 
 const HOME = process.env.HOME || "/root";
 const XDG_STATE = process.env.XDG_STATE_HOME || join(HOME, ".local/state");
@@ -38,6 +40,7 @@ const MAX_JSON_DEPTH = 24;
 const MAX_SNAPSHOT_BYTES = 1536 * 1024;
 const OUTPUT_FRAME_CHARS = 12 * 1024;
 const currentAgentRaw: Record<string, number> = {};
+const currentCiByRepo: Record<string, any> = {};
 
 // ---------------------------------------------------------------- helpers
 export function readRegularFileLimited(p: string, maxBytes = MAX_FILE_BYTES, maxMs = 75): string | null {
@@ -212,9 +215,9 @@ async function boundedStream(stream: ReadableStream<Uint8Array> | null, limit: n
   for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength; }
   return new TextDecoder().decode(joined);
 }
-async function run(cmd: string[], timeoutMs = 1500): Promise<string> {
+async function run(cmd: string[], timeoutMs = 1500, cwd?: string): Promise<string> {
   try {
-    const proc = Bun.spawn(cmd, { stdout: "pipe", stderr: "ignore" });
+    const proc = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "ignore" });
     const t = setTimeout(() => { try { proc.kill(); } catch {} }, timeoutMs);
     try {
       const out = await boundedStream(proc.stdout, MAX_COMMAND_BYTES);
@@ -264,7 +267,7 @@ function sanitizeForUi(value: any, depth = 0): any {
 export function parseExternalIpTrace(value: unknown): string | null {
   const line = String(value || "").split("\n").find(entry => entry.startsWith("ip="));
   const address = String(line || "").slice(3).trim();
-  return address.length >= 3 && address.length <= 64 && /^[0-9a-f:.]+$/i.test(address) && /[.:]/.test(address) ? address : null;
+  return address.length <= 64 && isIP(address) !== 0 ? address : null;
 }
 export function externalIpCacheFresh(cached: any, stamp = Date.now()): boolean {
   const checkedAt = Number(cached && cached.checkedAt);
@@ -417,6 +420,7 @@ const PROVIDERS: [string, RegExp][] = [
   ["codex", /(^|\/)codex(\.js|\.mjs)?$/],
   ["grok", /(^|\/)grok(\.js|\.mjs)?$/],
   ["gemini", /(^|\/)gemini(\.js|\.mjs)?$/],
+  ["hermes", /(^|\/)hermes(\.js|\.mjs|\.py)?$/],
   ["opencode", /(^|\/)opencode$/],
   ["aider", /(^|\/)aider$/],
   ["copilot", /(^|\/)copilot$/],
@@ -464,6 +468,88 @@ function envValue(text: string | null, key: string): string {
   const prefix = key + "=";
   for (const entry of text.split("\0")) if (entry.startsWith(prefix)) return entry.slice(prefix.length);
   return "";
+}
+function contextValue(value: unknown, limit = 80): string {
+  return uiString(value, limit).replace(/\s+/g, " ").trim();
+}
+function contextId(value: unknown): string {
+  const id = String(value || "").trim();
+  return /^[A-Za-z0-9%][A-Za-z0-9_.:%-]{0,127}$/.test(id) ? id : "";
+}
+export type SessionHost = {
+  kind: "herdr" | "boomux" | "tmux";
+  label: string;
+  workspace?: string;
+  workspaceId?: string;
+  shell?: string;
+  shellId?: string;
+  runId?: string;
+  tabId?: string;
+  paneId?: string;
+  session?: string;
+  window?: string;
+  pane?: string;
+  attached?: boolean;
+};
+// Extract only documented multiplexer identity variables. Never serialize or
+// search the rest of /proc/<pid>/environ, which may contain credentials.
+export function sessionHostsFromEnvironment(environ = ""): SessionHost[] {
+  const hosts: SessionHost[] = [];
+  const herdrPane = contextId(envValue(environ, "HERDR_PANE_ID"));
+  const herdrWorkspace = contextId(envValue(environ, "HERDR_WORKSPACE_ID"));
+  const herdrTab = contextId(envValue(environ, "HERDR_TAB_ID"));
+  if (envValue(environ, "HERDR_ENV") === "1" && (herdrPane || herdrWorkspace || herdrTab)) {
+    const parts = [herdrWorkspace, herdrTab, herdrPane].filter(Boolean);
+    hosts.push({ kind: "herdr", label: "Herdr " + parts.join(" / "), workspaceId: herdrWorkspace, tabId: herdrTab, paneId: herdrPane });
+  }
+  const boomuxShellId = contextId(envValue(environ, "BOOMUX_SHELL_ID"));
+  if (boomuxShellId) {
+    const workspace = contextValue(envValue(environ, "BOOMUX_WORKSPACE"), 64);
+    const shell = contextValue(envValue(environ, "BOOMUX_SHELL_NAME"), 64);
+    const workspaceId = contextId(envValue(environ, "BOOMUX_WORKSPACE_ID"));
+    const runId = contextId(envValue(environ, "BOOMUX_RUN_ID"));
+    const friendly = [workspace, shell].filter(Boolean).join(" / ");
+    hosts.push({
+      kind: "boomux", label: "Boomux " + (friendly || ("shell " + boomuxShellId.slice(0, 8))),
+      workspace, workspaceId, shell, shellId: boomuxShellId, runId,
+    });
+  }
+  const tmuxPane = contextId(envValue(environ, "TMUX_PANE"));
+  if (envValue(environ, "TMUX") || tmuxPane) hosts.push({ kind: "tmux", label: "tmux", paneId: tmuxPane });
+  return hosts;
+}
+
+export function tmuxSocketFromEnvironment(environ = ""): string {
+  const socket = String(envValue(environ, "TMUX") || "").split(",")[0];
+  return socket.length > 0 && socket.length <= 256 && socket.startsWith("/") && !/[\u0000-\u001f\u007f]/.test(socket) ? socket : "";
+}
+export type TmuxPane = { pid: number; paneId: string; session: string; window: string; pane: string; cwd: string; active: boolean; server: string };
+export type TmuxClient = { pid: number; session: string; server: string };
+export function parseTmuxPanes(text: string, server = ""): TmuxPane[] {
+  const result: TmuxPane[] = [];
+  for (const line of String(text || "").split("\n").slice(0, MAX_COLLECTION_ITEMS)) {
+    const [rawPid, rawPaneId, rawSession, rawWindow, rawPane, rawCwd, rawActive] = line.split("\t");
+    const pid = Number(rawPid), paneId = contextId(rawPaneId), session = contextValue(rawSession, 64);
+    if (!Number.isInteger(pid) || pid < 2 || !paneId || !session) continue;
+    result.push({ pid, paneId, session, window: contextValue(rawWindow, 16), pane: contextValue(rawPane, 16), cwd: contextValue(rawCwd, 256), active: rawActive === "1", server });
+  }
+  return result;
+}
+export function parseTmuxClients(text: string, server = ""): TmuxClient[] {
+  const result: TmuxClient[] = [];
+  for (const line of String(text || "").split("\n").slice(0, MAX_COLLECTION_ITEMS)) {
+    const [rawPid, rawSession] = line.split("\t"), pid = Number(rawPid), session = contextValue(rawSession, 64);
+    if (Number.isInteger(pid) && pid > 1 && session) result.push({ pid, session, server });
+  }
+  return result;
+}
+export function tmuxPaneForAncestors(ancestors: number[], panes: TmuxPane[], paneId = "", server = ""): TmuxPane | null {
+  const candidates = server ? panes.filter(pane => pane.server === server) : panes;
+  const byPid = new Map(candidates.map(pane => [pane.pid, pane]));
+  for (const pid of ancestors) if (byPid.has(pid)) return byPid.get(pid)!;
+  const exact = paneId ? candidates.find(pane => pane.paneId === paneId) : null;
+  if (exact) return exact;
+  return null;
 }
 // Extract only known session identifiers. /proc/*/environ can contain secrets,
 // so the collector never serializes or scans arbitrary environment values.
@@ -648,6 +734,7 @@ export function topicCacheHit(cached: any, fingerprint: string, model: string): 
   return cached && cached.v === TOPIC_CACHE_VERSION && cached.fingerprint === fingerprint && cached.model === model
     && typeof cached.summary === "string" && cached.summary ? cached.summary : "";
 }
+
 export function topicRetryBlocked(cached: any, fingerprint: string, model: string, stamp: number): boolean {
   if (!cached || cached.v !== TOPIC_CACHE_VERSION || cached.fingerprint !== fingerprint || cached.model !== model) return false;
   const failedAt = Number(cached.failedAt || 0);
@@ -730,13 +817,131 @@ export function inferSessionIdsFromRecent(sessions: any[], recentEntries: any[])
   }
 }
 
+async function githubCiState(cwd: string): Promise<any> {
+  const previous = prev.ciByRepo && typeof prev.ciByRepo === "object" ? prev.ciByRepo[cwd] : null;
+  const checkedAt = Number(previous?.checkedAt || 0);
+  if (checkedAt > 0 && now >= checkedAt && now - checkedAt < 10 * 60 * 1000) {
+    currentCiByRepo[cwd] = previous;
+    return previous;
+  }
+  if (!Bun.which("gh")) {
+    const unavailable = previous ? { ...previous, checkedAt: now, stale: true } : { state: "unavailable", checkedAt: now };
+    currentCiByRepo[cwd] = unavailable;
+    return unavailable;
+  }
+  const output = await run(["gh", "run", "list", "--limit", "1", "--json", "status,conclusion,name,headSha,updatedAt"], 1800, cwd);
+  const rows = parseJsonBounded(output, 256, 10);
+  const latest = Array.isArray(rows) && rows.length && rows[0] && typeof rows[0] === "object" ? rows[0] : null;
+  const state = String(latest?.conclusion || latest?.status || "").toLowerCase();
+  const result = latest && /^[a-z_]+$/.test(state) ? {
+    state,
+    name: uiString(latest.name, 80),
+    headSha: /^[0-9a-f]{7,64}$/i.test(String(latest.headSha || "")) ? String(latest.headSha) : "",
+    updatedAt: uiString(latest.updatedAt, 40),
+    checkedAt: now,
+    stale: false,
+  } : previous ? { ...previous, checkedAt: now, stale: true } : { state: "unavailable", checkedAt: now };
+  currentCiByRepo[cwd] = result;
+  return result;
+}
+
 async function repoState(cwd: string) {
-  if (!cwd) return { root: "", state: null };
-  const [root, status] = await Promise.all([
+  if (!cwd) return { root: "", state: null, changes: null, ci: null };
+  const [root, status, diff, commitLine, ci] = await Promise.all([
     run(["git", "-C", cwd, "rev-parse", "--show-toplevel"], 700),
     run(["git", "-C", cwd, "status", "--porcelain=v2", "--branch"], 900),
+    run(["git", "-C", cwd, "diff", "--numstat", "HEAD", "--"], 900),
+    run(["git", "-C", cwd, "log", "-1", "--format=%H%x09%h%x09%ct%x09%s"], 700),
+    githubCiState(cwd),
   ]);
-  return { root: root.trim(), state: parseGitStatus(status) };
+  const state = parseGitStatus(status), stats = parseDiffNumstat(diff), commit = parseCommitSummary(commitLine);
+  const fingerprint = String(Bun.hash(JSON.stringify([commit?.hash || "", status, diff])));
+  return {
+    root: root.trim(), state,
+    changes: state || commit ? {
+      fingerprint,
+      count: state?.dirty || 0,
+      staged: state?.staged || 0,
+      untracked: state?.untracked || 0,
+      files: state?.files || [],
+      testFiles: (state?.files || []).filter(file => /(^|\/)(test|tests|spec|specs)(\/|\.)|\.(test|spec)\./i.test(file)).length,
+      additions: stats.additions,
+      deletions: stats.deletions,
+      head: commit?.hash || "",
+      headShort: commit?.short || "",
+      commitSubject: commit?.subject || "",
+      committedAt: commit?.committedAt || 0,
+    } : null,
+    ci,
+  };
+}
+
+function processAncestors(pid: number): number[] {
+  const result: number[] = [], seen = new Set<number>();
+  let current = info(pid);
+  while (current && current.pid > 1 && !seen.has(current.pid)) {
+    seen.add(current.pid); result.push(current.pid); current = info(current.ppid);
+  }
+  return result;
+}
+function windowForProcess(pid: number, winByPid: Map<number, any>): any {
+  for (const ancestor of processAncestors(pid)) if (winByPid.has(ancestor)) return winByPid.get(ancestor);
+  return null;
+}
+export function sessionPresentation(window: any, cmd: string[]): { window: any; args: string } {
+  const argv = (cmd || []).slice(1, 4);
+  const sanitizedArgs: string[] = [];
+  for (let index = 0; index < argv.length; index++) {
+    const arg = String(argv[index] || "");
+    const assignedCredential = arg.match(/^(--(?:api[-_]?key|access[-_]?token|auth[-_]?token|token|password|passwd|secret))=/i);
+    if (assignedCredential) {
+      sanitizedArgs.push(`${assignedCredential[1]}=[redacted]`);
+      continue;
+    }
+    sanitizedArgs.push(safePrompt(arg));
+    if (/^--(?:api[-_]?key|access[-_]?token|auth[-_]?token|token|password|passwd|secret)$/i.test(arg) && index + 1 < argv.length) {
+      sanitizedArgs.push("[redacted]");
+      index++;
+    }
+  }
+  return {
+    window: window ? {
+      address: window.address,
+      title: safePrompt(window.title),
+      class: uiString(window.class, 128),
+      workspace: window.workspace?.id ?? null,
+    } : null,
+    args: sanitizedArgs.join(" ").slice(0, 60),
+  };
+}
+async function tmuxState(winByPid: Map<number, any>, pids: number[]): Promise<{ panes: TmuxPane[]; windows: Map<string, any> }> {
+  const windows = new Map<string, any>();
+  const tmuxRunning = [...cmdByPid.values()].some(cmd => cmd.some(arg => /(^|\/)tmux$|^tmux: server$/.test(arg)));
+  if (!tmuxRunning || !Bun.which("tmux")) return { panes: [], windows };
+  const sockets = new Set<string>();
+  for (const pid of pids) {
+    if (!providerOf(cmdByPid.get(pid) || [])) continue;
+    const socket = tmuxSocketFromEnvironment(read(`/proc/${pid}/environ`) || "");
+    if (socket) sockets.add(socket);
+    if (sockets.size >= 8) break;
+  }
+  if (!sockets.size) sockets.add("");
+  const formatPane = "#{pane_pid}\t#{pane_id}\t#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_current_path}\t#{pane_active}";
+  const formatClient = "#{client_pid}\t#{session_name}";
+  const panes: TmuxPane[] = [];
+  for (const socket of [...sockets]) {
+    const prefix = socket ? ["tmux", "-S", socket] : ["tmux"];
+    const [paneText, clientText] = await Promise.all([
+      run([...prefix, "list-panes", "-a", "-F", formatPane], 650),
+      run([...prefix, "list-clients", "-F", formatClient], 650),
+    ]);
+    panes.push(...parseTmuxPanes(paneText, socket));
+    for (const client of parseTmuxClients(clientText, socket)) {
+      const window = windowForProcess(client.pid, winByPid), key = client.server + "\0" + client.session;
+      if (window && !windows.has(key)) windows.set(key, window);
+    }
+  }
+  return { panes, windows };
 }
 
 async function liveSessions(pids: number[]) {
@@ -744,7 +949,7 @@ async function liveSessions(pids: number[]) {
   try { clients = parseJsonBounded(await run(["hyprctl", "clients", "-j"], 1000), 50_000, 16) || []; } catch {}
   const winByPid = new Map<number, any>(clients.map((c: any) => [c.pid, c]));
   const sessions: any[] = [];
-  const gpuByPid = await gpuMemoryByPid();
+  const [gpuByPid, tmux] = await Promise.all([gpuMemoryByPid(), tmuxState(winByPid, pids)]);
   for (const pid of pids) {
     const prov = providerOf(cmdByPid.get(pid) || []); if (!prov) continue;
     const p = info(pid); if (!p) continue;
@@ -752,19 +957,35 @@ async function liveSessions(pids: number[]) {
     let anc = info(p.ppid), child = false;
     while (anc && anc.pid > 1) { if (providerOf(anc.cmd)) { child = true; break; } anc = info(anc.ppid); }
     if (child) continue;
-    // find the hyprland window hosting it by walking up the parent chain
-    let w: any = null, q: Proc | null = p;
-    while (q && q.pid > 1) { if (winByPid.has(q.pid)) { w = winByPid.get(q.pid); break; } q = info(q.ppid); }
+    // Direct terminals share ancestry with the agent. Multiplexer servers do
+    // not, so tmux is resolved through its pane and attached client below.
+    let w: any = windowForProcess(p.pid, winByPid);
+    const environ = read(`/proc/${p.pid}/environ`) || "";
+    const hosts = sessionHostsFromEnvironment(environ);
+    const tmuxHost = hosts.find(host => host.kind === "tmux");
+    const tmuxSocket = tmuxSocketFromEnvironment(environ);
+    const pane = tmuxPaneForAncestors(processAncestors(p.pid), tmux.panes, tmuxHost?.paneId || "", tmuxSocket);
+    if (pane) {
+      const attachedWindow = tmux.windows.get(pane.server + "\0" + pane.session) || null;
+      if (!tmuxHost) hosts.push({ kind: "tmux", label: "tmux" });
+      const host = hosts.find(item => item.kind === "tmux")!;
+      host.session = pane.session; host.window = pane.window; host.pane = pane.pane; host.paneId = pane.paneId;
+      host.attached = !!attachedWindow;
+      host.label = "tmux " + pane.session + ":" + pane.window + "." + pane.pane;
+      if (!w && attachedWindow) w = attachedWindow;
+    }
     const sessionIds = processSessionIds(p.pid, prov, p.cmd);
     const sample = processTreeSample(p.pid);
     currentAgentRaw[String(p.pid)] = sample.ticks;
+    const presentation = sessionPresentation(w, p.cmd);
     sessions.push({
       provider: prov, pid: p.pid, cwd: shortPath(p.cwd), project: basename(p.cwd || "") || "/",
       _cwd: p.cwd,
       startedAt: p.start, uptimeSec: Math.max(0, (now - p.start) / 1000),
       session: sessionIds[0] || "", sessionIds,
-      window: w ? { address: w.address, title: w.title, class: w.class, workspace: w.workspace?.id ?? null } : null,
-      args: p.cmd.slice(1, 4).join(" ").slice(0, 60),
+      hosts,
+      window: presentation.window,
+      args: presentation.args,
       resources: {
         cpuPct: resourceDelta(sample.ticks, prev.agents?.[String(p.pid)], dt),
         rss: sample.rss,
@@ -790,13 +1011,19 @@ async function liveSessions(pids: number[]) {
     if (!s.busy && s.window && titleLooksBusy(s.window.title) && s.provider === "grok")
       s.window = { ...s.window, title: "" };
   }
-  const repos = new Map<string, Promise<{ root: string; state: any }>>();
+  const repos = new Map<string, Promise<{ root: string; state: any; changes: any; ci: any }>>();
   for (const session of sessions) if (session._cwd && !repos.has(session._cwd)) repos.set(session._cwd, repoState(session._cwd));
   await Promise.all(sessions.map(async session => {
     const repo = session._cwd ? await repos.get(session._cwd) : null;
     session.repoRoot = repo?.root ? shortPath(repo.root) : "";
     session.git = repo?.state || null;
-    session.attention = attentionState(session.window?.title, session.git?.conflicts || 0);
+    session.changes = repo?.changes || null;
+    session.ci = repo?.ci || null;
+    const signal = attentionSignal(session.window?.title, session.git?.conflicts || 0);
+    session.attention = signal?.state || "";
+    session.attentionReason = signal?.reason || "";
+    session.attentionAction = signal?.action || "";
+    session.attentionDetail = signal?.detail || "";
     delete session._cwd;
   }));
   sessions.sort((a, b) => b.startedAt - a.startedAt);
@@ -804,13 +1031,16 @@ async function liveSessions(pids: number[]) {
 }
 
 // ---------------------------------------------------------------- AI history
-function safePrompt(value: unknown): string {
+export function safePrompt(value: unknown): string {
   return String(value || "")
     // Common token formats. Keep a small prefix so the redaction is still recognizable.
     .replace(/\b(sk-(?:proj-|ant-)?|gh[opusr]_)[A-Za-z0-9_-]{12,}\b/gi, "$1[redacted]")
     .replace(/\b(ntn_)[A-Za-z0-9_-]{12,}\b/gi, "$1[redacted]")
-    // Credentials pasted as assignments or natural-language "token/key: value" pairs.
-    .replace(/\b(api[_ -]?key|access[_ -]?token|auth[_ -]?token|password|passwd|secret)\b(\s*(?:is|=|:)\s*)["']?[^\s"']{8,}/gi, "$1$2[redacted]")
+    .replace(/\b(authorization\s*:\s*(?:bearer|basic)\s+)[^\s"']+/gi, "$1[redacted]")
+    // Credential CLI flags, with either a separate value or --flag=value.
+    .replace(/(--(?:api[-_]?key|access[-_]?token|auth[-_]?token|token|password|passwd|secret))\b(\s+|=)(?:"[^"]*"|'[^']*'|[^\s"']+)/gi, "$1$2[redacted]")
+    // Credentials pasted as explicit assignments or natural-language "token/key: value" pairs.
+    .replace(/\b(api[_ -]?key|access[_ -]?token|auth[_ -]?token|password|passwd|secret)\b(\s*(?:is|=|:)\s*)(?:"[^"]{8,}"|'[^']{8,}'|[^\s"']{8,})/gi, "$1$2[redacted]")
     .slice(0, 140);
 }
 function heatmapInit() {
@@ -985,7 +1215,14 @@ async function ollamaState() {
       .map((model: any) => ({ name: uiString(model.name, 256), vram: finiteSize(model.size_vram),
         size: finiteSize(model.size), until: uiString(model.expires_at, 64) })),
     models: models.filter((model: any) => model && typeof model === "object")
-      .map((model: any) => uiString(model.name, 256)).filter(Boolean),
+      .map((model: any) => ({
+        name: uiString(model.name || model.model, 256),
+        size: finiteSize(model.size),
+        modifiedAt: uiString(model.modified_at, 64),
+        family: uiString(model.details?.family, 64),
+        parameterSize: uiString(model.details?.parameter_size, 32),
+        quantization: uiString(model.details?.quantization_level, 32),
+      })).filter((model: any) => !!model.name),
     modelCount: models.length,
   };
 }
@@ -1042,7 +1279,11 @@ function demoSnapshot(stamp = Date.now()) {
       topic: "Hardening atomic state persistence", topicAt: stamp - 90_000,
       window: { address: "0xd001", title: "Implementing bounded snapshot transport", class: "com.mitchellh.ghostty", workspace: 2 },
       resources: { cpuPct: 18.4, rss: 912_261_120, processes: 7, gpuMemory: null },
-      repoRoot: "~/Code/atlas", git: { branch: "release/dashboard", dirty: 4, ahead: 2, behind: 0, conflicts: 0 }, attention: null,
+      repoRoot: "~/Code/atlas", git: { branch: "release/dashboard", dirty: 4, staged: 1, untracked: 1, files: ["collector.ts", "InfoView.qml", "tests/dashboard.test.ts", "README.md"], ahead: 2, behind: 0, conflicts: 0 }, attention: "",
+      attentionReason: "", attentionAction: "", attentionDetail: "",
+      hosts: [{ kind: "tmux", label: "tmux build:2.0", session: "build", window: "2", pane: "0", paneId: "%4", attached: true }],
+      changes: { fingerprint: "atlas-demo-2", count: 4, staged: 1, untracked: 1, files: ["collector.ts", "InfoView.qml", "tests/dashboard.test.ts", "README.md"], testFiles: 1, additions: 186, deletions: 24, head: "a11a5d00", headShort: "a11a5d0", commitSubject: "feat: add operations intelligence", committedAt: stamp - 12 * 60_000 },
+      ci: { state: "in_progress", name: "test", headSha: "a11a5d00", updatedAt: new Date(stamp - 2 * 60_000).toISOString(), checkedAt: stamp },
     },
     {
       provider: "claude", pid: 42463, cwd: "~/Code/orbit", project: "orbit", startedAt: stamp - 74 * 60_000,
@@ -1050,7 +1291,11 @@ function demoSnapshot(stamp = Date.now()) {
       topic: "Reviewing plugin submission checks", topicAt: stamp - 4 * 60_000,
       window: { address: "0xd002", title: "Waiting for marketplace review", class: "kitty", workspace: 4 },
       resources: { cpuPct: 2.1, rss: 604_241_920, processes: 5, gpuMemory: null },
-      repoRoot: "~/Code/orbit", git: { branch: "main", dirty: 0, ahead: 0, behind: 0, conflicts: 0 }, attention: "waiting",
+      repoRoot: "~/Code/orbit", git: { branch: "main", dirty: 0, staged: 0, untracked: 0, files: [], ahead: 0, behind: 0, conflicts: 0 }, attention: "waiting",
+      attentionReason: "waiting for your permission", attentionAction: "answer", attentionDetail: "Waiting for marketplace review approval",
+      hosts: [{ kind: "boomux", label: "Boomux release / reviewer", workspace: "release", shell: "reviewer", shellId: "demo-boomux-shell", runId: "demo-boomux-run" }],
+      changes: { fingerprint: "orbit-demo-1", count: 0, staged: 0, untracked: 0, files: [], testFiles: 0, additions: 0, deletions: 0, head: "0b17cafe", headShort: "0b17caf", commitSubject: "security: pass marketplace review", committedAt: stamp - 48 * 60_000 },
+      ci: { state: "success", name: "validate", headSha: "0b17cafe", updatedAt: new Date(stamp - 44 * 60_000).toISOString(), checkedAt: stamp },
     },
     {
       provider: "opencode", pid: 42511, cwd: "~/Code/beacon", project: "beacon", startedAt: stamp - 16 * 60_000,
@@ -1058,7 +1303,11 @@ function demoSnapshot(stamp = Date.now()) {
       topic: "Building interactive model controls", topicAt: stamp - 45_000,
       window: { address: "0xd003", title: "Local AI model controls", class: "Alacritty", workspace: 6 },
       resources: { cpuPct: 9.7, rss: 486_539_264, processes: 4, gpuMemory: 1_288_490_188 },
-      repoRoot: "~/Code/beacon", git: { branch: "feat/local-ai", dirty: 2, ahead: 1, behind: 0, conflicts: 0 }, attention: null,
+      repoRoot: "~/Code/beacon", git: { branch: "feat/local-ai", dirty: 2, staged: 0, untracked: 1, files: ["LocalAi.qml", "local-ai.test.ts"], ahead: 1, behind: 0, conflicts: 0 }, attention: "",
+      attentionReason: "", attentionAction: "", attentionDetail: "",
+      hosts: [{ kind: "herdr", label: "Herdr w2 / w2:t3 / w2:p7", workspaceId: "w2", tabId: "w2:t3", paneId: "w2:p7" }],
+      changes: { fingerprint: "beacon-demo-3", count: 2, staged: 0, untracked: 1, files: ["LocalAi.qml", "local-ai.test.ts"], testFiles: 1, additions: 94, deletions: 8, head: "bea00ace", headShort: "bea00ac", commitSubject: "feat: control local models", committedAt: stamp - 35 * 60_000 },
+      ci: { state: "failure", name: "qml-check", headSha: "bea00ace", updatedAt: new Date(stamp - 8 * 60_000).toISOString(), checkedAt: stamp },
     },
   ];
   const promptSeeds = [
@@ -1091,12 +1340,15 @@ function demoSnapshot(stamp = Date.now()) {
       temp: 52, uptime: 186_300, externalIp: "203.0.113.42",
     },
     ai: {
-      sessions, workspaces: workspaceGroups(sessions), attention: [sessions[1]], collisions: [],
+      sessions, projects: projectHealth(sessions), workspaces: workspaceGroups(sessions), attention: [sessions[1]], collisions: [],
       counts: { claude: { today: 18, week: 96, total: 640 }, codex: { today: 27, week: 144, total: 1102 }, opencode: { today: 11, week: 51, total: 214 } },
       providers: {
         claude: { present: true, prompts: 640 }, codex: { present: true, prompts: 1102, threadCount: 37 },
         grok: { present: true, sessions: 9 }, opencode: { present: true, prompts: 214, sessions: 12 },
-        ollama: { present: true, up: true, loaded: [{ name: "qwen3:8b", vram: 6_442_450_944 }], models: ["qwen3:8b", "gemma3:4b"], modelCount: 2 },
+        ollama: { present: true, up: true, loaded: [{ name: "qwen3:8b", vram: 6_442_450_944 }], models: [
+          { name: "qwen3:8b", size: 5_200_000_000, parameterSize: "8.2B", quantization: "Q4_K_M" },
+          { name: "gemma3:4b", size: 3_300_000_000, parameterSize: "4.3B", quantization: "Q4_K_M" },
+        ], modelCount: 2 },
       },
       usage: {
         claude: { name: "Claude", ready: true, tierLabel: "Max", todayPrompts: 18, todayTotalTokens: 184_000, limits: [{ label: "SESSION", percent: 0.46, resetsAt: new Date(stamp + 2.1 * 3600_000).toISOString() }, { label: "WEEKLY", percent: 0.61, resetsAt: new Date(stamp + 3.4 * 86400_000).toISOString() }] },
@@ -1122,6 +1374,7 @@ async function runCollector() {
   inferSessionIdsFromRecent(sessions, recent);
   attachSessionTopics(sessions, recent);
   const topicSummaries = await refineSessionTopics(sessions, recent, ollama);
+  const notificationState = deriveNotificationEvents(prev.sessionNotifications, sessions);
   const linkedRecent = linkRecentToLive(recent, sessions);
   const weekRecentCount = linkedRecent.filter(entry => entry.activityCell >= 0).length;
   // Default view still shows 40. Keep enough week rows in the snapshot for
@@ -1140,8 +1393,10 @@ async function runCollector() {
     },
     ai: {
       sessions,
+      projects: projectHealth(sessions),
       workspaces: workspaceGroups(sessions),
       attention: sessions.filter((s: any) => s.attention),
+      events: notificationState.events,
       collisions: repoCollisions(sessions),
       counts, providers: { claude, codex, grok, opencode, ollama }, usage: agentsUsage(),
       heatmap: { start: start7, days: heatDays, cells: heat.map(c => [c.n, c.p]) },
@@ -1157,6 +1412,8 @@ async function runCollector() {
       agents: currentAgentRaw,
       externalIp: externalIpS,
       topicSummaries,
+      ciByRepo: currentCiByRepo,
+      sessionNotifications: notificationState.tracked,
     }));
   } catch {}
   process.stdout.write(frameSnapshot(snapshot));

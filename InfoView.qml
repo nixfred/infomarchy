@@ -21,6 +21,8 @@ Item {
   property bool previewsEnabled: false
   property int keyboardSessionIndex: -1
   property string promptSearch: ""
+  property string expandedChangeKey: ""
+  property string projectFilter: ""
   signal navigated()
 
   function navigateTo(address) {
@@ -35,17 +37,35 @@ Item {
   readonly property var snap: (desk && desk.snap) ? desk.snap : ({})
   readonly property var machine: snap.machine || ({})
   readonly property var ai: snap.ai || ({})
-  readonly property var sessions: ai.sessions || []
+  readonly property var allSessions: ai.sessions || []
+  readonly property var projects: ai.projects || []
+  readonly property var sessions: !projectFilter ? allSessions : allSessions.filter(function(item) { return projectMatches(item) })
+  readonly property var activeNotificationProviders: {
+    var result = []
+    for (var i = 0; i < allSessions.length; i++) {
+      var provider = String(allSessions[i].provider || "").toLowerCase()
+      if (provider && result.indexOf(provider) < 0) result.push(provider)
+    }
+    return result
+  }
+  readonly property var changeProjects: {
+    var result = projects.filter(function(item) { return !!item.changes && projectMatches(item) })
+    return result.sort(function(a, b) {
+      return Number(changeUnseen(b)) - Number(changeUnseen(a)) || Number((b.changes || {}).committedAt || 0) - Number((a.changes || {}).committedAt || 0)
+    })
+  }
   readonly property var attention: ai.attention || []
   readonly property var visibleAttention: {
     var source = attention, stamp = Number(snap.ts || Date.now())
-    return source.filter(function(item) { return settings.attentionVisible(attentionKey(item), stamp) })
+    return source.filter(function(item) { return projectMatches(item) && settings.attentionVisible(attentionKey(item), stamp) })
   }
   readonly property var collisions: ai.collisions || []
+  readonly property var visibleCollisions: collisions.filter(function(item) { return projectMatches(item) })
   readonly property var usage: (ai && ai.usage) ? ai.usage : ({})
   readonly property bool activityFilterActive: sectionEnabled("activity") && (activityCellFilter >= 0 || activityProviderFilter !== "")
   readonly property var visibleRecentTasks: {
     var rows = ai.recent || []
+    if (projectFilter) rows = rows.filter(function(row) { return projectMatches(row) })
     var chosen = !activityFilterActive ? rows : rows.filter(function(row) {
       return (activityCellFilter < 0 || Number(row.activityCell) === activityCellFilter) &&
         (!activityProviderFilter || String(row.provider) === activityProviderFilter)
@@ -73,8 +93,52 @@ Item {
   component PlainText: Text { textFormat: Text.PlainText }
 
   function sectionEnabled(id) { return view.settings.sectionEnabled(id) }
-  function attentionKey(item) { return String(item.provider || "") + ":" + String(item.pid || "") + ":" + String(item.attention || "") }
+  function attentionKey(item) { return String(item.provider || "") + ":" + String(item.pid || "") + ":" + String(item.attention || "") + ":" + String(item.attentionReason || "") }
   function promptKey(item) { return String(item.provider || "") + ":" + String(item.session || "") + ":" + String(item.ts || "") }
+  function projectKey(item) { return String(item.repoRoot || item.repo || item.cwd || item.project || "") }
+  function projectMatches(item) { return !projectFilter || projectKey(item) === projectFilter }
+  function projectTone(item) {
+    return item.status === "blocked" ? view.desk.red : item.status === "running" ? view.desk.cyan : item.status === "behind" || item.status === "changed" ? view.desk.yellow : view.desk.green
+  }
+  function projectStatusLabel(item) {
+    return item.status === "blocked" ? "BLOCKED" : item.status === "running" ? "ACTIVE" : item.status === "behind" ? "BEHIND" : item.status === "changed" ? "CHANGED" : "HEALTHY"
+  }
+  function ciLabel(item) {
+    var ci = item.ci || {}, state = String(ci.state || "unavailable")
+    return state === "unavailable" ? "CI —" : "CI " + state.replace(/_/g, " ").toUpperCase() + (ci.stale ? " · STALE" : "")
+  }
+  function changeUnseen(item) { var change = item.changes || {}; return !!change.fingerprint && !settings.changeSeen(projectKey(item), change.fingerprint) }
+  function sessionHostLabel(item) {
+    return (item.hosts || []).map(function(host) { return String(host.label || host.kind || "") }).filter(Boolean).join(" · ")
+  }
+  function sessionHostDetail(item) {
+    return (item.hosts || []).map(function(host) {
+      if (host.kind === "boomux") return "Boomux shell " + String(host.shellId || "—").slice(0, 8) + " · run " + String(host.runId || "—").slice(0, 8)
+      if (host.kind === "herdr") return "Herdr " + [host.workspaceId, host.tabId, host.paneId].filter(Boolean).join(" / ")
+      if (host.kind === "tmux") return "tmux " + String(host.session || "?") + ":" + String(host.window || "?") + "." + String(host.pane || "?") + " · pane " + String(host.paneId || "—")
+      return String(host.label || host.kind || "")
+    }).filter(Boolean).join("   ·   ")
+  }
+  function changeSummary(item) {
+    var change = item.changes || {}, parts = []
+    if (change.count) parts.push(change.count + " file" + (change.count === 1 ? "" : "s"))
+    if (change.staged) parts.push(change.staged + " staged")
+    if (change.untracked) parts.push(change.untracked + " new")
+    if (change.testFiles) parts.push(change.testFiles + " test")
+    if (change.additions || change.deletions) parts.push("+" + (change.additions || 0) + "/−" + (change.deletions || 0))
+    return parts.length ? parts.join(" · ") : "clean at " + (change.headShort || "HEAD")
+  }
+  function attentionPrimaryLabel(item) {
+    if (!(item.window && item.window.address) && view.desk.canResume(item.provider, item.session)) return "RESUME"
+    if (!(item.window && item.window.address) && view.desk.canOpenProject(item.cwd)) return "OPEN PROJECT"
+    return item.attentionAction === "answer" ? "ANSWER" : item.attentionAction === "review" ? "REVIEW" : item.attentionAction === "resolve" ? "RESOLVE" : "FOCUS"
+  }
+  function activateAttention(item) {
+    if (item.window && item.window.address) { view.navigateTo(item.window.address); return true }
+    if (view.desk.canResume(item.provider, item.session)) return view.desk.resumeSession(item.provider, item.session, item.cwd)
+    if (view.desk.canOpenProject(item.cwd)) return view.desk.openProject(item.cwd)
+    return false
+  }
   function usageWindowMs(label) { return /week|7-day/i.test(String(label || "")) ? 7 * 86400000 : /session|5-hour/i.test(String(label || "")) ? 5 * 3600000 : 0 }
   // The collector ships forecast from ai-ops.limitForecast (tested). The local
   // math stays only as a fallback for snapshots from an older collector.
@@ -126,9 +190,12 @@ Item {
     property string title: ""
     property string hint: ""
     property string moveId: ""
+    property string moveGroup: "right"
+    property string dragAxis: "vertical"
     property bool draggable: false
     property bool dragging: false
-    property real dragOffset: 0
+    property real dragOffsetX: 0
+    property real dragOffsetY: 0
     property bool glow: false
     property color glowTone: view.desk.yellow
     default property alias content: body.data
@@ -137,8 +204,12 @@ Item {
     border.width: 1
     radius: view.radius
     z: card.dragging ? 50 : 0
-    transform: Translate { y: card.dragOffset }
-    Behavior on dragOffset {
+    transform: Translate { x: card.dragOffsetX; y: card.dragOffsetY }
+    Behavior on dragOffsetX {
+      enabled: !card.dragging
+      NumberAnimation { duration: 170; easing.type: Easing.OutBack }
+    }
+    Behavior on dragOffsetY {
       enabled: !card.dragging
       NumberAnimation { duration: 170; easing.type: Easing.OutBack }
     }
@@ -184,25 +255,35 @@ Item {
           enabled: view.interactive && card.draggable
           hoverEnabled: true
           cursorShape: enabled ? (pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor) : Qt.ArrowCursor
+          property real pressViewX: 0
           property real pressViewY: 0
           onPressed: function(mouse) {
-            pressViewY = mapToItem(view, mouse.x, mouse.y).y
+            var pointer = mapToItem(view, mouse.x, mouse.y)
+            pressViewX = pointer.x
+            pressViewY = pointer.y
             card.dragging = true
             mouse.accepted = true
           }
           onPositionChanged: function(mouse) {
             if (!pressed) return
-            var pointerY = mapToItem(view, mouse.x, mouse.y).y
-            card.dragOffset = Math.max(-card.height * 0.7, Math.min(card.height * 0.7, pointerY - pressViewY))
+            var pointer = mapToItem(view, mouse.x, mouse.y)
+            if (card.dragAxis === "horizontal") card.dragOffsetX = Math.max(-card.width * 0.7, Math.min(card.width * 0.7, pointer.x - pressViewX))
+            else card.dragOffsetY = Math.max(-card.height * 0.7, Math.min(card.height * 0.7, pointer.y - pressViewY))
           }
           onReleased: function(mouse) {
-            var threshold = Math.min(card.height * 0.24, Math.round(46 * Style.fontScale))
-            if (Math.abs(card.dragOffset) >= threshold) view.settings.moveRight(card.moveId, card.dragOffset > 0 ? 1 : -1)
+            var offset = card.dragAxis === "horizontal" ? card.dragOffsetX : card.dragOffsetY
+            var extent = card.dragAxis === "horizontal" ? card.width : card.height
+            var threshold = Math.min(extent * 0.24, Math.round(46 * Style.fontScale))
+            if (Math.abs(offset) >= threshold) {
+              if (card.moveGroup === "ops") view.settings.moveOps(card.moveId, offset > 0 ? 1 : -1)
+              else view.settings.moveRight(card.moveId, offset > 0 ? 1 : -1)
+            }
             card.dragging = false
-            card.dragOffset = 0
+            card.dragOffsetX = 0
+            card.dragOffsetY = 0
             mouse.accepted = true
           }
-          onCanceled: { card.dragging = false; card.dragOffset = 0 }
+          onCanceled: { card.dragging = false; card.dragOffsetX = 0; card.dragOffsetY = 0 }
         }
       }
       Item {
@@ -308,7 +389,13 @@ Item {
           model: view.settings.definitions
           delegate: SectionChip { required property var modelData; section: modelData }
         }
-        Tag { text: "1–7 MODULES · J/K SESSION · ENTER FOCUS · A CLEAR"; tone: view.textFaint }
+        Tag {
+          visible: view.projectFilter !== ""
+          text: "PROJECT · " + view.projectFilter.replace(/^.*\//, "") + " ×"
+          tone: view.desk.cyan
+          MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.projectFilter = "" }
+        }
+        Tag { text: "1–9 MODULES · J/K SESSION · ENTER FOCUS · A CLEAR"; tone: view.textFaint }
       }
 
       RowLayout {
@@ -322,39 +409,6 @@ Item {
         Layout.fillHeight: true
         Layout.preferredWidth: 3
         spacing: view.gap
-
-        Card {
-          Layout.fillWidth: true
-          visible: view.sectionEnabled("needs") && (view.visibleAttention.length > 0 || view.collisions.length > 0)
-          title: "NEEDS YOU"
-          hint: view.visibleAttention.length + " signals · " + view.collisions.length + " shared repos"
-          glow: view.visibleAttention.length > 0
-          glowTone: view.desk.yellow
-          Flow {
-            width: parent.width
-            spacing: Style.spacing.md
-            Repeater {
-              model: view.visibleAttention
-              delegate: RowLayout {
-                id: attentionRow
-                required property var modelData
-                readonly property color tone: modelData.attention === "blocked" ? view.desk.red : modelData.attention === "waiting" ? view.desk.yellow : view.desk.green
-                spacing: Style.spacing.xs
-                Tag {
-                  text: (attentionRow.modelData.attention === "blocked" ? "⚠ BLOCKED" : attentionRow.modelData.attention === "waiting" ? "? WAITING" : "✓ REVIEW") + " · " + view.desk.providerLabel(attentionRow.modelData.provider) + " · " + attentionRow.modelData.project
-                  tone: attentionRow.tone
-                  MouseArea { anchors.fill: parent; enabled: view.interactive && !!(attentionRow.modelData.window && attentionRow.modelData.window.address); cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: view.navigateTo(attentionRow.modelData.window.address) }
-                }
-                Tag { text: "10M"; tone: view.textDim; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.settings.snoozeAttention(view.attentionKey(attentionRow.modelData)) } }
-                Tag { text: "×"; tone: view.textFaint; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.settings.dismissAttention(view.attentionKey(attentionRow.modelData)) } }
-              }
-            }
-            Repeater {
-              model: view.collisions
-              delegate: Tag { required property var modelData; text: "⚠ SHARED REPO · " + modelData.project + " · " + modelData.agents.length + " agents"; tone: view.desk.yellow }
-            }
-          }
-        }
 
         // ---- live sessions ----
         Card {
@@ -420,6 +474,7 @@ Item {
                     elide: Text.ElideRight
                   }
                   PlainText { Layout.fillWidth: true; text: sc.modelData.cwd || ""; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideMiddle }
+                  PlainText { Layout.fillWidth: true; visible: (sc.modelData.hosts || []).length > 0; text: "hosted in " + view.sessionHostLabel(sc.modelData) + (sc.modelData.window ? " · attached" : " · no direct window"); color: sc.tone; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
                   PlainText { Layout.fillWidth: true; visible: !!sc.modelData.topic && !!(sc.modelData.window && sc.modelData.window.title); text: sc.modelData.window ? (sc.modelData.window.title || "") : ""; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
                   PlainText { Layout.fillWidth: true; visible: !!sc.modelData.git; text: sc.modelData.git ? ("git " + sc.modelData.git.branch + (sc.modelData.git.dirty ? " · " + sc.modelData.git.dirty + " changed" : " · clean") + (sc.modelData.git.ahead ? " · ↑" + sc.modelData.git.ahead : "") + (sc.modelData.git.behind ? " · ↓" + sc.modelData.git.behind : "") + (sc.modelData.git.conflicts ? " · " + sc.modelData.git.conflicts + " conflicts" : "")) : ""; color: sc.modelData.git && sc.modelData.git.conflicts ? view.desk.red : sc.modelData.git && sc.modelData.git.dirty ? view.desk.yellow : view.desk.green; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
                   PlainText { Layout.fillWidth: true; text: "pid " + sc.modelData.pid + (sc.modelData.window ? "  ·  ws " + sc.modelData.window.workspace : "  ·  no window"); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
@@ -437,6 +492,233 @@ Item {
               }
             }
             PlainText { visible: view.sessions.length === 0; text: view.desk.ready ? "no agents running — go start something" : "collecting…"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.body }
+          }
+        }
+
+        // ---- draggable operations intelligence ----
+        GridLayout {
+          visible: view.sectionEnabled("changes") || view.sectionEnabled("needs") || view.sectionEnabled("projects")
+          Layout.fillWidth: true
+          columns: Math.max(1, view.settings.enabledOpsCount())
+          columnSpacing: view.gap
+          Card {
+            Layout.column: view.settings.opsVisibleIndex("changes")
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: view.sectionEnabled("changes")
+            moveId: "changes"
+            moveGroup: "ops"
+            dragAxis: "horizontal"
+            draggable: true
+            title: "WHAT CHANGED"
+            hint: view.changeProjects.filter(function(item) { return view.changeUnseen(item) }).length + " unseen · click to inspect"
+            glow: view.changeProjects.some(function(item) { return view.changeUnseen(item) })
+            glowTone: view.desk.cyan
+            ColumnLayout {
+              width: parent.width
+              spacing: Style.spacing.sm
+              Repeater {
+                model: view.changeProjects.slice(0, 3)
+                delegate: Rectangle {
+                  id: changeRow
+                  required property var modelData
+                  readonly property string key: view.projectKey(modelData)
+                  readonly property var change: modelData.changes || ({})
+                  readonly property bool unseen: view.changeUnseen(modelData)
+                  readonly property bool expanded: view.expandedChangeKey === key
+                  readonly property color tone: view.projectTone(modelData)
+                  Layout.fillWidth: true
+                  implicitHeight: changeColumn.implicitHeight + Style.spacing.sm * 2
+                  radius: view.radius
+                  color: Util.alpha(tone, unseen ? 0.13 : changeHover.hovered ? 0.09 : 0.035)
+                  border.color: Util.alpha(tone, unseen ? 0.7 : 0.18)
+                  border.width: 1
+                  ColumnLayout {
+                    id: changeColumn
+                    anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: Style.spacing.sm }
+                    spacing: Style.spacing.xs
+                    RowLayout {
+                      Layout.fillWidth: true
+                      Rectangle { width: 7; height: 7; radius: 4; color: changeRow.unseen ? changeRow.tone : view.textFaint }
+                      PlainText { text: changeRow.modelData.project || changeRow.key; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; font.bold: changeRow.unseen; Layout.preferredWidth: Math.round(120 * Style.fontScale); elide: Text.ElideMiddle }
+                      PlainText { Layout.fillWidth: true; text: view.changeSummary(changeRow.modelData); color: changeRow.unseen ? changeRow.tone : view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+                      PlainText { text: changeRow.expanded ? "▴" : "▾"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+                    }
+                    Flow {
+                      Layout.fillWidth: true
+                      visible: changeRow.expanded
+                      spacing: Style.spacing.xs
+                      Repeater {
+                        model: changeRow.change.files || []
+                        delegate: Tag {
+                          required property string modelData
+                          text: modelData
+                          tone: changeRow.tone
+                          MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.desk.copyText(parent.modelData) }
+                        }
+                      }
+                      Tag { visible: !!changeRow.modelData.cwd; text: "OPEN PROJECT"; tone: view.desk.green; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.desk.openProject(changeRow.modelData.cwd) } }
+                    }
+                    PlainText { Layout.fillWidth: true; visible: changeRow.expanded && !!changeRow.change.commitSubject; text: (changeRow.change.headShort || "HEAD") + " · " + changeRow.change.commitSubject; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+                  }
+                  HoverHandler { id: changeHover; enabled: view.interactive; cursorShape: Qt.PointingHandCursor }
+                  TapHandler {
+                    enabled: view.interactive
+                    onTapped: {
+                      view.settings.markChangeSeen(changeRow.key, changeRow.change.fingerprint)
+                      view.expandedChangeKey = changeRow.expanded ? "" : changeRow.key
+                    }
+                  }
+                }
+              }
+              PlainText { visible: view.changeProjects.length === 0; text: "no active repositories"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+            }
+          }
+
+          Card {
+            Layout.column: view.settings.opsVisibleIndex("needs")
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: view.sectionEnabled("needs")
+            moveId: "needs"
+            moveGroup: "ops"
+            dragAxis: "horizontal"
+            draggable: true
+            title: "NEXT ACTIONS"
+            hint: view.visibleAttention.length + " signals · " + view.visibleCollisions.length + " shared repos"
+            glow: view.visibleAttention.length > 0
+            glowTone: view.desk.yellow
+            ColumnLayout {
+              width: parent.width
+              spacing: Style.spacing.sm
+              Flow {
+                Layout.fillWidth: true
+                spacing: Style.spacing.xs
+                Tag {
+                  text: "ALERTS " + (view.settings.notificationsEnabled ? "ON" : "OFF")
+                  tone: view.settings.notificationsEnabled ? view.desk.green : view.textFaint
+                  MouseArea { anchors.fill: parent; enabled: view.interactive; cursorShape: Qt.PointingHandCursor; onClicked: view.settings.toggleNotificationsEnabled() }
+                }
+                Tag {
+                  text: "QUIET 22–08 " + (view.settings.quietHoursEnabled ? "ON" : "OFF")
+                  tone: view.settings.quietHoursEnabled ? view.desk.yellow : view.textFaint
+                  MouseArea { anchors.fill: parent; enabled: view.interactive; cursorShape: Qt.PointingHandCursor; onClicked: view.settings.toggleQuietHoursEnabled() }
+                }
+                Repeater {
+                  model: view.activeNotificationProviders
+                  delegate: Tag {
+                    required property string modelData
+                    text: view.desk.providerLabel(modelData) + " " + (view.settings.notificationProviderEnabled(modelData) ? "●" : "○")
+                    tone: view.settings.notificationProviderEnabled(modelData) ? view.desk.providerColor(modelData) : view.textFaint
+                    MouseArea { anchors.fill: parent; enabled: view.interactive; cursorShape: Qt.PointingHandCursor; onClicked: view.settings.toggleNotificationProvider(parent.modelData) }
+                  }
+                }
+              }
+              Repeater {
+                model: view.visibleAttention.slice(0, 3)
+                delegate: Rectangle {
+                  id: attentionRow
+                  required property var modelData
+                  readonly property color tone: modelData.attention === "blocked" ? view.desk.red : modelData.attention === "waiting" ? view.desk.yellow : view.desk.green
+                  Layout.fillWidth: true
+                  implicitHeight: attentionColumn.implicitHeight + Style.spacing.sm * 2
+                  radius: view.radius
+                  color: Util.alpha(tone, 0.07)
+                  border.color: Util.alpha(tone, 0.35)
+                  border.width: 1
+                  ColumnLayout {
+                    id: attentionColumn
+                    anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: Style.spacing.sm }
+                    spacing: Style.spacing.xs
+                    RowLayout {
+                      Layout.fillWidth: true
+                      Tag { text: attentionRow.modelData.attention === "blocked" ? "⚠ BLOCKED" : attentionRow.modelData.attention === "waiting" ? "? WAITING" : "✓ REVIEW"; tone: attentionRow.tone }
+                      PlainText { Layout.fillWidth: true; text: attentionRow.modelData.project; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; font.bold: true; elide: Text.ElideMiddle }
+                      PlainText { text: view.desk.ago(attentionRow.modelData.startedAt); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+                    }
+                    PlainText { Layout.fillWidth: true; text: attentionRow.modelData.attentionReason || "session needs attention"; color: attentionRow.tone; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
+                    Flow {
+                      Layout.fillWidth: true
+                      spacing: Style.spacing.xs
+                      Tag { text: view.attentionPrimaryLabel(attentionRow.modelData); tone: attentionRow.tone; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.activateAttention(attentionRow.modelData) } }
+                      Tag { visible: !!attentionRow.modelData.attentionDetail; text: "COPY DETAIL"; tone: view.desk.cyan; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.desk.copyText(attentionRow.modelData.attentionDetail) } }
+                      Tag { text: "10M"; tone: view.textDim; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.settings.snoozeAttention(view.attentionKey(attentionRow.modelData)) } }
+                      Tag { text: "×"; tone: view.textFaint; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.settings.dismissAttention(view.attentionKey(attentionRow.modelData)) } }
+                    }
+                  }
+                }
+              }
+              Flow {
+                Layout.fillWidth: true
+                visible: view.visibleCollisions.length > 0
+                spacing: Style.spacing.xs
+                Repeater {
+                  model: view.visibleCollisions
+                  delegate: Tag { required property var modelData; text: "⚠ SHARED · " + modelData.project + " · " + modelData.agents.length + " agents"; tone: view.desk.yellow }
+                }
+              }
+              PlainText { visible: view.visibleAttention.length === 0 && view.visibleCollisions.length === 0; text: "nothing waiting — all sessions can continue"; color: view.desk.green; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+            }
+          }
+
+          Card {
+            Layout.column: view.settings.opsVisibleIndex("projects")
+            Layout.fillWidth: true
+            Layout.fillHeight: true
+            visible: view.sectionEnabled("projects")
+            moveId: "projects"
+            moveGroup: "ops"
+            dragAxis: "horizontal"
+            draggable: true
+            title: "PROJECT HEALTH"
+            hint: view.projects.length + " repos · click to filter"
+            glow: view.projects.some(function(item) { return item.status === "blocked" })
+            glowTone: view.desk.red
+            ColumnLayout {
+              width: parent.width
+              spacing: Style.spacing.sm
+              Repeater {
+                model: view.projects.slice(0, 4)
+                delegate: Rectangle {
+                  id: projectRow
+                  required property var modelData
+                  readonly property string key: view.projectKey(modelData)
+                  readonly property color tone: view.projectTone(modelData)
+                  readonly property var git: modelData.git || ({})
+                  readonly property var change: modelData.changes || ({})
+                  Layout.fillWidth: true
+                  implicitHeight: projectColumn.implicitHeight + Style.spacing.sm * 2
+                  radius: view.radius
+                  color: Util.alpha(tone, projectHover.hovered || view.projectFilter === key ? 0.15 : 0.06)
+                  border.color: Util.alpha(tone, view.projectFilter === key ? 0.85 : 0.35)
+                  border.width: view.projectFilter === key ? 2 : 1
+                  ColumnLayout {
+                    id: projectColumn
+                    anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: Style.spacing.sm }
+                    spacing: Style.spacing.xs
+                    RowLayout {
+                      Layout.fillWidth: true
+                      Tag { text: view.projectStatusLabel(projectRow.modelData); tone: projectRow.tone }
+                      PlainText { Layout.fillWidth: true; text: projectRow.modelData.project || projectRow.key; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; font.bold: true; elide: Text.ElideMiddle }
+                      PlainText { text: (projectRow.modelData.agents || []).length + " AI"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+                    }
+                    RowLayout {
+                      Layout.fillWidth: true
+                      PlainText { text: view.ciLabel(projectRow.modelData); color: projectRow.tone; font.family: view.mono; font.pixelSize: Style.font.caption; font.bold: true }
+                      PlainText {
+                        Layout.fillWidth: true
+                        text: (projectRow.git.branch || "no branch") + (projectRow.git.dirty ? " · " + projectRow.git.dirty + " changed" : " · clean") + (projectRow.git.ahead ? " · ↑" + projectRow.git.ahead : "") + (projectRow.git.behind ? " · ↓" + projectRow.git.behind : "") + (projectRow.git.conflicts ? " · " + projectRow.git.conflicts + " conflicts" : "") + (projectRow.change.commitSubject ? " · " + projectRow.change.commitSubject : "")
+                        color: projectRow.tone; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight
+                      }
+                      Tag { visible: view.desk.canOpenProject(projectRow.modelData.cwd); text: "OPEN"; tone: view.desk.green; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.desk.openProject(projectRow.modelData.cwd) } }
+                    }
+                  }
+                  HoverHandler { id: projectHover; enabled: view.interactive; cursorShape: Qt.PointingHandCursor }
+                  TapHandler { enabled: view.interactive; onTapped: view.projectFilter = view.projectFilter === projectRow.key ? "" : projectRow.key }
+                }
+              }
+              PlainText { visible: view.projects.length === 0; text: "no active repositories"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+            }
           }
         }
 
@@ -864,6 +1146,7 @@ Item {
 
         // ---- local AI ----
         Card {
+          id: localAiCard
           Layout.row: view.settings.rightIndex("localAi")
           Layout.column: 0
           Layout.fillWidth: true
@@ -872,6 +1155,78 @@ Item {
           draggable: true
           title: "LOCAL AI"
           readonly property var ol: (view.ai.providers || {}).ollama || ({})
+          readonly property var availableModels: ol && Array.isArray(ol.models) ? ol.models : []
+          readonly property var selectedModel: modelObject(view.settings.selectedOllamaModel)
+          property string pendingLargeModel: ""
+          property string loadNotice: ""
+
+          function modelName(item) { return String((item && typeof item === "object") ? (item.name || "") : (item || "")) }
+          function modelList() { return Array.isArray(availableModels) ? availableModels : [] }
+          function modelObject(name) {
+            var wanted = String(name || ""), models = modelList()
+            for (var i = 0; i < models.length; i++) {
+              var item = models[i], itemName = modelName(item)
+              if (itemName === wanted) return (item && typeof item === "object") ? item : ({ name: itemName, size: 0 })
+            }
+            if (models.length) {
+              var first = models[0]
+              return (first && typeof first === "object") ? first : ({ name: modelName(first), size: 0 })
+            }
+            return ({ name: "", size: 0 })
+          }
+          function modelIndex(name) {
+            var models = modelList()
+            for (var i = 0; i < models.length; i++) if (modelName(models[i]) === String(name || "")) return i
+            return -1
+          }
+          function ensureSelection() {
+            var models = modelList()
+            if (models.length && modelIndex(view.settings.selectedOllamaModel) < 0)
+              view.settings.setSelectedOllamaModel(modelName(models[0]))
+          }
+          function stepModel(delta) {
+            var models = modelList()
+            if (!models.length) return
+            var index = modelIndex(view.settings.selectedOllamaModel)
+            if (index < 0) index = 0
+            index = (index + Number(delta) + models.length) % models.length
+            view.settings.setSelectedOllamaModel(modelName(models[index]))
+            pendingLargeModel = ""
+            loadNotice = ""
+          }
+          function modelLoaded(name) {
+            var loaded = ol.loaded || []
+            for (var i = 0; i < loaded.length; i++) if (String(loaded[i].name || "") === String(name || "")) return true
+            return false
+          }
+          function needsConfirmation(model) {
+            var size = Number((model || {}).size || 0)
+            if (!size) return false
+            var gpu = view.machine.gpu || null
+            var gpuFree = gpu ? Math.max(0, Number(gpu.memTotal || 0) - Number(gpu.memUsed || 0)) : 0
+            var mem = view.machine.mem || {}, ramFree = Math.max(0, Number(mem.total || 0) - Number(mem.used || 0))
+            return size >= 8 * 1024 * 1024 * 1024 || (gpuFree > 0 && size > gpuFree) || (gpuFree === 0 && ramFree > 0 && size > ramFree * 0.65)
+          }
+          function requestLoad() {
+            var name = String(selectedModel.name || "")
+            if (!name || view.desk.ollamaBusy || modelLoaded(name)) return
+            if (needsConfirmation(selectedModel) && pendingLargeModel !== name) {
+              pendingLargeModel = name
+              loadNotice = "large model · press confirm to pin in memory"
+              return
+            }
+            pendingLargeModel = ""
+            loadNotice = ""
+            view.desk.controlOllama("load", name)
+          }
+          function requestUnload(name) {
+            if (view.desk.ollamaBusy) return
+            pendingLargeModel = ""
+            loadNotice = ""
+            view.desk.controlOllama("unload", name)
+          }
+          onOlChanged: ensureSelection()
+          Component.onCompleted: ensureSelection()
           hint: ol.up ? "ollama up · " + (ol.modelCount || 0) + " models" : "ollama down"
           ColumnLayout {
             width: parent.width
@@ -879,14 +1234,44 @@ Item {
             Repeater {
               model: ((view.ai.providers || {}).ollama || {}).loaded || []
               delegate: RowLayout {
+                id: loadedModelRow
                 required property var modelData
                 Layout.fillWidth: true
                 Rectangle { width: 8; height: 8; radius: 4; color: view.desk.green }
                 PlainText { text: modelData.name; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; Layout.fillWidth: true; elide: Text.ElideRight }
                 PlainText { text: "vram " + view.desk.bytes(modelData.vram); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
+                Tag {
+                  text: view.desk.ollamaBusy && view.desk.ollamaModel === loadedModelRow.modelData.name ? "WORKING" : "UNLOAD"
+                  tone: view.desk.ollamaBusy ? view.textFaint : view.desk.red
+                  MouseArea { anchors.fill: parent; enabled: view.interactive && !view.desk.ollamaBusy; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: localAiCard.requestUnload(loadedModelRow.modelData.name) }
+                }
               }
             }
             PlainText { visible: !((((view.ai.providers || {}).ollama || {}).loaded || []).length); text: "no model loaded"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+            RowLayout {
+              visible: !!localAiCard.ol.up && (localAiCard.availableModels || []).length > 0
+              Layout.fillWidth: true
+              Tag { text: "‹"; tone: view.textDim; MouseArea { anchors.fill: parent; enabled: view.interactive && !view.desk.ollamaBusy && localAiCard.availableModels.length > 1; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: localAiCard.stepModel(-1) } }
+              ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 0
+                PlainText { Layout.fillWidth: true; text: localAiCard.selectedModel.name || "no installed model"; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; font.bold: true; elide: Text.ElideMiddle }
+                PlainText {
+                  Layout.fillWidth: true
+                  text: [localAiCard.selectedModel.parameterSize || "", localAiCard.selectedModel.quantization || "", localAiCard.selectedModel.size ? view.desk.bytes(localAiCard.selectedModel.size) : ""].filter(Boolean).join(" · ")
+                  color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight
+                }
+              }
+              Tag { text: "›"; tone: view.textDim; MouseArea { anchors.fill: parent; enabled: view.interactive && !view.desk.ollamaBusy && localAiCard.availableModels.length > 1; cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: localAiCard.stepModel(1) } }
+              Tag {
+                text: localAiCard.modelLoaded(localAiCard.selectedModel.name) ? "LOADED" : localAiCard.pendingLargeModel === localAiCard.selectedModel.name ? "CONFIRM" : view.desk.ollamaBusy ? "WORKING" : "LOAD"
+                tone: localAiCard.modelLoaded(localAiCard.selectedModel.name) ? view.desk.green : localAiCard.pendingLargeModel === localAiCard.selectedModel.name ? view.desk.yellow : view.desk.cyan
+                MouseArea { anchors.fill: parent; enabled: view.interactive && !view.desk.ollamaBusy && !localAiCard.modelLoaded(localAiCard.selectedModel.name); cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor; onClicked: localAiCard.requestLoad() }
+              }
+            }
+            PlainText { Layout.fillWidth: true; visible: !!localAiCard.loadNotice; text: localAiCard.loadNotice; color: view.desk.yellow; font.family: view.mono; font.pixelSize: Style.font.caption; wrapMode: Text.Wrap }
+            PlainText { Layout.fillWidth: true; visible: !!view.desk.ollamaStatus; text: view.desk.ollamaStatus; color: view.desk.green; font.family: view.mono; font.pixelSize: Style.font.caption; wrapMode: Text.Wrap }
+            PlainText { Layout.fillWidth: true; visible: !!view.desk.ollamaError; text: view.desk.ollamaError; color: view.desk.red; font.family: view.mono; font.pixelSize: Style.font.caption; wrapMode: Text.Wrap }
             Meter {
               visible: !!view.machine.gpu
               Layout.fillWidth: true
@@ -1008,6 +1393,7 @@ Item {
       }
       PlainText { Layout.fillWidth: true; text: sessionInspector.session.cwd || "unknown project"; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.subtitle; elide: Text.ElideMiddle }
       PlainText { Layout.fillWidth: true; text: (sessionInspector.session.window || {}).title || "no window title"; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
+      PlainText { Layout.fillWidth: true; visible: (sessionInspector.session.hosts || []).length > 0; text: view.sessionHostDetail(sessionInspector.session); color: sessionInspector.tone; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight }
       PlainText { Layout.fillWidth: true; text: "CPU " + (sessionInspector.session.resources && sessionInspector.session.resources.cpuPct !== null ? sessionInspector.session.resources.cpuPct.toFixed(1) + "%" : "—") + "   ·   RAM " + view.desk.bytes((sessionInspector.session.resources || {}).rss) + "   ·   " + ((sessionInspector.session.resources || {}).processes || 0) + " PROCESSES" + ((sessionInspector.session.resources || {}).gpuMemory ? "   ·   GPU " + view.desk.bytes(sessionInspector.session.resources.gpuMemory) : ""); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
       PlainText {
         Layout.fillWidth: true

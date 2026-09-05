@@ -1,13 +1,19 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { Database } from "bun:sqlite";
-const historyFixture = join(import.meta.dir, ".test-fixture");
-afterAll(() => rmSync(historyFixture, { recursive: true, force: true }));
-import { join } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles } from "./collector.ts";
+import { tmpdir } from "os";
+import { join, relative } from "path";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles } from "./collector.ts";
 
-const fixture = join(import.meta.dir, ".test-fixture-races");
-afterAll(() => rmSync(fixture, { recursive: true, force: true }));
+const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
+const historyFixture = join(testRoot, "history");
+const fixture = join(testRoot, "races");
+afterAll(() => rmSync(testRoot, { recursive: true, force: true }));
+
+test("collector fixtures stay outside the live plugin tree", () => {
+  const relativeFixture = relative(import.meta.dir, fixture);
+  expect(relativeFixture === ".." || relativeFixture.startsWith("../")).toBe(true);
+});
 
 function decodeFrames(output: string): any {
   const frames = output.trim().split("\n").map(line => JSON.parse(line));
@@ -36,6 +42,36 @@ describe("providerOf", () => {
     expect(providerOf(["/usr/bin/opencode"])).toBe("opencode");
     expect(providerOf(["opencode", "run", "inspect this"])).toBe("opencode");
   });
+
+  test("recognizes Hermes as an interactive agent provider", () => {
+    expect(providerOf(["/home/user/.hermes/bin/hermes"])).toBe("hermes");
+  });
+});
+
+describe("multiplexer session identity", () => {
+  test("extracts only documented Herdr, Boomux, and tmux identity fields", () => {
+    const hosts = sessionHostsFromEnvironment([
+      "TOKEN=must-never-appear", "HERDR_ENV=1", "HERDR_WORKSPACE_ID=w1", "HERDR_TAB_ID=w1:t2", "HERDR_PANE_ID=w1:p3",
+      "BOOMUX_WORKSPACE_ID=workspace-123", "BOOMUX_WORKSPACE=atlas", "BOOMUX_SHELL_ID=shell-456", "BOOMUX_SHELL_NAME=builder", "BOOMUX_RUN_ID=run-789",
+      "TMUX=/tmp/tmux/default,1,0", "TMUX_PANE=%7",
+    ].join("\0") + "\0");
+    expect(hosts.map(host => host.kind)).toEqual(["herdr", "boomux", "tmux"]);
+    expect(hosts[0]).toMatchObject({ workspaceId: "w1", tabId: "w1:t2", paneId: "w1:p3" });
+    expect(hosts[1]).toMatchObject({ workspace: "atlas", shell: "builder", shellId: "shell-456", runId: "run-789" });
+    expect(hosts[2]).toMatchObject({ paneId: "%7" });
+    expect(tmuxSocketFromEnvironment("TMUX=/tmp/tmux-1000/custom,1,0\0TOKEN=hidden\0")).toBe("/tmp/tmux-1000/custom");
+    expect(tmuxSocketFromEnvironment("TMUX=../../bad,1,0\0")).toBe("");
+    expect(JSON.stringify(hosts)).not.toContain("must-never-appear");
+  });
+
+  test("parses bounded tmux inventory and resolves the nearest pane", () => {
+    const panes = parseTmuxPanes("320\t%7\twork\t2\t1\t/home/user/project\t1\ninvalid\n");
+    expect(panes).toEqual([{ pid: 320, paneId: "%7", session: "work", window: "2", pane: "1", cwd: "/home/user/project", active: true, server: "" }]);
+    expect(parseTmuxClients("410\twork\n")).toEqual([{ pid: 410, session: "work", server: "" }]);
+    expect(tmuxPaneForAncestors([900, 500, 320, 1], panes)?.paneId).toBe("%7");
+    expect(tmuxPaneForAncestors([900], panes, "%7")?.session).toBe("work");
+    expect(tmuxPaneForAncestors([900], panes, "%8")).toBeNull();
+  });
 });
 
 describe("external IP cache", () => {
@@ -43,6 +79,8 @@ describe("external IP cache", () => {
     expect(parseExternalIpTrace("fl=1\nip=203.0.113.8\n")).toBe("203.0.113.8");
     expect(parseExternalIpTrace("ip=2001:db8::1\n")).toBe("2001:db8::1");
     expect(parseExternalIpTrace("ip=$(touch /tmp/nope)\n")).toBeNull();
+    expect(parseExternalIpTrace("ip=1.2.3.999\n")).toBeNull();
+    expect(parseExternalIpTrace("ip=:::1\n")).toBeNull();
     expect(parseExternalIpTrace("fl=1\n")).toBeNull();
   });
 
@@ -169,6 +207,42 @@ describe("live session topics", () => {
 });
 
 describe("collector security boundaries", () => {
+  test("redacts credentials from live-session titles and arguments before framing", () => {
+    const titleCredential = ["title", "credential", "value"].join("-");
+    const argumentCredential = ["session", "credential", "value"].join("-");
+    const rawTitle = `Authorization: Bearer ${titleCredential}`;
+    const presentation = sessionPresentation(
+      { address: "0xabc", title: rawTitle, class: "test", workspace: { id: 2 } },
+      ["aider", "--password", argumentCredential],
+    );
+    expect(presentation.window.title).toStartWith("Authorization: Bearer ");
+    expect(presentation.window.title.length).toBeLessThan(rawTitle.length);
+    expect(presentation.args).not.toContain(argumentCredential);
+    expect(JSON.stringify(presentation)).not.toContain(titleCredential);
+  });
+
+  test("redacts generic credential flags from live-session arguments", () => {
+    const separate = sessionPresentation(null, ["tool", "--token", "abcdefghijklmnop"]);
+    const assigned = sessionPresentation(null, ["tool", "--api-key=qrstuvwxyzabcdef"]);
+    expect(separate.args).toBe("--token [redacted]");
+    expect(assigned.args).toBe("--api-key=[redacted]");
+    expect(JSON.stringify([separate, assigned])).not.toMatch(/abcdefghijklmnop|qrstuvwxyzabcdef/);
+  });
+
+  test("redacts a complete separate credential argv value containing spaces", () => {
+    const presentation = sessionPresentation(null, ["tool", "--token", "two word secret"]);
+    expect(presentation.args).toBe("--token [redacted]");
+    expect(presentation.args).not.toContain("word secret");
+  });
+
+  test("redacts complete assigned credential argv values containing spaces", () => {
+    for (const flag of ["--token", "--api-key", "--password", "--secret"]) {
+      const presentation = sessionPresentation(null, ["tool", `${flag}=two word secret`]);
+      expect(presentation.args).toBe(`${flag}=[redacted]`);
+      expect(presentation.args).not.toContain("word secret");
+    }
+  });
+
   test("reads one opened regular file with byte and no-follow limits", () => {
     const root = join(fixture, "safe-read");
     mkdirSync(root, { recursive: true });
@@ -236,6 +310,18 @@ describe("prev.json instance files", () => {
   });
 });
 describe("history collection", () => {
+  test("preserves benign credential-related prose", () => {
+    const prompts = ["implement password reset flow", "design password recovery flow"];
+    expect(prompts.map(safePrompt)).toEqual(prompts);
+  });
+
+  test("redacts authorization headers and complete quoted secrets", () => {
+    const sanitized = safePrompt('Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.private-signature password: "two word secret"');
+    expect(sanitized).toBe("Authorization: Bearer [redacted] password: [redacted]");
+    expect(sanitized).not.toContain("private-signature");
+    expect(sanitized).not.toContain("word secret");
+  });
+
   test("parses Grok prompts and redacts secrets from recent tasks", async () => {
     const grokDir = join(historyFixture, ".grok", "sessions", encodeURIComponent(join(historyFixture, "project")));
     mkdirSync(grokDir, { recursive: true });
@@ -265,7 +351,7 @@ describe("history collection", () => {
   });
 
   test("parses OpenCode user prompts, sessions, projects, and redacts secrets", async () => {
-    const root = join(import.meta.dir, ".test-fixture-opencode");
+    const root = join(testRoot, "opencode");
     const data = join(root, "data");
     const dbDir = join(data, "opencode");
     mkdirSync(dbDir, { recursive: true });

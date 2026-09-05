@@ -20,6 +20,12 @@ Item {
   property string resumePath: Qt.resolvedUrl("resume-session.ts").toString().replace(/^file:\/\//, "")
   property string sessionActionsPath: Qt.resolvedUrl("session-actions.ts").toString().replace(/^file:\/\//, "")
   property string copyTextPath: Qt.resolvedUrl("copy-text.ts").toString().replace(/^file:\/\//, "")
+  property string ollamaControlPath: Qt.resolvedUrl("ollama-control.ts").toString().replace(/^file:\/\//, "")
+  property bool ollamaBusy: false
+  property string ollamaStatus: ""
+  property string ollamaError: ""
+  property string ollamaModel: ""
+  property string ollamaAction: ""
   // Explicit, transient screenshot/demo data. It never persists and defaults
   // off on every shell start; normal operation always displays live data.
   property bool demoMode: false
@@ -84,6 +90,7 @@ Item {
       case "codex": return root.cyan
       case "grok": return root.magenta
       case "gemini": return root.blue
+      case "hermes": return root.green
       case "ollama": return root.green
       case "opencode": return root.blue
       case "aider": return root.yellow
@@ -102,6 +109,7 @@ Item {
       case "codex": return "Codex"
       case "grok": return "Grok"
       case "gemini": return "Gemini"
+      case "hermes": return "Hermes"
       case "ollama": return "Ollama"
       case "opencode": return "opencode"
       case "aider": return "Aider"
@@ -258,6 +266,59 @@ Item {
     onStarted: {
       write(JSON.stringify(pendingText) + "\n")
       pendingText = ""
+    }
+  }
+
+  function controlOllama(action, model) {
+    var operation = String(action || ""), name = String(model || "")
+    if (root.ollamaBusy || ["load", "unload"].indexOf(operation) < 0 || !/^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,255}$/.test(name)) return false
+    root.ollamaBusy = true
+    root.ollamaAction = operation
+    root.ollamaModel = name
+    root.ollamaError = ""
+    root.ollamaStatus = (operation === "load" ? "loading " : "unloading ") + name + "…"
+    ollamaProcess.pendingFrame = ({ action: operation, model: name })
+    ollamaProcess.running = true
+    return true
+  }
+
+  function acceptOllamaResult(raw) {
+    var result
+    try { result = JSON.parse(String(raw || "")) } catch (e) { result = null }
+    ollamaProcess.responded = true
+    if (!result || result.ok !== true) {
+      root.ollamaError = root.plainText(result && result.message ? result.message : "Invalid Ollama control response", 160)
+      root.ollamaStatus = ""
+      return
+    }
+    root.ollamaError = ""
+    root.ollamaStatus = root.plainText(result.message || "Ollama model updated", 160)
+  }
+
+  // Model names are framed over stdin and validated again by the helper
+  // against Ollama's live inventory before any API state change is attempted.
+  Process {
+    id: ollamaProcess
+    property var pendingFrame: ({})
+    property bool responded: false
+    command: ["bun", root.ollamaControlPath]
+    stdinEnabled: true
+    onRunningChanged: if (running) responded = false
+    onStarted: {
+      write(JSON.stringify(pendingFrame) + "\n")
+      pendingFrame = ({})
+    }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.acceptOllamaResult(text)
+    }
+    onExited: function(exitCode) {
+      if (!responded) {
+        root.ollamaError = "Ollama control helper exited " + exitCode
+        root.ollamaStatus = ""
+      }
+      root.ollamaBusy = false
+      root.refresh()
     }
   }
 
