@@ -498,7 +498,8 @@ Item {
             }
             PlainText {
               visible: view.sessions.length === 0
-              Layout.fillWidth: true
+              // Parent is a Flow: Layout.* is ignored there, so size explicitly or wrapMode never wraps.
+              width: sessionFlow.width
               wrapMode: Text.Wrap
               text: view.desk.bunChecked && !view.desk.bunAvailable ? view.desk.missingDependencyHint
                 : view.desk.ready ? "no agents running — go start something"
