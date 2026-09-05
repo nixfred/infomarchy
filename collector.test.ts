@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join, relative } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind } from "./collector.ts";
 
 const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
 const historyFixture = join(testRoot, "history");
@@ -743,5 +743,35 @@ describe("Herdr-hosted agents get their client's window", () => {
     expect(herdrWindowFor({ kind: "herdr", label: "", socket: "/s/nine.sock" }, clients)).toBe(a);
     expect(herdrWindowFor({ kind: "herdr", label: "" }, clients)).toBe(a);
     expect(herdrWindowFor({ kind: "herdr", label: "" }, [clients[2]])).toBeNull();
+  });
+});
+
+describe("Boomux-hosted agents (best effort)", () => {
+  test("a boomux client is identified by the shell id in its environment or argv, never the daemon", () => {
+    expect(boomuxClientShellId(["/home/u/.local/bin/boomux", "daemon", "run"], "BOOMUX_SHELL_ID=abcdef12-3456\0")).toBe("");
+    expect(boomuxClientShellId(["boomux", "attach", "shell-0123456789"], "")).toBe("shell-0123456789");
+    expect(boomuxClientShellId(["boomux", "open", "sh-1"], "")).toBe("");
+    expect(boomuxClientShellId(["boomux"], "BOOMUX_SHELL_ID=0f9c1d2e-aaaa-bbbb-cccc-000000000001\0")).toBe("0f9c1d2e-aaaa-bbbb-cccc-000000000001");
+    expect(boomuxClientShellId(["kitty"], "BOOMUX_SHELL_ID=0f9c1d2e-aaaa-bbbb-cccc-000000000001\0")).toBe("");
+  });
+
+  test("window comes from the matching client, else a uniquely titled terminal, else nothing", () => {
+    const win = { address: "0x1", title: "reviewer" }, other = { address: "0x2", title: "boomux · reviewer" };
+    const host = { kind: "boomux" as const, label: "", shellId: "0f9c1d2e-aaaa-bbbb-cccc-000000000001", shell: "reviewer" };
+    expect(boomuxWindowFor(host, [{ pid: 1, shellId: host.shellId, window: win }], [])).toBe(win);
+    expect(boomuxWindowFor(host, [], [other, { address: "0x3", title: "vim notes" }])).toBe(other);
+    // Ambiguous titles are not guessed.
+    expect(boomuxWindowFor(host, [], [other, { address: "0x4", title: "reviewer - kitty" }])).toBeNull();
+    expect(boomuxWindowFor({ kind: "boomux", label: "", shell: "ab" }, [], [other])).toBeNull();
+    expect(boomuxWindowFor(host, [], [])).toBeNull();
+  });
+});
+
+describe("background daemon sessions are labelled, not hidden or duplicated", () => {
+  test("the bg-pty-host process title is recognised in both argv shapes", () => {
+    expect(backgroundDaemonKind(["claude bg-pty-host", "--bg-pty-host", "/tmp/cc-daemon-1000/x/pty/y.sock"])).toBe("claude");
+    expect(backgroundDaemonKind(["/usr/bin/claude", "bg-pty-host"])).toBe("claude");
+    expect(backgroundDaemonKind(["/usr/bin/claude", "--resume", "x"])).toBe("");
+    expect(backgroundDaemonKind(["kitty"])).toBe("");
   });
 });

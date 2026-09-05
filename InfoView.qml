@@ -500,6 +500,8 @@ Item {
                 // Fill four columns when they remain readable; narrower layouts
                 // retain a minimum width and let Flow wrap naturally.
                 width: Math.max(sessionFlow.minimumCardWidth, sessionFlow.fittedCardWidth); height: scol.implicitHeight + Style.spacing.lg * 2
+                // A daemon-hosted background session is real but unattended; dim it so it reads as secondary next to the interactive one.
+                opacity: (sc.modelData.hosts || []).some(function(h) { return h && h.kind === "background" }) ? 0.72 : 1
                 color: hover.containsMouse ? Util.alpha(tone, 0.16) : Util.alpha(tone, 0.08)
                 border.color: view.keyboardSessionIndex === index ? tone : Util.alpha(tone, hover.containsMouse ? 0.9 : 0.45); border.width: view.keyboardSessionIndex === index ? 2 : 1; radius: view.radius
                 Image { anchors.fill: parent; visible: hover.containsMouse && view.previewsEnabled && sc.previewSource !== ""; source: sc.previewSource; fillMode: Image.PreserveAspectCrop; opacity: 0.28 }
@@ -556,11 +558,11 @@ Item {
                 }
                 MouseArea {
                   id: hover; anchors.fill: parent; hoverEnabled: true; enabled: view.interactive
-                  cursorShape: sc.modelData.window ? Qt.PointingHandCursor : Qt.ArrowCursor
+                  cursorShape: sc.modelData.window || (sc.modelData.hosts || []).some(function(h) { return h && h.kind === "boomux" && h.shellId }) ? Qt.PointingHandCursor : Qt.ArrowCursor
                   acceptedButtons: Qt.LeftButton | Qt.RightButton
                   onClicked: function(mouse) {
                     if (mouse.button === Qt.RightButton) view.inspectedSession = sc.modelData
-                    else if (sc.modelData.window) { view.desk.focusSession(sc.modelData); view.navigated() }
+                    else if (view.desk.focusSession(sc.modelData)) view.navigated()
                   }
                 }
               }

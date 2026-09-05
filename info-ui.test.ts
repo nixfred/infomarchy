@@ -109,7 +109,9 @@ describe("multiplexer-aware focus", () => {
     expect(model).toContain('["bun", root.herdrFocusPath, sock, workspace, tab, pane]');
     expect(model).toContain('["select-window", "-t", pane]');
     expect(model).not.toContain('["pane", "focus", "--pane", pane]');
-    expect(view).toContain("view.desk.focusSession(sc.modelData)");
+    expect(view).toContain("else if (view.desk.focusSession(sc.modelData)) view.navigated()");
+    expect(model).toContain("function focusBoomuxShell(host)");
+    expect(model).toContain('["boomux", "open", shell]');
     expect(view).toContain("view.desk.focusSession(item); view.navigated(); return true");
     expect(view).toContain("view.desk.focusSession(sessionInspector.session)");
   });

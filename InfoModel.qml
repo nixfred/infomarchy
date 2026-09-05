@@ -279,18 +279,36 @@ Item {
     Quickshell.execDetached(["bun", root.herdrFocusPath, sock, workspace, tab, pane])
     return true
   }
+  // Boomux: `boomux open <shell-id> --workspace <id>` is documented to show the
+  // shell's Workspace layer and place or REUSE the requested terminal, which
+  // is the "jump to it" we want. Best effort — not verified against a live
+  // Boomux shell on the development machine. Ids are shape-checked; argv only.
+  function focusBoomuxShell(host) {
+    var h = host || {}
+    var shell = String(h.shellId || ""), workspace = String(h.workspaceId || "")
+    if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,63}$/.test(shell)) return false
+    var command = ["boomux", "open", shell]
+    if (/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/.test(workspace) && workspace) command.push("--workspace", workspace)
+    Quickshell.execDetached(command)
+    return true
+  }
   // Focus the terminal window, then ask the multiplexer inside it to show the
-  // agent's own pane. Herdr and tmux are handled; a host we cannot address
-  // still gets the window focused.
+  // agent's own pane. Herdr, tmux and (best effort) Boomux are handled; a host
+  // we cannot address still gets the window focused.
   function focusSession(session) {
     var item = session || {}
-    if (!(item.window && item.window.address)) return false
+    if (!(item.window && item.window.address)) {
+      // No window we can point at, but Boomux can (re)open the shell's own terminal.
+      var boomux = (item.hosts || []).filter(function(host) { return host && host.kind === "boomux" && host.shellId })[0]
+      return boomux ? focusBoomuxShell(boomux) : false
+    }
     focusWindow(item.window.address)
     var hosts = item.hosts || []
     for (var i = 0; i < hosts.length; i++) {
       var host = hosts[i] || {}
       if (host.kind === "tmux" && host.paneId && host.attached && !host.activePane) focusTmuxPane(host.server, host.paneId)
       else if (host.kind === "herdr" && host.attached) focusHerdrPane(host)
+      else if (host.kind === "boomux" && host.shellId) focusBoomuxShell(host)
     }
     return true
   }

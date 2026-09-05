@@ -542,7 +542,7 @@ function contextId(value: unknown): string {
   return /^[A-Za-z0-9%][A-Za-z0-9_.:%-]{0,127}$/.test(id) ? id : "";
 }
 export type SessionHost = {
-  kind: "herdr" | "boomux" | "tmux";
+  kind: "herdr" | "boomux" | "tmux" | "background";
   label: string;
   workspace?: string;
   workspaceId?: string;
@@ -569,6 +569,16 @@ export function herdrSocketFromEnvironment(environ = ""): string {
 }
 // Extract only documented multiplexer identity variables. Never serialize or
 // search the rest of /proc/<pid>/environ, which may contain credentials.
+// Claude Code's background daemon runs detached sessions under a process whose
+// argv[0] is literally "claude bg-pty-host" (a process title, so providerOf
+// never matched it). Its child is a real, live Claude session — worth a card —
+// but it has no terminal and often no owner watching it. Label it so it is
+// not mistaken for a duplicate of the interactive session in the same repo.
+export function backgroundDaemonKind(cmd: string[]): string {
+  const head = String(cmd[0] || "");
+  if (/(^|\/)claude bg-pty-host$/.test(head) || (/(^|\/)claude$/.test(head) && cmd[1] === "bg-pty-host")) return "claude";
+  return "";
+}
 export function sessionHostsFromEnvironment(environ = ""): SessionHost[] {
   const hosts: SessionHost[] = [];
   const herdrPane = contextId(envValue(environ, "HERDR_PANE_ID"));
@@ -1053,6 +1063,44 @@ export function herdrWindowFor(host: SessionHost, clients: HerdrClient[]): any {
   const same = host.socket ? withWindow.find(client => client.socket === host.socket) : null;
   return (same || withWindow[0]).window;
 }
+// Boomux (best effort — documented behaviour, not observed live here): the
+// daemon owns each shell's pty, so the agent descends from `boomux daemon run`
+// and never from the terminal. A native terminal attaches through a Boomux
+// client process carrying the shell id; failing that, Boomux titles the
+// window after the shell, so a terminal whose title contains the exact shell
+// name is the second-best guess. Nothing is guessed when neither matches.
+const BOOMUX_ID = /^[A-Za-z0-9][A-Za-z0-9_.:-]{7,63}$/;
+export type BoomuxClient = { pid: number; shellId: string; window: any };
+export function boomuxClientShellId(cmd: string[], environ = ""): string {
+  if (!/(^|\/)boomux$/.test(cmd[0] || "")) return "";
+  if (["daemon", "web", "setup", "doctor", "update", "capabilities", "list", "shells", "node", "integration", "read", "events"].includes(cmd[1] || "")) return "";
+  const fromEnv = String(envValue(environ, "BOOMUX_SHELL_ID") || "");
+  if (BOOMUX_ID.test(fromEnv)) return fromEnv;
+  for (let i = 1; i < cmd.length; i++) {
+    if ((cmd[i - 1] === "open" || cmd[i - 1] === "attach" || cmd[i - 1] === "--shell-id") && BOOMUX_ID.test(cmd[i] || "")) return cmd[i];
+  }
+  return "";
+}
+export function boomuxWindowFor(host: SessionHost, clients: BoomuxClient[], hyprClients: any[]): any {
+  const shellId = String(host.shellId || "");
+  const direct = shellId ? clients.find(client => client.shellId === shellId && client.window) : null;
+  if (direct) return direct.window;
+  const name = String(host.shell || "").trim();
+  if (name.length < 3) return null;
+  const titled = hyprClients.filter(client => client && typeof client.title === "string" &&
+    new RegExp("(^|[\\s:·\\-\\[(])" + name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "([\\s:·\\-\\])]|$)").test(client.title));
+  return titled.length === 1 ? titled[0] : null;
+}
+function boomuxState(winByPid: Map<number, any>): BoomuxClient[] {
+  const result: BoomuxClient[] = [];
+  for (const [pid, cmd] of cmdByPid) {
+    if (!/(^|\/)boomux$/.test(cmd[0] || "")) continue;
+    const shellId = boomuxClientShellId(cmd, environOf(pid));
+    if (shellId) result.push({ pid, shellId, window: windowForProcess(pid, winByPid) });
+    if (result.length >= 32) break;
+  }
+  return result;
+}
 function herdrState(winByPid: Map<number, any>): HerdrClient[] {
   return herdrClientPids(cmdByPid).map(pid => ({ pid, socket: herdrSocketFromEnvironment(environOf(pid)), window: windowForProcess(pid, winByPid) }));
 }
@@ -1103,6 +1151,7 @@ async function liveSessions(pids: number[]) {
   const sessions: any[] = [];
   const [gpuByPid, tmux] = await Promise.all([gpuMemoryByPid(), tmuxState(winByPid, pids)]);
   const herdrClients = herdrState(winByPid);
+  const boomuxClients = boomuxState(winByPid);
   for (const pid of pids) {
     const prov = providerOf(cmdByPid.get(pid) || []); if (!prov) continue;
     const p = info(pid); if (!p) continue;
@@ -1115,6 +1164,10 @@ async function liveSessions(pids: number[]) {
     let w: any = windowForProcess(p.pid, winByPid);
     const environ = environOf(p.pid);
     const hosts = sessionHostsFromEnvironment(environ);
+    for (const ancestor of processAncestors(p.pid).slice(1)) {
+      const daemon = backgroundDaemonKind(cmdByPid.get(ancestor) || []);
+      if (daemon) { hosts.push({ kind: "background", label: "background · " + daemon + " daemon" }); break; }
+    }
     const tmuxHost = hosts.find(host => host.kind === "tmux");
     const tmuxSocket = tmuxSocketFromEnvironment(environ);
     const pane = tmuxPaneForAncestors(processAncestors(p.pid), tmux.panes, tmuxHost?.paneId || "", tmuxSocket);
@@ -1135,6 +1188,11 @@ async function liveSessions(pids: number[]) {
     if (herdrHost && !w) {
       const clientWindow = herdrWindowFor(herdrHost, herdrClients);
       if (clientWindow) { w = clientWindow; herdrHost.attached = true; }
+    }
+    const boomuxHost = hosts.find(host => host.kind === "boomux");
+    if (boomuxHost && !w) {
+      const clientWindow = boomuxWindowFor(boomuxHost, boomuxClients, clients);
+      if (clientWindow) { w = clientWindow; boomuxHost.attached = true; }
     }
     const sessionIds = processSessionIds(p.pid, prov, p.cmd);
     const sample = processTreeSample(p.pid);
