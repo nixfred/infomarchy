@@ -100,3 +100,17 @@ describe("usage trend chart", () => {
     expect(view).toContain('"unpriced"');
   });
 });
+
+describe("multiplexer-aware focus", () => {
+  test("cards, attention rows and the inspector jump into the hosting multiplexer", () => {
+    const model = readFileSync(join(import.meta.dir, "InfoModel.qml"), "utf8");
+    const view = readFileSync(join(import.meta.dir, "InfoView.qml"), "utf8");
+    expect(model).toContain("function focusHerdrPane(host)");
+    expect(model).toContain('["bun", root.herdrFocusPath, sock, workspace, tab, pane]');
+    expect(model).toContain('["select-window", "-t", pane]');
+    expect(model).not.toContain('["pane", "focus", "--pane", pane]');
+    expect(view).toContain("view.desk.focusSession(sc.modelData)");
+    expect(view).toContain("view.desk.focusSession(item); view.navigated(); return true");
+    expect(view).toContain("view.desk.focusSession(sessionInspector.session)");
+  });
+});

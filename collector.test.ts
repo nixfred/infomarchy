@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join, relative } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor } from "./collector.ts";
 
 const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
 const historyFixture = join(testRoot, "history");
@@ -710,5 +710,38 @@ describe("today's value at the blended lifetime rate", () => {
     expect(todayValueEstimate({ m: 200_000, mystery: 999 }, lifetime, table as any)).toBeCloseTo(2, 6);
     expect(todayValueEstimate({ mystery: 999 }, lifetime, table as any)).toBeNull();
     expect(todayValueEstimate({ m: "junk" }, lifetime, table as any)).toBeNull();
+  });
+});
+
+describe("Herdr-hosted agents get their client's window", () => {
+  test("only the herdr CLIENT process counts, never the server or utility invocations", () => {
+    const commands = new Map<number, string[]>([
+      [10, ["/usr/bin/herdr", "server"]],
+      [11, ["herdr"]],
+      [12, ["/usr/bin/herdr", "--session", "work"]],
+      [13, ["herdr", "api", "snapshot"]],
+      [14, ["kitty"]],
+    ]);
+    expect(herdrClientPids(commands)).toEqual([11, 12]);
+  });
+
+  test("the session socket from the agent's environment is validated", () => {
+    expect(herdrSocketFromEnvironment("HERDR_ENV=1\0HERDR_SOCKET_PATH=/home/u/.config/herdr/herdr.sock\0")).toBe("/home/u/.config/herdr/herdr.sock");
+    expect(herdrSocketFromEnvironment("HERDR_SOCKET_PATH=relative.sock\0")).toBe("");
+    expect(herdrSocketFromEnvironment("HERDR_SOCKET_PATH=/tmp/x.sock;rm -rf\0")).toBe("");
+    expect(herdrSocketFromEnvironment("")).toBe("");
+  });
+
+  test("prefers the client attached to the same socket, else any client with a window", () => {
+    const a = { address: "0xa" }, b = { address: "0xb" };
+    const clients = [
+      { pid: 1, socket: "/s/one.sock", window: a },
+      { pid: 2, socket: "/s/two.sock", window: b },
+      { pid: 3, socket: "/s/three.sock", window: null },
+    ];
+    expect(herdrWindowFor({ kind: "herdr", label: "", socket: "/s/two.sock" }, clients)).toBe(b);
+    expect(herdrWindowFor({ kind: "herdr", label: "", socket: "/s/nine.sock" }, clients)).toBe(a);
+    expect(herdrWindowFor({ kind: "herdr", label: "" }, clients)).toBe(a);
+    expect(herdrWindowFor({ kind: "herdr", label: "" }, [clients[2]])).toBeNull();
   });
 });

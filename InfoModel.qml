@@ -22,6 +22,7 @@ Item {
   property string copyTextPath: Qt.resolvedUrl("copy-text.ts").toString().replace(/^file:\/\//, "")
   property string ollamaControlPath: Qt.resolvedUrl("ollama-control.ts").toString().replace(/^file:\/\//, "")
   property string previewPath: Qt.resolvedUrl("window-preview.ts").toString().replace(/^file:\/\//, "")
+  property string herdrFocusPath: Qt.resolvedUrl("herdr-focus.ts").toString().replace(/^file:\/\//, "")
   property bool ollamaBusy: false
   property string ollamaStatus: ""
   property string ollamaError: ""
@@ -251,16 +252,46 @@ Item {
     var pane = String(paneId || ""), sock = String(server || "")
     if (!/^%\d{1,9}$/.test(pane)) return false
     if (sock && !/^\/[A-Za-z0-9_.\/-]{1,255}$/.test(sock)) return false
-    var command = sock ? ["tmux", "-S", sock, "switch-client", "-t", pane] : ["tmux", "switch-client", "-t", pane]
-    Quickshell.execDetached(command)
+    var prefix = sock ? ["tmux", "-S", sock] : ["tmux"]
+    // Window, then pane, then bring the attached client onto it. Each command
+    // resolves the session from the pane id, so order only matters for feel.
+    Quickshell.execDetached(prefix.concat(["select-window", "-t", pane]))
+    Quickshell.execDetached(prefix.concat(["select-pane", "-t", pane]))
+    Quickshell.execDetached(prefix.concat(["switch-client", "-t", pane]))
     return true
   }
+  // Herdr ids look like wM, wM:t1, wM:p1. The socket, when the agent's
+  // environment named one, targets the same Herdr session the agent runs in.
+  function herdrId(value, kind) {
+    var id = String(value || "")
+    var shape = kind === "workspace" ? /^w[A-Za-z0-9_-]{1,32}$/ : kind === "tab" ? /^w[A-Za-z0-9_-]{1,32}:t[A-Za-z0-9_-]{1,32}$/ : /^w[A-Za-z0-9_-]{1,32}:p[A-Za-z0-9_-]{1,32}$/
+    return shape.test(id) ? id : ""
+  }
+  // Herdr's CLI has no focus-pane-by-id; its socket API does (pane.focus).
+  // herdr-focus.ts sends workspace.focus → tab.focus → pane.focus over the
+  // agent's own session socket, re-validating every id.
+  function focusHerdrPane(host) {
+    var h = host || {}
+    var workspace = herdrId(h.workspaceId, "workspace"), tab = herdrId(h.tabId, "tab"), pane = herdrId(h.paneId, "pane")
+    if (!workspace && !tab && !pane) return false
+    var sock = String(h.socket || "")
+    if (sock && !/^\/[A-Za-z0-9_.\/-]{1,255}\.sock$/.test(sock)) sock = ""
+    Quickshell.execDetached(["bun", root.herdrFocusPath, sock, workspace, tab, pane])
+    return true
+  }
+  // Focus the terminal window, then ask the multiplexer inside it to show the
+  // agent's own pane. Herdr and tmux are handled; a host we cannot address
+  // still gets the window focused.
   function focusSession(session) {
     var item = session || {}
     if (!(item.window && item.window.address)) return false
     focusWindow(item.window.address)
-    var tmux = (item.hosts || []).filter(function(host) { return host && host.kind === "tmux" && host.paneId })[0]
-    if (tmux && tmux.attached && !tmux.activePane) focusTmuxPane(tmux.server, tmux.paneId)
+    var hosts = item.hosts || []
+    for (var i = 0; i < hosts.length; i++) {
+      var host = hosts[i] || {}
+      if (host.kind === "tmux" && host.paneId && host.attached && !host.activePane) focusTmuxPane(host.server, host.paneId)
+      else if (host.kind === "herdr" && host.attached) focusHerdrPane(host)
+    }
     return true
   }
 

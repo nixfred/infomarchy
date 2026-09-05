@@ -192,7 +192,7 @@ Item {
     return item.attentionAction === "answer" ? "ANSWER" : item.attentionAction === "review" ? "REVIEW" : item.attentionAction === "resolve" ? "RESOLVE" : "FOCUS"
   }
   function activateAttention(item) {
-    if (item.window && item.window.address) { view.navigateTo(item.window.address); return true }
+    if (item.window && item.window.address) { view.desk.focusSession(item); view.navigated(); return true }
     if (view.desk.canResume(item.provider, item.session)) return view.desk.resumeSession(item.provider, item.session, item.cwd)
     if (view.desk.canOpenProject(item.cwd)) return view.desk.openProject(item.cwd)
     return false
@@ -548,7 +548,7 @@ Item {
                     elide: Text.ElideRight
                   }
                   PlainText { Layout.fillWidth: true; text: sc.modelData.cwd || ""; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideMiddle }
-                  PlainText { Layout.fillWidth: true; visible: (sc.modelData.hosts || []).length > 0; text: "hosted in " + view.sessionHostLabel(sc.modelData) + (sc.modelData.window ? " · attached" : " · no direct window"); color: sc.tone; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+                  PlainText { Layout.fillWidth: true; visible: (sc.modelData.hosts || []).length > 0; text: "hosted in " + view.sessionHostLabel(sc.modelData) + (sc.modelData.window ? " · click jumps to the pane" : " · no client window found"); color: sc.tone; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
                   PlainText { Layout.fillWidth: true; visible: !!sc.modelData.topic && !!(sc.modelData.window && sc.modelData.window.title); text: sc.modelData.window ? (sc.modelData.window.title || "") : ""; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
                   PlainText { Layout.fillWidth: true; visible: !!sc.modelData.git; text: sc.modelData.git ? ("git " + sc.modelData.git.branch + (sc.modelData.git.dirty ? " · " + sc.modelData.git.dirty + " changed" : " · clean") + (sc.modelData.git.ahead ? " · ↑" + sc.modelData.git.ahead : "") + (sc.modelData.git.behind ? " · ↓" + sc.modelData.git.behind : "") + (sc.modelData.git.conflicts ? " · " + sc.modelData.git.conflicts + " conflicts" : "")) : ""; color: sc.modelData.git && sc.modelData.git.conflicts ? view.desk.red : sc.modelData.git && sc.modelData.git.dirty ? view.desk.yellow : view.desk.green; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
                   PlainText { Layout.fillWidth: true; text: "pid " + sc.modelData.pid + (sc.modelData.window ? "  ·  ws " + sc.modelData.window.workspace : "  ·  no window"); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }

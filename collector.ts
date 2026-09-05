@@ -559,7 +559,14 @@ export type SessionHost = {
   // then does the terminal's title describe this agent.
   activePane?: boolean;
   server?: string;
+  // Herdr: the session socket the agent's environment points at, so a click
+  // can address the same server the agent lives in.
+  socket?: string;
 };
+export function herdrSocketFromEnvironment(environ = ""): string {
+  const socket = String(envValue(environ, "HERDR_SOCKET_PATH") || "");
+  return socket.length > 0 && socket.length <= 256 && socket.startsWith("/") && socket.endsWith(".sock") && !/[\u0000-\u001f\u007f\s]/.test(socket) ? socket : "";
+}
 // Extract only documented multiplexer identity variables. Never serialize or
 // search the rest of /proc/<pid>/environ, which may contain credentials.
 export function sessionHostsFromEnvironment(environ = ""): SessionHost[] {
@@ -569,7 +576,7 @@ export function sessionHostsFromEnvironment(environ = ""): SessionHost[] {
   const herdrTab = contextId(envValue(environ, "HERDR_TAB_ID"));
   if (envValue(environ, "HERDR_ENV") === "1" && (herdrPane || herdrWorkspace || herdrTab)) {
     const parts = [herdrWorkspace, herdrTab, herdrPane].filter(Boolean);
-    hosts.push({ kind: "herdr", label: "Herdr " + parts.join(" / "), workspaceId: herdrWorkspace, tabId: herdrTab, paneId: herdrPane });
+    hosts.push({ kind: "herdr", label: "Herdr " + parts.join(" / "), workspaceId: herdrWorkspace, tabId: herdrTab, paneId: herdrPane, socket: herdrSocketFromEnvironment(environ) });
   }
   const boomuxShellId = contextId(envValue(environ, "BOOMUX_SHELL_ID"));
   if (boomuxShellId) {
@@ -1026,6 +1033,29 @@ export function sessionPresentation(window: any, cmd: string[]): { window: any; 
     args: sanitizedArgs.join(" ").slice(0, 60),
   };
 }
+// An agent inside Herdr descends from `herdr server` (a daemon under
+// systemd), never from the terminal showing it. The terminal belongs to a
+// `herdr` CLIENT process. Find those clients, resolve each to its Hyprland
+// window, and remember which session socket it is attached to.
+export type HerdrClient = { pid: number; socket: string; window: any };
+export function herdrClientPids(commands: Map<number, string[]>): number[] {
+  const result: number[] = [];
+  for (const [pid, cmd] of commands) {
+    if (!/(^|\/)herdr$/.test(cmd[0] || "")) continue;
+    if (["server", "api", "status", "update", "completion", "config", "channel"].includes(cmd[1] || "")) continue;
+    result.push(pid);
+  }
+  return result.slice(0, 32);
+}
+export function herdrWindowFor(host: SessionHost, clients: HerdrClient[]): any {
+  const withWindow = clients.filter(client => client.window);
+  if (!withWindow.length) return null;
+  const same = host.socket ? withWindow.find(client => client.socket === host.socket) : null;
+  return (same || withWindow[0]).window;
+}
+function herdrState(winByPid: Map<number, any>): HerdrClient[] {
+  return herdrClientPids(cmdByPid).map(pid => ({ pid, socket: herdrSocketFromEnvironment(environOf(pid)), window: windowForProcess(pid, winByPid) }));
+}
 async function tmuxState(winByPid: Map<number, any>, pids: number[]): Promise<{ panes: TmuxPane[]; windows: Map<string, any> }> {
   const windows = new Map<string, any>();
   const tmuxRunning = [...cmdByPid.values()].some(cmd => cmd.some(arg => /(^|\/)tmux$|^tmux: server$/.test(arg)));
@@ -1072,6 +1102,7 @@ async function liveSessions(pids: number[]) {
   const winByPid = new Map<number, any>(clients.map((c: any) => [c.pid, c]));
   const sessions: any[] = [];
   const [gpuByPid, tmux] = await Promise.all([gpuMemoryByPid(), tmuxState(winByPid, pids)]);
+  const herdrClients = herdrState(winByPid);
   for (const pid of pids) {
     const prov = providerOf(cmdByPid.get(pid) || []); if (!prov) continue;
     const p = info(pid); if (!p) continue;
@@ -1097,6 +1128,13 @@ async function liveSessions(pids: number[]) {
       host.server = pane.server;
       host.label = "tmux " + pane.session + ":" + pane.window + "." + pane.pane;
       if (!w && attachedWindow) w = attachedWindow;
+    }
+    // Herdr-hosted agent with no direct window: attach the client terminal so
+    // the card is clickable; focusSession() then asks Herdr for the pane.
+    const herdrHost = hosts.find(host => host.kind === "herdr");
+    if (herdrHost && !w) {
+      const clientWindow = herdrWindowFor(herdrHost, herdrClients);
+      if (clientWindow) { w = clientWindow; herdrHost.attached = true; }
     }
     const sessionIds = processSessionIds(p.pid, prov, p.cmd);
     const sample = processTreeSample(p.pid);
