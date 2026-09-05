@@ -215,17 +215,24 @@ async function boundedStream(stream: ReadableStream<Uint8Array> | null, limit: n
   for (const chunk of chunks) { joined.set(chunk, offset); offset += chunk.byteLength; }
   return new TextDecoder().decode(joined);
 }
+// A killed tool can leave a grandchild holding our stdout pipe (sh → sleep,
+// gh → git, git → credential helper). Waiting for EOF then blocks for the
+// grandchild's lifetime, and under Quickshell there is no outer timeout: the
+// collector Process stays "running" and every tick is skipped. Race the read
+// against the budget and give up on the pipe; runCollector() exits explicitly
+// so a dangling read cannot keep the event loop alive either.
 async function run(cmd: string[], timeoutMs = 1500, cwd?: string): Promise<string> {
   try {
     const proc = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "ignore" });
-    const t = setTimeout(() => { try { proc.kill(); } catch {} }, timeoutMs);
+    let expired: ReturnType<typeof setTimeout> | null = null;
+    const deadline = new Promise<null>(resolve => { expired = setTimeout(() => resolve(null), timeoutMs); });
     try {
-      const out = await boundedStream(proc.stdout, MAX_COMMAND_BYTES);
-      if (out === null) { try { proc.kill(); } catch {}; return ""; }
-      await proc.exited;
+      const out = await Promise.race([boundedStream(proc.stdout, MAX_COMMAND_BYTES), deadline]);
+      if (out === null) { try { proc.kill("SIGKILL"); } catch {}; return ""; }
+      await Promise.race([proc.exited, new Promise(resolve => setTimeout(resolve, 250))]);
       return out;
     } finally {
-      clearTimeout(t);
+      if (expired) clearTimeout(expired);
     }
   } catch { return ""; }
 }
@@ -313,18 +320,22 @@ function mem() {
   return { total, used: total - avail, pct: total ? 100 * (total - avail) / total : null,
     swapTotal: m.SwapTotal || 0, swapUsed: (m.SwapTotal || 0) - (m.SwapFree || 0) };
 }
-async function disk() {
-  const out = await run(["df", "-B1", "--output=target,size,used,avail", "/", HOME]);
-  const rows = out.trim().split("\n").slice(1).map(l => l.trim().split(/\s+/));
+export function parseDfRows(out: string): any[] {
+  const rows = String(out || "").trim().split("\n").slice(1).map(l => l.trim().split(/\s+/));
   const seen = new Set<string>(); const res: any[] = [];
   for (const r of rows) {
-    if (r.length < 4 || seen.has(r[0])) continue; seen.add(r[0]);
-    const size = +r[1], used = +r[2];
+    if (r.length < 4 || seen.has(r[0]) || !r[0].startsWith("/")) continue; seen.add(r[0]);
+    const size = Number(r[1]), used = Number(r[2]), avail = Number(r[3]);
+    // A non-numeric column used to produce NaN → null → an empty meter for "/".
+    if (![size, used, avail].every(n => Number.isFinite(n) && n >= 0) || size <= 0) continue;
     // btrfs subvolumes (/ and /home on one pool) report identical numbers — show once
     if (res.some(x => x.size === size && x.used === used)) continue;
-    res.push({ mount: r[0], size, used, avail: +r[3], pct: size ? 100 * used / size : null });
+    res.push({ mount: uiString(r[0], 128), size, used, avail, pct: 100 * used / size });
   }
   return res;
+}
+async function disk() {
+  return parseDfRows(await run(["df", "-B1", "--output=target,size,used,avail", "/", HOME]));
 }
 async function net() {
   const route = await run(["ip", "-j", "route", "get", "1.1.1.1"], 800);
@@ -369,12 +380,19 @@ function battery() {
   }
   return null;
 }
+export function parseGpuLine(out: string): { name: string; util: number; memUsed: number; memTotal: number; temp: number } | null {
+  const r = String(out || "").trim().split("\n")[0]?.split(",").map(s => s.trim());
+  if (!r || r.length < 5 || !r[0]) return null;
+  const numbers = r.slice(1, 5).map(Number);
+  // ",,,," parses to five empty strings and +"" is 0 — that rendered a GPU
+  // named "" with 0/0 memory. Require a name and finite, non-negative numbers.
+  if (!numbers.every(n => Number.isFinite(n) && n >= 0) || numbers[2] <= 0) return null;
+  return { name: uiString(r[0], 96), util: numbers[0], memUsed: numbers[1] * 1048576, memTotal: numbers[2] * 1048576, temp: numbers[3] };
+}
 async function gpu() {
   if (!Bun.which("nvidia-smi")) return null;
   const out = await run(["nvidia-smi", "--query-gpu=name,utilization.gpu,memory.used,memory.total,temperature.gpu", "--format=csv,noheader,nounits"], 1200);
-  const r = out.trim().split("\n")[0]?.split(",").map(s => s.trim());
-  if (!r || r.length < 5) return null;
-  return { name: r[0], util: +r[1], memUsed: +r[2] * 1048576, memTotal: +r[3] * 1048576, temp: +r[4] };
+  return parseGpuLine(out);
 }
 function temp() {
   let best: number | null = null;
@@ -954,6 +972,10 @@ async function tmuxState(winByPid: Map<number, any>, pids: number[]): Promise<{ 
 async function liveSessions(pids: number[]) {
   let clients: any[] = [];
   try { clients = parseJsonBounded(await run(["hyprctl", "clients", "-j"], 1000), 50_000, 16) || []; } catch {}
+  // Shape-check every client: a null entry, a non-integer pid or a non-string
+  // address used to throw here and blank the whole desk.
+  clients = (Array.isArray(clients) ? clients : []).filter((c: any) =>
+    c && typeof c === "object" && Number.isInteger(c.pid) && c.pid > 0 && typeof c.address === "string");
   const winByPid = new Map<number, any>(clients.map((c: any) => [c.pid, c]));
   const sessions: any[] = [];
   const [gpuByPid, tmux] = await Promise.all([gpuMemoryByPid(), tmuxState(winByPid, pids)]);
@@ -1429,4 +1451,8 @@ async function runCollector() {
 if (import.meta.main) {
   try { await runCollector(); }
   catch { process.stdout.write(protocolError("collector failed safely")); }
+  // Orphaned grandchildren of killed tools can hold our pipes open; a pending
+  // read on one keeps Bun alive indefinitely. The frame is written — leave.
+  await Bun.write(Bun.stdout, "");
+  process.exit(0);
 }

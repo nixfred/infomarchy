@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join, relative } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows } from "./collector.ts";
 
 const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
 const historyFixture = join(testRoot, "history");
@@ -497,5 +497,23 @@ describe("state dir hygiene", () => {
     expect(reapStateTempFiles(dir, 0, Date.now() + 1000)).toBe(1);
     expect(existsSync(orphan)).toBe(false);
     expect(existsSync(keep)).toBe(true);
+  });
+});
+
+describe("machine parsers refuse garbage", () => {
+  test("nvidia-smi rows need a name and sane numbers", () => {
+    expect(parseGpuLine("NVIDIA RTX 4050 Laptop GPU, 12, 1024, 6144, 51")).toEqual({ name: "NVIDIA RTX 4050 Laptop GPU", util: 12, memUsed: 1073741824, memTotal: 6442450944, temp: 51 });
+    expect(parseGpuLine(",,,,")).toBeNull();
+    expect(parseGpuLine("x,y")).toBeNull();
+    expect(parseGpuLine("GPU, NaN, 1, 2, 3")).toBeNull();
+    expect(parseGpuLine("")).toBeNull();
+  });
+  test("df rows need numeric columns and an absolute mount", () => {
+    expect(parseDfRows("Mounted on Size Used Avail\n/ 100 40 60\n/home 100 40 60\n/boot 10 3 7")).toEqual([
+      { mount: "/", size: 100, used: 40, avail: 60, pct: 40 },
+      { mount: "/boot", size: 10, used: 3, avail: 7, pct: 30 },
+    ]);
+    expect(parseDfRows("Mounted on Size Used Avail\n/ x y z\n/ 1 2")).toEqual([]);
+    expect(parseDfRows("")).toEqual([]);
   });
 });
