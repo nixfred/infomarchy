@@ -69,6 +69,8 @@ The card's alert controls send deduplicated Omarchy notifications when an agent 
 
 <img src="docs/usage.png" alt="Usage and limits card">
 
+Above the limit meters sits a **7-day trend**: one line per provider, tokens processed per day, three gridlines, hover any day for the exact figures. The **TOKENS / ≈ $ VALUE** chip switches the same lines to an *estimated API value* — what those tokens would have cost at published API prices — and each provider row shows today's and lifetime estimates, the share of lifetime tokens that were cache reads, and the session count. Prices come from a pinned, attributed LiteLLM snapshot (`pricing.json`, see `THIRD_PARTY_NOTICES.md`); models missing from it are shown as *unpriced* rather than guessed, and the estimate is never your subscription bill. All of it is read from the `omarchy.agents` usage cache — no new scanning.
+
 Session (5-hour) and weekly (7-day) rate-limit meters with time-to-reset, today's prompt count and token volume, per subscription. Meters turn **yellow past 60%** and **red past 85%**, in your theme's yellow and red.
 
 Provider chips filter the card interactively. Toggle **PERCENT / FORECAST** to project each recognized 5-hour or 7-day meter to reset from its elapsed-window pace; young or malformed windows say `learning` instead of showing a misleading number.

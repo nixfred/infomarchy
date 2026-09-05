@@ -87,3 +87,16 @@ describe("interactive information modules", () => {
     expect(service).toContain('"nixfred.infomarchy", "{}"');
   });
 });
+
+describe("usage trend chart", () => {
+  test("renders a per-provider 7-day series with a tokens / value toggle and estimated value lines", () => {
+    const view = readFileSync(join(import.meta.dir, "InfoView.qml"), "utf8");
+    expect(view).toContain('property string usageMetric: "tokens"');
+    expect(view).toContain("readonly property var usageSeries");
+    expect(view).toContain("id: trendCanvas");
+    expect(view).toContain('text: view.usageMetric === "value" ? "≈ $ VALUE" : "TOKENS"');
+    expect(view).toContain("usageTrend.hovered");
+    expect(view).toContain('"% cache reads"');
+    expect(view).toContain('"unpriced"');
+  });
+});

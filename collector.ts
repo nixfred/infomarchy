@@ -1426,6 +1426,103 @@ async function ollamaState() {
 }
 const MAX_USAGE_FILES = 16;
 const MAX_USAGE_FILE_BYTES = 512 * 1024;
+
+// ---------------------------------------------------------------- API value estimate
+// pricing.json is a trimmed, attributed LiteLLM snapshot (see
+// THIRD_PARTY_NOTICES.md). Costs are per token. Models not in the table are
+// reported as unpriced rather than guessed — an estimate that quietly assumes
+// a rate is worse than an honest gap.
+type Rate = Record<string, number>;
+let pricingTable: Record<string, Rate> | null | undefined;
+export function loadPricing(path = join(import.meta.dir, "pricing.json")): Record<string, Rate> {
+  if (pricingTable !== undefined) return pricingTable || {};
+  const parsed = parseJsonBounded(read(path, 512 * 1024) || "", 20_000, 6);
+  const models = parsed && typeof parsed === "object" && parsed.models && typeof parsed.models === "object" ? parsed.models : {};
+  pricingTable = {};
+  for (const [key, value] of Object.entries(models)) {
+    if (!value || typeof value !== "object") continue;
+    const rate: Rate = {};
+    for (const [field, cost] of Object.entries(value as any)) if (typeof cost === "number" && Number.isFinite(cost) && cost >= 0) rate[field] = cost;
+    if (Object.keys(rate).length) pricingTable[key] = rate;
+  }
+  return pricingTable;
+}
+export function rateForModel(model: unknown, table = loadPricing()): Rate | null {
+  const name = String(model || "").trim();
+  if (!name) return null;
+  for (const key of [name, `anthropic/${name}`, `openai/${name}`, `gemini/${name}`, `xai/${name}`]) if (table[key]) return table[key];
+  return null;
+}
+export type TokenUsage = { inputTokens: number; outputTokens: number; cacheReadInputTokens: number; cacheCreationInputTokens: number };
+export function tokenUsageOf(value: any): TokenUsage {
+  const n = (v: unknown) => { const x = Number(v); return Number.isFinite(x) && x >= 0 ? x : 0; };
+  const v = value && typeof value === "object" ? value : {};
+  return { inputTokens: n(v.inputTokens), outputTokens: n(v.outputTokens), cacheReadInputTokens: n(v.cacheReadInputTokens), cacheCreationInputTokens: n(v.cacheCreationInputTokens) };
+}
+export function estimateValue(usage: TokenUsage, rate: Rate | null): number | null {
+  if (!rate) return null;
+  const context = usage.inputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens;
+  const suffix = context > 200_000 && rate.input_cost_per_token_above_200k_tokens !== undefined ? "_above_200k_tokens" : "";
+  const cost = (key: string) => rate[key + suffix] ?? rate[key];
+  const parts: Array<[number, number | undefined]> = [
+    [usage.inputTokens, cost("input_cost_per_token")],
+    [usage.outputTokens, cost("output_cost_per_token")],
+    [usage.cacheReadInputTokens, cost("cache_read_input_token_cost")],
+    [usage.cacheCreationInputTokens, cost("cache_creation_input_token_cost")],
+  ];
+  // A model priced for input but not for a cache field it actually used is not priced.
+  if (parts.some(([count, price]) => count > 0 && typeof price !== "number")) return null;
+  return parts.reduce((sum, [count, price]) => sum + count * (price || 0), 0);
+}
+// Aggregate a {model: usage} map into lifetime totals and an estimated value.
+export function valueSummary(byModel: Record<string, any>, table = loadPricing()): { value: number | null; pricedTokens: number; totalTokens: number; unpriced: string[]; totals: TokenUsage } {
+  let value = 0, pricedTokens = 0, totalTokens = 0, priced = false;
+  const unpriced: string[] = [];
+  const totals: TokenUsage = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 };
+  for (const [model, raw] of Object.entries(byModel || {}).slice(0, 64)) {
+    const usage = tokenUsageOf(raw);
+    const tokens = usage.inputTokens + usage.outputTokens + usage.cacheReadInputTokens + usage.cacheCreationInputTokens;
+    totalTokens += tokens;
+    for (const key of Object.keys(totals) as Array<keyof TokenUsage>) totals[key] += usage[key];
+    const estimate = estimateValue(usage, rateForModel(model, table));
+    if (estimate === null) { if (tokens > 0) unpriced.push(uiString(model, 64)); continue; }
+    value += estimate; pricedTokens += tokens; priced = true;
+  }
+  return { value: priced ? value : null, pricedTokens, totalTokens, unpriced: unpriced.slice(0, 8), totals };
+}
+// todayTokensByModel is {model: totalTokens} with no input/output split, so
+// today's value is estimated at each model's blended lifetime rate ($/token
+// over everything it has processed). Models without a lifetime record or a
+// price are skipped, never guessed.
+export function todayValueEstimate(todayByModel: Record<string, any>, lifetimeByModel: Record<string, any>, table = loadPricing()): number | null {
+  let value = 0, priced = false;
+  for (const [model, raw] of Object.entries(todayByModel || {}).slice(0, 64)) {
+    const todayTokens = Number(raw);
+    if (!Number.isFinite(todayTokens) || todayTokens <= 0) continue;
+    const lifetime = tokenUsageOf(lifetimeByModel?.[model]);
+    const lifetimeTokens = lifetime.inputTokens + lifetime.outputTokens + lifetime.cacheReadInputTokens + lifetime.cacheCreationInputTokens;
+    const lifetimeValue = estimateValue(lifetime, rateForModel(model, table));
+    if (lifetimeValue === null || lifetimeTokens <= 0) continue;
+    value += todayTokens * (lifetimeValue / lifetimeTokens); priced = true;
+  }
+  return priced ? value : null;
+}
+// recentDays from the Agents cache is [{date, messageCount}] where messageCount
+// is the day's token total (today's entry equals todayTotalTokens). Align it
+// onto the dashboard's seven local days so every provider shares one x-axis.
+export function alignDailyTokens(recentDays: unknown, dayKeys: string[]): number[] {
+  const byDate = new Map<string, number>();
+  for (const entry of (Array.isArray(recentDays) ? recentDays : []).slice(0, 62)) {
+    if (!entry || typeof entry !== "object") continue;
+    const date = uiString((entry as any).date, 10), tokens = Number((entry as any).messageCount ?? (entry as any).tokens);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date) && Number.isFinite(tokens) && tokens >= 0) byDate.set(date, tokens);
+  }
+  return dayKeys.map(key => byDate.get(key) || 0);
+}
+export function localDayKey(stamp: number): string {
+  const d = new Date(stamp);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
 export function normalizeUsageLimit(limit: any, stamp = now): any | null {
   if (!limit || typeof limit !== "object") return null;
   const percent = Number(limit.percent);
@@ -1450,6 +1547,9 @@ export function normalizeUsage(j: any, stamp = now): any {
     .map((day: any) => day && typeof day === "object"
       ? Object.fromEntries(Object.entries(day).slice(0, 8).map(([k, v]) => [uiString(k, 32), typeof v === "string" ? uiString(v, 32) : count(v)]))
       : count(day));
+  const lifetime = valueSummary(j.modelUsage && typeof j.modelUsage === "object" ? j.modelUsage : {});
+  const todayValue = todayValueEstimate(j.todayTokensByModel && typeof j.todayTokensByModel === "object" ? j.todayTokensByModel : {}, j.modelUsage && typeof j.modelUsage === "object" ? j.modelUsage : {});
+  const dayKeys = heatDays.map(localDayKey);
   return {
     name: uiString(j.name, 64), ready: j.ready !== false, tierLabel: uiString(j.tierLabel, 32),
     // Ship the projection from the tested implementation instead of letting
@@ -1458,6 +1558,15 @@ export function normalizeUsage(j: any, stamp = now): any {
     todayPrompts: count(j.todayPrompts), todaySessions: count(j.todaySessions), todayTotalTokens: count(j.todayTotalTokens),
     totalPrompts: count(j.totalPrompts), totalSessions: count(j.totalSessions), updatedAt: count(j.updatedAt),
     modelUsage, recentDays, usageStatusText: uiString(j.usageStatusText, 160),
+    // Seven aligned daily token totals (oldest first) for the trend chart, and
+    // API-value estimates from the attributed price table.
+    dailyTokens: alignDailyTokens(j.recentDays, dayKeys),
+    value: {
+      lifetime: lifetime.value, today: todayValue,
+      pricedShare: lifetime.totalTokens ? lifetime.pricedTokens / lifetime.totalTokens : 0,
+      unpriced: lifetime.unpriced,
+      totals: lifetime.totals,
+    },
   };
 }
 function agentsUsage() {
@@ -1635,6 +1744,7 @@ async function runCollector() {
       events: notificationState.events,
       collisions: repoCollisions(sessions),
       counts, providers: { claude, codex, grok, opencode, ollama }, usage: agentsUsage(),
+      usageDays: heatDays.map(localDayKey),
       heatmap: { start: start7, days: heatDays, cells: heat.map(c => [c.n, c.p]) },
       recent: dashboardRecent, recentTruncated,
     },

@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join, relative } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate } from "./collector.ts";
 
 const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
 const historyFixture = join(testRoot, "history");
@@ -659,5 +659,56 @@ describe("firm subprocess deadlines", () => {
     const proc = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
     await terminate(proc, 500);
     expect(proc.signalCode).toBe("SIGTERM");
+  });
+});
+
+describe("API value estimate and daily token series", () => {
+  test("the bundled price table loads and resolves plain or provider-prefixed model ids", () => {
+    const table = loadPricing();
+    expect(Object.keys(table).length).toBeGreaterThan(100);
+    expect(rateForModel("claude-opus-5", table)).toBeTruthy();
+    expect(rateForModel("gpt-6-astra", table)).toBeTruthy();
+    expect(rateForModel("codex-auto-review", table)).toBeNull();
+    expect(rateForModel("", table)).toBeNull();
+  });
+
+  test("estimates dollars from per-token rates and refuses partially priced usage", () => {
+    const rate = { input_cost_per_token: 0.000001, output_cost_per_token: 0.000002, cache_read_input_token_cost: 0.0000001, cache_creation_input_token_cost: 0.00000125 };
+    const usage = { inputTokens: 1_000_000, outputTokens: 500_000, cacheReadInputTokens: 10_000_000, cacheCreationInputTokens: 0 };
+    expect(estimateValue(usage, rate)).toBeCloseTo(1 + 1 + 1, 6);
+    // Used a cache field the table does not price → unpriced, not underpriced.
+    expect(estimateValue(usage, { input_cost_per_token: 0.000001, output_cost_per_token: 0.000002 })).toBeNull();
+    expect(estimateValue(usage, null)).toBeNull();
+  });
+
+  test("valueSummary separates priced from unpriced models and sums totals", () => {
+    const table = { "m-priced": { input_cost_per_token: 0.00001, output_cost_per_token: 0.00005, cache_read_input_token_cost: 0.000001, cache_creation_input_token_cost: 0.0000125 } };
+    const summary = valueSummary({
+      "m-priced": { inputTokens: 100_000, outputTokens: 10_000, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+      "m-mystery": { inputTokens: 50_000, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 },
+    }, table as any);
+    expect(summary.value).toBeCloseTo(1 + 0.5, 6);
+    expect(summary.pricedTokens).toBe(110_000);
+    expect(summary.totalTokens).toBe(160_000);
+    expect(summary.unpriced).toEqual(["m-mystery"]);
+    expect(valueSummary({ "m-mystery": { inputTokens: 5 } }, table as any).value).toBeNull();
+  });
+
+  test("recentDays align onto the dashboard's seven local days with gaps as zero", () => {
+    const stamp = new Date(2026, 8, 5, 12).getTime();
+    const keys = [6, 5, 4, 3, 2, 1, 0].map(back => localDayKey(stamp - back * 86_400_000));
+    expect(keys[6]).toBe("2026-09-05");
+    const series = alignDailyTokens([{ date: "2026-09-05", messageCount: 80_146_806 }, { date: "2026-09-03", messageCount: 12 }, { date: "garbage", messageCount: 1 }, null], keys);
+    expect(series).toEqual([0, 0, 0, 0, 12, 0, 80_146_806]);
+  });
+});
+
+describe("today's value at the blended lifetime rate", () => {
+  test("uses each model's own lifetime $/token; skips unpriced or unknown models", () => {
+    const table = { m: { input_cost_per_token: 0.00001, output_cost_per_token: 0.00001, cache_read_input_token_cost: 0.00001, cache_creation_input_token_cost: 0.00001 } };
+    const lifetime = { m: { inputTokens: 500_000, outputTokens: 500_000, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 } }; // $10 over 1M tokens → $10/M
+    expect(todayValueEstimate({ m: 200_000, mystery: 999 }, lifetime, table as any)).toBeCloseTo(2, 6);
+    expect(todayValueEstimate({ mystery: 999 }, lifetime, table as any)).toBeNull();
+    expect(todayValueEstimate({ m: "junk" }, lifetime, table as any)).toBeNull();
   });
 });

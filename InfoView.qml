@@ -22,6 +22,31 @@ Item {
   property var selectedPrompt: null
   property string usageProviderFilter: ""
   property bool usageForecastMode: false
+  // Trend chart metric: tokens processed per day, or their estimated API value.
+  property string usageMetric: "tokens"
+  function usageMoney(value) {
+    var n = Number(value || 0)
+    return n >= 1000 ? "$" + (n / 1000).toFixed(1) + "k" : n >= 100 ? "$" + n.toFixed(0) : "$" + n.toFixed(2)
+  }
+  // Each provider's blended $/token over its lifetime, used to scale its daily
+  // token series into an estimated daily value. Null when unpriced.
+  function usageBlendedRate(u) {
+    var v = (u || {}).value || {}, totals = v.totals || {}
+    var tokens = Number(totals.inputTokens || 0) + Number(totals.outputTokens || 0) + Number(totals.cacheReadInputTokens || 0) + Number(totals.cacheCreationInputTokens || 0)
+    return v.lifetime === null || v.lifetime === undefined || tokens <= 0 ? null : Number(v.lifetime) / tokens
+  }
+  readonly property var usageSeries: {
+    var out = []
+    var keys = Object.keys(usage).filter(function(k) { return usage[k] && usage[k].ready !== false && (!usageProviderFilter || usageProviderFilter === k) })
+    for (var i = 0; i < keys.length; i++) {
+      var u = usage[keys[i]], daily = Array.isArray(u.dailyTokens) ? u.dailyTokens : []
+      if (!daily.some(function(x) { return Number(x) > 0 })) continue
+      var rate = usageBlendedRate(u)
+      if (usageMetric === "value" && rate === null) continue
+      out.push({ provider: keys[i], points: daily.map(function(x) { return usageMetric === "value" ? Number(x) * rate : Number(x) }) })
+    }
+    return out
+  }
   property bool previewsEnabled: false
   // Delegates are rebuilt on every snapshot; without this, a hovered card
   // recaptured its preview every poll. Keyed by window address.
@@ -1177,7 +1202,103 @@ Item {
                   MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.usageProviderFilter = view.usageProviderFilter === parent.modelData ? "" : parent.modelData }
                 }
               }
+              Tag { text: view.usageMetric === "value" ? "≈ $ VALUE" : "TOKENS"; tone: view.usageMetric === "value" ? view.desk.green : view.desk.cyan; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.usageMetric = view.usageMetric === "value" ? "tokens" : "value" } }
               Tag { text: view.usageForecastMode ? "FORECAST" : "PERCENT"; tone: view.desk.cyan; MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.usageForecastMode = !view.usageForecastMode } }
+            }
+            // ---- 7-day trend: one line per provider, tokens or estimated value ----
+            Item {
+              id: usageTrend
+              Layout.fillWidth: true
+              visible: view.usageSeries.length > 0
+              implicitHeight: trendCanvas.height + trendReadout.implicitHeight + Style.spacing.xs
+              property int hovered: -1
+              readonly property var days: view.ai.usageDays || []
+              readonly property int labelWidth: Math.round(38 * Style.fontScale)
+              function fmt(n) { return view.usageMetric === "value" ? view.usageMoney(n) : view.desk.tokens(n) }
+              function dayLabel(index) {
+                var key = String(days[index] || ""); if (!key) return ""
+                var parts = key.split("-"); return parts.length === 3 ? parts[1] + "-" + parts[2] : key
+              }
+              Canvas {
+                id: trendCanvas
+                width: parent.width
+                height: Math.round(78 * Style.fontScale)
+                readonly property var series: view.usageSeries
+                onSeriesChanged: requestPaint()
+                onWidthChanged: requestPaint()
+                Connections { target: usageTrend; function onHoveredChanged() { trendCanvas.requestPaint() } }
+                Connections { target: view.desk; function onThemeForegroundChanged() { trendCanvas.requestPaint() } function onGreenChanged() { trendCanvas.requestPaint() } }
+                onPaint: {
+                  var ctx = getContext("2d"); ctx.reset()
+                  var left = usageTrend.labelWidth, top = 4, bottom = height - 4, plot = width - left - 2
+                  var list = series, n = list.length ? list[0].points.length : 0
+                  if (!n) return
+                  var max = 1
+                  for (var s = 0; s < list.length; s++) for (var i = 0; i < n; i++) max = Math.max(max, Number(list[s].points[i]) || 0)
+                  ctx.font = Style.font.caption + "px \"" + view.mono + "\""
+                  ctx.textBaseline = "middle"
+                  ctx.lineWidth = 1
+                  var grid = Qt.rgba(view.textFaint.r, view.textFaint.g, view.textFaint.b, 0.35)
+                  for (var t = 0; t < 3; t++) {
+                    var y = top + (bottom - top) * t / 2
+                    ctx.strokeStyle = grid; ctx.beginPath(); ctx.moveTo(left, y); ctx.lineTo(width, y); ctx.stroke()
+                    ctx.fillStyle = Qt.rgba(view.textFaint.r, view.textFaint.g, view.textFaint.b, 1)
+                    ctx.textAlign = "left"; ctx.fillText(usageTrend.fmt(max * (1 - t / 2)), 0, y)
+                  }
+                  for (var k = 0; k < list.length; k++) {
+                    var tone = view.desk.providerColor(list[k].provider)
+                    ctx.beginPath()
+                    for (var p = 0; p < n; p++) {
+                      var x = left + (n === 1 ? plot / 2 : p * plot / (n - 1))
+                      var yy = bottom - (Number(list[k].points[p]) || 0) / max * (bottom - top)
+                      if (p === 0) ctx.moveTo(x, yy); else ctx.lineTo(x, yy)
+                    }
+                    ctx.strokeStyle = tone; ctx.lineWidth = 2; ctx.stroke()
+                    if (list.length <= 3 && n > 1) { ctx.lineTo(left + plot, bottom); ctx.lineTo(left, bottom); ctx.closePath(); ctx.fillStyle = Qt.rgba(tone.r, tone.g, tone.b, 0.08); ctx.fill() }
+                  }
+                  if (usageTrend.hovered >= 0 && usageTrend.hovered < n) {
+                    var hx = left + (n === 1 ? plot / 2 : usageTrend.hovered * plot / (n - 1))
+                    ctx.strokeStyle = Qt.rgba(view.desk.themeForeground.r, view.desk.themeForeground.g, view.desk.themeForeground.b, 0.35)
+                    ctx.beginPath(); ctx.moveTo(hx, top); ctx.lineTo(hx, bottom); ctx.stroke()
+                    for (var q = 0; q < list.length; q++) {
+                      var py = bottom - (Number(list[q].points[usageTrend.hovered]) || 0) / max * (bottom - top)
+                      ctx.beginPath(); ctx.arc(hx, py, 3, 0, 2 * Math.PI); ctx.fillStyle = view.desk.providerColor(list[q].provider); ctx.fill()
+                    }
+                  }
+                }
+                MouseArea {
+                  anchors.fill: parent; hoverEnabled: true; enabled: view.interactive
+                  onPositionChanged: function(mouse) {
+                    var n = trendCanvas.series.length ? trendCanvas.series[0].points.length : 0
+                    if (n < 2) { usageTrend.hovered = n ? 0 : -1; return }
+                    var plot = trendCanvas.width - usageTrend.labelWidth - 2
+                    usageTrend.hovered = Math.max(0, Math.min(n - 1, Math.round((mouse.x - usageTrend.labelWidth) / plot * (n - 1))))
+                  }
+                  onExited: usageTrend.hovered = -1
+                }
+              }
+              PlainText {
+                id: trendReadout
+                anchors { top: trendCanvas.bottom; topMargin: Style.spacing.xs; left: parent.left; right: parent.right }
+                elide: Text.ElideRight
+                font.family: view.mono; font.pixelSize: Style.font.caption
+                color: usageTrend.hovered >= 0 ? view.desk.themeForeground : view.textFaint
+                text: {
+                  var list = view.usageSeries, n = list.length ? list[0].points.length : 0
+                  if (!n) return ""
+                  if (usageTrend.hovered < 0) {
+                    var parts = []
+                    for (var i = 0; i < list.length; i++) {
+                      var sum = 0; for (var d = 0; d < n; d++) sum += Number(list[i].points[d]) || 0
+                      parts.push(view.desk.providerLabel(list[i].provider) + " " + usageTrend.fmt(sum))
+                    }
+                    return usageTrend.dayLabel(0) + " → " + usageTrend.dayLabel(n - 1) + " · 7d " + parts.join(" · ") + (view.usageMetric === "value" ? " est." : "")
+                  }
+                  var at = []
+                  for (var j = 0; j < list.length; j++) at.push(view.desk.providerLabel(list[j].provider) + " " + usageTrend.fmt(list[j].points[usageTrend.hovered]))
+                  return usageTrend.dayLabel(usageTrend.hovered) + " · " + at.join(" · ")
+                }
+              }
             }
             Repeater {
               model: Object.keys(view.usage).filter(function(k) { return view.usage[k] && view.usage[k].ready !== false && (!view.usageProviderFilter || view.usageProviderFilter === k) })
@@ -1193,7 +1314,23 @@ Item {
                   PlainText { text: up.u.name || up.modelData; color: up.tone; font.family: view.mono; font.bold: true; font.pixelSize: Style.font.body }
                   PlainText { text: up.u.tierLabel || ""; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
                   Item { Layout.fillWidth: true }
-                  PlainText { text: "today " + (up.u.todayPrompts || 0) + "p · " + view.desk.tokens(up.u.todayTotalTokens) + " tok"; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
+                  PlainText { text: "today " + (up.u.todayPrompts || 0) + "p · " + view.desk.tokens(up.u.todayTotalTokens) + " tok" + (up.u.value && up.u.value.today !== null && up.u.value.today !== undefined ? " · ≈" + view.usageMoney(up.u.value.today) : ""); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
+                }
+                PlainText {
+                  Layout.fillWidth: true
+                  visible: !!(up.u.value && up.u.value.totals)
+                  elide: Text.ElideRight
+                  text: {
+                    var v = up.u.value || {}, t = v.totals || {}
+                    var all = Number(t.inputTokens || 0) + Number(t.outputTokens || 0) + Number(t.cacheReadInputTokens || 0) + Number(t.cacheCreationInputTokens || 0)
+                    var parts = ["lifetime " + view.desk.tokens(all) + " tok"]
+                    if (all > 0) parts.push(Math.round(100 * Number(t.cacheReadInputTokens || 0) / all) + "% cache reads")
+                    if (v.lifetime !== null && v.lifetime !== undefined) parts.push("≈" + view.usageMoney(v.lifetime) + (v.pricedShare < 0.999 ? " (" + Math.round(v.pricedShare * 100) + "% priced)" : "") + " est.")
+                    else if (all > 0) parts.push("unpriced")
+                    if (up.u.totalSessions) parts.push(up.u.totalSessions + " sessions")
+                    return parts.join(" · ")
+                  }
+                  color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption
                 }
                 Repeater {
                   model: up.u.limits || []
