@@ -487,8 +487,10 @@ Item {
             id: sessionFlow
             width: parent.width
             spacing: Style.spacing.md
-            readonly property int targetColumns: 4
-            readonly property int minimumCardWidth: Math.round(210 * Style.fontScale)
+            // One row: four wide cards, or up to six narrower ones. Wrapping to a
+            // second row pushed RECENT TASKS off the bottom of a 1080p desk.
+            readonly property int targetColumns: Math.max(4, Math.min(6, view.sessions.length))
+            readonly property int minimumCardWidth: Math.round((view.sessions.length > 4 ? 150 : 210) * Style.fontScale)
             readonly property int fittedCardWidth: Math.floor((width - spacing * (targetColumns - 1)) / targetColumns)
             Repeater {
               model: view.sessions
@@ -597,7 +599,7 @@ Item {
           Card {
             Layout.column: view.settings.opsVisibleIndex("changes")
             Layout.fillWidth: true
-            Layout.fillHeight: true
+            Layout.alignment: Qt.AlignTop
             visible: view.sectionEnabled("changes")
             moveId: "changes"
             moveGroup: "ops"
@@ -679,7 +681,7 @@ Item {
           Card {
             Layout.column: view.settings.opsVisibleIndex("needs")
             Layout.fillWidth: true
-            Layout.fillHeight: true
+            Layout.alignment: Qt.AlignTop
             visible: view.sectionEnabled("needs")
             moveId: "needs"
             moveGroup: "ops"
@@ -765,7 +767,7 @@ Item {
           Card {
             Layout.column: view.settings.opsVisibleIndex("projects")
             Layout.fillWidth: true
-            Layout.fillHeight: true
+            Layout.alignment: Qt.AlignTop
             visible: view.sectionEnabled("projects")
             moveId: "projects"
             moveGroup: "ops"
@@ -1004,6 +1006,7 @@ Item {
         Card {
           Layout.fillWidth: true
           Layout.fillHeight: true
+          Layout.minimumHeight: Math.round(150 * Style.fontScale)
           visible: view.sectionEnabled("recent")
           title: "RECENT TASKS · WHAT GOT ASKED"
           hint: view.promptSearch ? (view.visibleRecentTasks.length + " matches") : view.activityFilterActive ? ("filtered · " + view.visibleRecentTasks.length + " shown") : "80 loaded · wheel anywhere · drag scrollbar"
