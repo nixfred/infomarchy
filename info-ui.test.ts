@@ -187,6 +187,6 @@ describe("session card lines never spill into the neighbouring card", () => {
     // The merged pid/cpu line had no elide: the taller first card's line ran under its
     // neighbour's git line ("git mainc·uclean · ram 360M"). Fill-width, one line ⇒ elide.
     for (const line of block.split("\n").filter(l => l.includes("PlainText {") && l.includes("Layout.fillWidth: true") && !l.includes("wrapMode")))
-      expect(line).toContain("elide: Text.ElideRight");
+      expect(line).toMatch(/elide: Text\.Elide(Right|Middle|Left)/);
   });
 });
