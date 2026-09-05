@@ -750,6 +750,8 @@ describe("Boomux-hosted agents (best effort)", () => {
   test("a boomux client is identified by the shell id in its environment or argv, never the daemon", () => {
     expect(boomuxClientShellId(["/home/u/.local/bin/boomux", "daemon", "run"], "BOOMUX_SHELL_ID=abcdef12-3456\0")).toBe("");
     expect(boomuxClientShellId(["boomux", "attach", "shell-0123456789"], "")).toBe("shell-0123456789");
+    // The real 1.9.7 terminal-side argv.
+    expect(boomuxClientShellId(["/home/u/.local/bin/boomux", "__attach", "8fbfe2fa-742b-4568-b91b-c5ac16497246", "--restart-exited"], "")).toBe("8fbfe2fa-742b-4568-b91b-c5ac16497246");
     expect(boomuxClientShellId(["boomux", "open", "sh-1"], "")).toBe("");
     expect(boomuxClientShellId(["boomux"], "BOOMUX_SHELL_ID=0f9c1d2e-aaaa-bbbb-cccc-000000000001\0")).toBe("0f9c1d2e-aaaa-bbbb-cccc-000000000001");
     expect(boomuxClientShellId(["kitty"], "BOOMUX_SHELL_ID=0f9c1d2e-aaaa-bbbb-cccc-000000000001\0")).toBe("");
@@ -759,6 +761,9 @@ describe("Boomux-hosted agents (best effort)", () => {
     const win = { address: "0x1", title: "reviewer" }, other = { address: "0x2", title: "boomux · reviewer" };
     const host = { kind: "boomux" as const, label: "", shellId: "0f9c1d2e-aaaa-bbbb-cccc-000000000001", shell: "reviewer" };
     expect(boomuxWindowFor(host, [{ pid: 1, shellId: host.shellId, window: win }], [])).toBe(win);
+    // Real 1.9.7 title shape: exact shell id after the node id, before " | ".
+    const real = { address: "0x9", title: "boomux:shell:0a051598-223e-433a-83d2-fd836e36461b:" + host.shellId + " | infomarchy-test - reviewer" };
+    expect(boomuxWindowFor(host, [], [real, { address: "0x8", title: "boomux:shell:0a051598-223e-433a-83d2-fd836e36461b:other-shell-id-0001 | ws - reviewer" }])).toBe(real);
     expect(boomuxWindowFor(host, [], [other, { address: "0x3", title: "vim notes" }])).toBe(other);
     // Ambiguous titles are not guessed.
     expect(boomuxWindowFor(host, [], [other, { address: "0x4", title: "reviewer - kitty" }])).toBeNull();

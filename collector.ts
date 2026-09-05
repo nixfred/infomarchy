@@ -1076,8 +1076,9 @@ export function boomuxClientShellId(cmd: string[], environ = ""): string {
   if (["daemon", "web", "setup", "doctor", "update", "capabilities", "list", "shells", "node", "integration", "read", "events"].includes(cmd[1] || "")) return "";
   const fromEnv = String(envValue(environ, "BOOMUX_SHELL_ID") || "");
   if (BOOMUX_ID.test(fromEnv)) return fromEnv;
+  // Observed live (1.9.7): the terminal side is `boomux __attach <shell-id> --restart-exited`.
   for (let i = 1; i < cmd.length; i++) {
-    if ((cmd[i - 1] === "open" || cmd[i - 1] === "attach" || cmd[i - 1] === "--shell-id") && BOOMUX_ID.test(cmd[i] || "")) return cmd[i];
+    if (["open", "attach", "__attach", "--shell-id", "--shell"].includes(cmd[i - 1]) && BOOMUX_ID.test(cmd[i] || "")) return cmd[i];
   }
   return "";
 }
@@ -1085,6 +1086,12 @@ export function boomuxWindowFor(host: SessionHost, clients: BoomuxClient[], hypr
   const shellId = String(host.shellId || "");
   const direct = shellId ? clients.find(client => client.shellId === shellId && client.window) : null;
   if (direct) return direct.window;
+  // Observed live: Boomux titles its terminal "boomux:shell:<node-id>:<shell-id> | <workspace> - <name>".
+  if (shellId) {
+    const marker = ":" + shellId;
+    const exact = hyprClients.filter(client => client && typeof client.title === "string" && client.title.startsWith("boomux:shell:") && client.title.split(" ")[0].endsWith(marker));
+    if (exact.length === 1) return exact[0];
+  }
   const name = String(host.shell || "").trim();
   if (name.length < 3) return null;
   const titled = hyprClients.filter(client => client && typeof client.title === "string" &&
@@ -1184,15 +1191,21 @@ async function liveSessions(pids: number[]) {
     }
     // Herdr-hosted agent with no direct window: attach the client terminal so
     // the card is clickable; focusSession() then asks Herdr for the pane.
+    // Boomux first: a shell created from inside Herdr inherits HERDR_* into its
+    // environment, so both hosts appear; the terminal actually belongs to the
+    // innermost one. When Boomux resolves, the inherited Herdr host is dropped.
+    const boomuxHost = hosts.find(host => host.kind === "boomux");
+    if (boomuxHost && !w) {
+      const clientWindow = boomuxWindowFor(boomuxHost, boomuxClients, clients);
+      if (clientWindow) {
+        w = clientWindow; boomuxHost.attached = true;
+        for (let i = hosts.length - 1; i >= 0; i--) if (hosts[i].kind === "herdr") hosts.splice(i, 1);
+      }
+    }
     const herdrHost = hosts.find(host => host.kind === "herdr");
     if (herdrHost && !w) {
       const clientWindow = herdrWindowFor(herdrHost, herdrClients);
       if (clientWindow) { w = clientWindow; herdrHost.attached = true; }
-    }
-    const boomuxHost = hosts.find(host => host.kind === "boomux");
-    if (boomuxHost && !w) {
-      const clientWindow = boomuxWindowFor(boomuxHost, boomuxClients, clients);
-      if (clientWindow) { w = clientWindow; boomuxHost.attached = true; }
     }
     const sessionIds = processSessionIds(p.pid, prov, p.cmd);
     const sample = processTreeSample(p.pid);

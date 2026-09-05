@@ -285,10 +285,15 @@ Item {
   // Boomux shell on the development machine. Ids are shape-checked; argv only.
   function focusBoomuxShell(host) {
     var h = host || {}
-    var shell = String(h.shellId || ""), workspace = String(h.workspaceId || "")
+    // Verified live (Boomux 1.9.7): `open <shell-id> --workspace <NAME>` shows the
+    // Workspace and re-focuses the existing terminal; the BOOMUX_WORKSPACE_ID
+    // uuid is a Node-local id that `--workspace` does not accept, and a bare
+    // `open` neither moves focus nor opens a duplicate. The Hyprland focus of
+    // the mapped window (done by focusSession before this) is the primary jump.
+    var shell = String(h.shellId || ""), workspace = String(h.workspace || "")
     if (!/^[A-Za-z0-9][A-Za-z0-9_.:-]{7,63}$/.test(shell)) return false
     var command = ["boomux", "open", shell]
-    if (/^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$/.test(workspace) && workspace) command.push("--workspace", workspace)
+    if (/^[A-Za-z0-9][A-Za-z0-9 _.:-]{0,63}$/.test(workspace)) command.push("--workspace", workspace)
     Quickshell.execDetached(command)
     return true
   }

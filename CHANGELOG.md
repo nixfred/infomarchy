@@ -2,6 +2,16 @@
 
 All notable changes to Infomarchy. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [0.5.0] — 2026-09-05
+
+### Added
+- **7-day token trend** in USAGE & LIMITS: one line per provider, tokens per day, hover for exact figures, with a **TOKENS / ≈ $ VALUE** toggle. Per-provider rows show today's and lifetime *estimated API value*, cache-read share and session count. Fed entirely from Omarchy's Agents usage cache — no new scanning. Prices from a pinned, attributed LiteLLM snapshot (`pricing.json`, `THIRD_PARTY_NOTICES.md`); unknown models are shown as unpriced, never guessed.
+- **Clicking a card jumps inside the multiplexer.** Herdr: the agent descends from `herdr server`, so the client terminal is found through the Herdr client process and the pane is focused over Herdr's socket API (`workspace.focus → tab.focus → pane.focus`, bundled `herdr-focus.ts`). tmux: `select-window`, `select-pane`, `switch-client`. Boomux: window matched via the `__attach` client or Boomux's own window title, then `boomux open <shell-id> --workspace <name>` (verified on 1.9.7).
+- Sessions running under Claude Code's background daemon (`bg-pty-host`) are labelled **background · claude daemon** and dimmed instead of looking like a duplicate of the interactive session in the same repository.
+
+### Fixed
+- Attention rows and the inspector's FOCUS use the multiplexer-aware path.
+
 ## [0.4.1] — 2026-09-05
 
 Marketplace security-review follow-up (omacom/omarchy-plugin-marketplace#2931).
