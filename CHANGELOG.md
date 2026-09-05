@@ -2,6 +2,14 @@
 
 All notable changes to Infomarchy. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [0.4.1] — 2026-09-05
+
+Marketplace security-review follow-up (omacom/omarchy-plugin-marketplace#2931).
+
+### Changed
+- Subprocess deadlines are firm: SIGTERM, a 250 ms grace period, SIGKILL if still alive, then reaped — in the collector and in every window-preview stage.
+- Successful preview artifacts are deleted with an ownership check when a preview is replaced, when previews are disabled, when the session's window is gone, and when the view is destroyed; the stale sweep is capped at 32 removals per run.
+
 ## [0.4.0] — 2026-09-05
 
 First marketplace release with the operations desk. Verified on a stock Omarchy 4.0.2 VM (fresh install, no bun → install hint → `pacman -S bun` → desk fills in without a restart), and by two independent Codex reviews (gpt-5.6-sol and gpt-6-astra) whose 60+ confirmed findings were each reproduced before being fixed.
