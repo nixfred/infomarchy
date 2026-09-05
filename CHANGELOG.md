@@ -2,6 +2,23 @@
 
 All notable changes to Infomarchy. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow [SemVer](https://semver.org/).
 
+## [1.0.0] — 2026-09-05
+
+1.0 marks the desk as complete for daily use: every card reaches its session (terminal, Herdr, tmux, Boomux or a Claude background job), the whole desk fits a 1920×1080 screen with nothing clipped or running off the edge, and the layout is instrumented so future fixes are measured rather than guessed.
+
+### Added
+- **Every Claude card reaches its session.** Claude Code's own registry (`claude agents --json`) is merged by pid: exact job ids on Herdr-hosted sessions, session names on cards, busy state from the registry, `blocked` shown as waiting. Background sessions open with `claude attach <id>` in a terminal. The `claude daemon run` supervisor is no longer mistaken for a session (the phantom "Improving Pi" card).
+- **Zombie sessions.** A session that is unattended (background, or no window and nothing attachable), not busy and idle for six hours gets a **STALE · idle Nh** tag. The inspector offers **STOP SESSION** (`claude stop <id>`, transcript kept) and **END PROCESS** (SIGTERM, only if the pid's start time and agent argv still match the card). Two clicks, four-second arm window, never automatic.
+- **SUPER+I / SUPER+D legend.** Header hints in the overlay; one quiet line under the MACHINE card on the wallpaper.
+- `omarchy-shell infomarchy geometry` — the settled layout widths (view, columns, LOCAL AI card/body/rows/tag/meter and each row's implicit width) as JSON. Read it before touching a layout constant.
+
+### Changed
+- **The desk fits 1080p end to end.** MACHINE is a two-column grid (CPU|RAM, DISK|WIFI) with a one-line footer (WAN · LAN / rates · ping · BAT); sessions sit on one row; ops cards are content-sized; RECENT TASKS keeps a minimum height; LOCAL AI rows share one action column with fixed arrow and action slots; Meter values elide instead of pushing; both columns are fractions of the view width, never constants.
+
+### Fixed
+- **SUPER+D shows the real desktop** (theme background behind the wallpaper) and **SUPER+I applies inside the overlay** as well as on the wallpaper. SUPER+D then SUPER+I now does what it says.
+- **LOCAL AI pills lost their right border.** The provider-chips row was a `RowLayout` of rigid tags whose minimum (514 px) exceeded the card body (512 px); the column then laid every row out 2 px past the clip, cutting the right edge of LOAD/UNLOAD and the GPU bar. The chips are now a `Flow` (no minimum; wraps if labels grow). Found by measuring, not guessing: new `omarchy-shell infomarchy geometry` IPC reports the settled layout widths.
+
 ## [0.5.0] — 2026-09-05
 
 ### Added
@@ -10,7 +27,6 @@ All notable changes to Infomarchy. The format follows [Keep a Changelog](https:/
 - Sessions running under Claude Code's background daemon (`bg-pty-host`) are labelled **background · claude daemon** and dimmed instead of looking like a duplicate of the interactive session in the same repository.
 
 ### Fixed
-- **LOCAL AI pills lost their right border.** The provider-chips row was a `RowLayout` of rigid tags whose minimum (514 px) exceeded the card body (512 px); the column then laid every row out 2 px past the clip, cutting the right edge of LOAD/UNLOAD and the GPU bar. The chips are now a `Flow` (no minimum; wraps if labels grow). Found by measuring, not guessing: new `omarchy-shell infomarchy geometry` IPC reports the settled layout widths.
 - Attention rows and the inspector's FOCUS use the multiplexer-aware path.
 
 ## [0.4.1] — 2026-09-05

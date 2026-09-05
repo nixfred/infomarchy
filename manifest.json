@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "nixfred.infomarchy",
   "name": "Infomarchy",
-  "version": "0.5.0",
+  "version": "1.0.0",
   "author": "Fred Nix & Larry",
   "license": "MIT",
   "description": "A live, clickable wallpaper desk for AI sessions, proactive next-action alerts, repository health, Ollama controls, activity, usage limits, and machine telemetry. Theme-driven. SUPER+D overlay.",
