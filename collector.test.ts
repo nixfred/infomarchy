@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join, relative } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate } from "./collector.ts";
 
 const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
 const historyFixture = join(testRoot, "history");
@@ -643,5 +643,21 @@ describe("third-pass findings (Astra, 2026-09-05)", () => {
     const recentRows = [{ provider: "codex", project: "~/p", session: "aaaaaaaa-bbbb-cccc-dddd-000000000001", ts: 2000, text: "x" }];
     inferSessionIdsFromRecent(sessions, recentRows);
     expect(sessions[1].sessionIds).toEqual([]);
+  });
+});
+
+describe("firm subprocess deadlines", () => {
+  test("a tool that ignores SIGTERM is SIGKILLed within the grace period and reaped", async () => {
+    const proc = Bun.spawn(["bun", "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
+    await Bun.sleep(300); // let the child install its handler, as a real long-running tool has
+    const started = performance.now();
+    await terminate(proc, 200);
+    expect(proc.signalCode).toBe("SIGKILL");
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
+  test("a tool that honours SIGTERM is not SIGKILLed", async () => {
+    const proc = Bun.spawn(["sleep", "30"], { stdout: "ignore", stderr: "ignore" });
+    await terminate(proc, 500);
+    expect(proc.signalCode).toBe("SIGTERM");
   });
 });

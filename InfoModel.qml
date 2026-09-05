@@ -21,6 +21,7 @@ Item {
   property string sessionActionsPath: Qt.resolvedUrl("session-actions.ts").toString().replace(/^file:\/\//, "")
   property string copyTextPath: Qt.resolvedUrl("copy-text.ts").toString().replace(/^file:\/\//, "")
   property string ollamaControlPath: Qt.resolvedUrl("ollama-control.ts").toString().replace(/^file:\/\//, "")
+  property string previewPath: Qt.resolvedUrl("window-preview.ts").toString().replace(/^file:\/\//, "")
   property bool ollamaBusy: false
   property string ollamaStatus: ""
   property string ollamaError: ""
@@ -294,6 +295,15 @@ Item {
   function openProject(cwd) {
     if (!canOpenProject(cwd)) return false
     Quickshell.execDetached(["bun", root.sessionActionsPath, String(cwd)])
+    return true
+  }
+  // Delete one successful preview artifact. The helper re-checks ownership,
+  // parent directory, name shape and contents before touching anything; the
+  // shell only hands it the path it was given by the capture.
+  function removePreview(source) {
+    var path = String(source || "").replace(/^file:\/\//, "").replace(/\?.*$/, "")
+    if (!/^\/[^\0]{1,512}\/infomarchy-preview-[A-Za-z0-9]{6}\/preview\.png$/.test(path)) return false
+    Quickshell.execDetached(["bun", root.previewPath, "--remove", path])
     return true
   }
   function copyText(text) {

@@ -12,7 +12,7 @@ import {
   writeSync,
 } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { basename, dirname, join } from "path";
 
 const MAX_PREVIEW_BYTES = 4 * 1024 * 1024;
 const MAX_RAW_CAPTURE_BYTES = 32 * 1024 * 1024;
@@ -46,20 +46,43 @@ export function looksLikeOurPreviewDirectory(entries: string[]): boolean {
 // A successful capture keeps its directory so QML can load the PNG; nothing
 // used to delete it, so sustained hover leaked one directory every few seconds.
 // Sweep our own stale ones on each run instead of holding a daemon.
-export function reapPreviewDirectories(baseDirectory = tmpdir(), ttlMs = PREVIEW_TTL_MS, stamp = Date.now()): number {
+export const MAX_SWEEP_REMOVALS = 32;
+// Is this path one of OUR preview directories? Exact parent, exact mkdtemp
+// name shape, a real directory (not a symlink) owned by us, holding nothing
+// but preview.png. Used by both the sweep and the explicit removal path.
+export function ownedPreviewDirectory(path: string, baseDirectory = tmpdir()): boolean {
+  const name = basename(path);
+  if (!PREVIEW_DIR_NAME.test(name) || dirname(path) !== baseDirectory) return false;
+  try {
+    const stat = lstatSync(path);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) return false;
+    const uid = process.getuid?.();
+    if (uid !== undefined && stat.uid !== uid) return false;
+    return looksLikeOurPreviewDirectory(readdirSync(path));
+  } catch { return false; }
+}
+// Explicit removal when a preview is replaced, previews are disabled, or the
+// view is destroyed. Accepts the preview.png path the shell holds, or the
+// directory itself.
+export function removePreviewArtifact(target: string, baseDirectory = tmpdir()): boolean {
+  const directory = basename(target) === "preview.png" ? dirname(target) : target;
+  if (!ownedPreviewDirectory(directory, baseDirectory)) return false;
+  try { rmSync(directory, { recursive: true, force: true }); return true; } catch { return false; }
+}
+// Bounded stale sweep: at most MAX_SWEEP_REMOVALS directories per run, so a
+// pathological /tmp cannot turn one hover into a long delete loop.
+export function reapPreviewDirectories(baseDirectory = tmpdir(), ttlMs = PREVIEW_TTL_MS, stamp = Date.now(), limit = MAX_SWEEP_REMOVALS): number {
   let removed = 0;
   let names: string[] = [];
   try { names = readdirSync(baseDirectory); } catch { return 0; }
-  const uid = process.getuid?.();
   for (const name of names) {
+    if (removed >= limit) break;
     if (!PREVIEW_DIR_NAME.test(name)) continue;
     const path = join(baseDirectory, name);
     try {
       const stat = lstatSync(path);
-      if (!stat.isDirectory() || stat.isSymbolicLink()) continue;
-      if (uid !== undefined && stat.uid !== uid) continue;
       if (stamp - stat.mtimeMs <= ttlMs) continue;
-      if (!looksLikeOurPreviewDirectory(readdirSync(path))) continue;
+      if (!ownedPreviewDirectory(path, baseDirectory)) continue;
       rmSync(path, { recursive: true, force: true });
       removed++;
     } catch {}
@@ -92,11 +115,26 @@ const STAGE_TIMEOUT_MS = 4000;
 // A hung hyprctl/grim/magick used to leave the QML preview Process running
 // forever. Every stage gets a deadline; on expiry the child is killed and the
 // helper exits non-zero.
-async function withDeadline<T>(promise: Promise<T>, proc: { kill: (signal?: any) => void }, ms = STAGE_TIMEOUT_MS): Promise<T | null> {
+type Child = { kill: (signal?: any) => void; exited: Promise<number>; exitCode: number | null; signalCode: string | null };
+// TERM, bounded grace, KILL, reap — the same firm contract as the collector.
+export async function terminate(proc: Child, graceMs = 250): Promise<void> {
+  const alive = () => proc.exitCode === null && proc.signalCode === null;
+  if (!alive()) return;
+  try { proc.kill("SIGTERM"); } catch {}
+  await Promise.race([proc.exited, new Promise(resolve => setTimeout(resolve, graceMs))]);
+  if (alive()) {
+    try { proc.kill("SIGKILL"); } catch {}
+    await Promise.race([proc.exited, new Promise(resolve => setTimeout(resolve, graceMs))]);
+  }
+}
+async function withDeadline<T>(promise: Promise<T>, proc: Child, ms = STAGE_TIMEOUT_MS): Promise<T | null> {
   let timer: ReturnType<typeof setTimeout> | null = null;
-  const expiry = new Promise<null>(resolve => { timer = setTimeout(() => { try { proc.kill("SIGKILL"); } catch {} resolve(null); }, ms); });
-  try { return await Promise.race([promise, expiry]); }
-  finally { if (timer) clearTimeout(timer); }
+  const expiry = new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), ms); });
+  try {
+    const result = await Promise.race([promise, expiry]);
+    if (result === null) await terminate(proc);
+    return result;
+  } finally { if (timer) clearTimeout(timer); }
 }
 async function readBounded(stream: ReadableStream<Uint8Array>, limit = MAX_PREVIEW_BYTES): Promise<Uint8Array> {
   const reader = stream.getReader();
@@ -123,6 +161,12 @@ async function readBounded(stream: ReadableStream<Uint8Array>, limit = MAX_PREVI
 }
 
 if (import.meta.main) {
+  // `--remove <preview.png|dir>`: ownership-checked deletion of one artifact.
+  if (process.argv[2] === "--remove") {
+    const removed = removePreviewArtifact(String(process.argv[3] || ""));
+    reapPreviewDirectories();
+    process.exit(removed ? 0 : 7);
+  }
   const address = validWindowAddress(process.argv[2]);
   if (!address || !Bun.which("grim") || !Bun.which("magick")) process.exit(2);
   const clientsProc = Bun.spawn(["hyprctl", "clients", "-j"], { stdout: "pipe", stderr: "ignore" });

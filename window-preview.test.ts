@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, closeSync, constants, lstatSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { createPreviewTarget, validWindowAddress, reapPreviewDirectories, expiredPreviewDirectories, looksLikeOurPreviewDirectory, PREVIEW_PREFIX } from "./window-preview";
+import { createPreviewTarget, validWindowAddress, reapPreviewDirectories, expiredPreviewDirectories, looksLikeOurPreviewDirectory, ownedPreviewDirectory, removePreviewArtifact, terminate, PREVIEW_PREFIX } from "./window-preview";
 
 const cleanup: string[] = [];
 afterEach(() => {
@@ -133,5 +133,45 @@ describe("preview temp dirs are reaped", () => {
     } finally {
       rmSync(base, { recursive: true, force: true });
     }
+  });
+});
+
+describe("explicit artifact removal and firm deadlines", () => {
+  test("removes exactly one owned preview directory, by png path or directory", () => {
+    const base = mkdtempSync(join(tmpdir(), "infomarchy-remove-test-"));
+    try {
+      const a = createPreviewTarget(base); closeSync(a.fd);
+      const b = createPreviewTarget(base); closeSync(b.fd);
+      expect(ownedPreviewDirectory(a.directory, base)).toBe(true);
+      expect(removePreviewArtifact(a.path, base)).toBe(true);
+      expect(() => lstatSync(a.directory)).toThrow();
+      expect(lstatSync(b.directory).isDirectory()).toBe(true);
+      expect(removePreviewArtifact(b.directory, base)).toBe(true);
+      // Never anything else: wrong parent, wrong shape, foreign contents.
+      const foreign = join(base, PREVIEW_PREFIX + "Ab12Cd"); mkdirSync(foreign); writeFileSync(join(foreign, "user.txt"), "x");
+      expect(removePreviewArtifact(foreign, base)).toBe(false);
+      expect(removePreviewArtifact(join(base, "not-ours"), base)).toBe(false);
+      expect(removePreviewArtifact(a.directory, "/elsewhere")).toBe(false);
+      expect(lstatSync(join(foreign, "user.txt")).isFile()).toBe(true);
+    } finally { rmSync(base, { recursive: true, force: true }); }
+  });
+
+  test("the stale sweep is capped per run", () => {
+    const base = mkdtempSync(join(tmpdir(), "infomarchy-sweep-test-"));
+    try {
+      for (let i = 0; i < 5; i++) { const t = createPreviewTarget(base); closeSync(t.fd); }
+      expect(reapPreviewDirectories(base, 0, Date.now() + 1000, 2)).toBe(2);
+      expect(reapPreviewDirectories(base, 0, Date.now() + 1000, 10)).toBe(3);
+    } finally { rmSync(base, { recursive: true, force: true }); }
+  });
+
+  test("terminate escalates from TERM to KILL and reaps a child that ignores TERM", async () => {
+    const proc = Bun.spawn(["bun", "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
+    await Bun.sleep(300); // let the child install its handler, as a real long-running tool has
+    const started = performance.now();
+    await terminate(proc, 200);
+    expect(proc.exitCode !== null || proc.signalCode !== null).toBe(true);
+    expect(proc.signalCode).toBe("SIGKILL");
+    expect(performance.now() - started).toBeLessThan(2000);
   });
 });

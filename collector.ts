@@ -233,6 +233,19 @@ async function boundedStream(stream: ReadableStream<Uint8Array> | null, limit: n
 // collector Process stays "running" and every tick is skipped. Race the read
 // against the budget and give up on the pipe; runCollector() exits explicitly
 // so a dangling read cannot keep the event loop alive either.
+const KILL_GRACE_MS = 250;
+// Firm deadline: SIGTERM, a bounded grace period, then SIGKILL, then reap.
+// A child that ignores TERM is not allowed to outlive the collector.
+export async function terminate(proc: { kill: (signal?: any) => void; exited: Promise<number>; exitCode: number | null; signalCode: string | null }, graceMs = KILL_GRACE_MS): Promise<void> {
+  const alive = () => proc.exitCode === null && proc.signalCode === null;
+  if (!alive()) return;
+  try { proc.kill("SIGTERM"); } catch {}
+  await Promise.race([proc.exited, new Promise(resolve => setTimeout(resolve, graceMs))]);
+  if (alive()) {
+    try { proc.kill("SIGKILL"); } catch {}
+    await Promise.race([proc.exited, new Promise(resolve => setTimeout(resolve, graceMs))]);
+  }
+}
 async function run(cmd: string[], timeoutMs = 1500, cwd?: string): Promise<string> {
   try {
     const proc = Bun.spawn(cmd, { cwd, stdout: "pipe", stderr: "ignore" });
@@ -240,10 +253,10 @@ async function run(cmd: string[], timeoutMs = 1500, cwd?: string): Promise<strin
     const deadline = new Promise<null>(resolve => { expired = setTimeout(() => resolve(null), timeoutMs); });
     try {
       const out = await Promise.race([boundedStream(proc.stdout, MAX_COMMAND_BYTES), deadline]);
-      if (out === null) { try { proc.kill("SIGKILL"); } catch {}; return ""; }
-      await Promise.race([proc.exited, new Promise(resolve => setTimeout(resolve, 250))]);
-      // Closed stdout but still alive (a daemonizing helper): do not leave it behind.
-      if (proc.exitCode === null && proc.signalCode === null) { try { proc.kill("SIGKILL"); } catch {} }
+      if (out === null) { await terminate(proc); return ""; }
+      // Output complete; give the child a moment to exit on its own, then insist.
+      await Promise.race([proc.exited, new Promise(resolve => setTimeout(resolve, KILL_GRACE_MS))]);
+      await terminate(proc);
       return out;
     } finally {
       if (expired) clearTimeout(expired);

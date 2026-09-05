@@ -26,6 +26,26 @@ Item {
   // Delegates are rebuilt on every snapshot; without this, a hovered card
   // recaptured its preview every poll. Keyed by window address.
   property var previewCache: ({})
+  function dropPreviews(addresses) {
+    var next = {}, dropped = 0
+    for (var key in previewCache) {
+      if (addresses === null || addresses.indexOf(key) >= 0) { view.desk.removePreview(previewCache[key]); dropped++ }
+      else next[key] = previewCache[key]
+    }
+    if (dropped) previewCache = next
+    return dropped
+  }
+  // Previews are deleted when replaced (below), when the feature is turned
+  // off, when their session is gone, and when this view goes away.
+  onPreviewsEnabledChanged: if (!previewsEnabled) dropPreviews(null)
+  onAllSessionsChanged: {
+    var live = {}
+    for (var i = 0; i < allSessions.length; i++) if (allSessions[i].window && allSessions[i].window.address) live[String(allSessions[i].window.address)] = true
+    var gone = []
+    for (var key in previewCache) if (!live[key]) gone.push(key)
+    if (gone.length) dropPreviews(gone)
+  }
+  Component.onDestruction: dropPreviews(null)
   property int keyboardSessionIndex: -1
   property string promptSearch: ""
   property string expandedChangeKey: ""
@@ -461,13 +481,15 @@ Item {
                 Timer { interval: 600; running: hover.containsMouse && view.previewsEnabled && sc.previewSource === "" && !!(sc.modelData.window && sc.modelData.window.address); onTriggered: if (!previewProc.running) previewProc.running = true }
                 Process {
                   id: previewProc
-                  command: ["bun", Qt.resolvedUrl("window-preview.ts").toString().replace(/^file:\/\//, ""), (sc.modelData.window || {}).address || ""]
+                  command: ["bun", view.desk.previewPath, (sc.modelData.window || {}).address || ""]
                   stdout: StdioCollector { onStreamFinished: {
                     var path = String(text || "").trim()
                     if (!path) return
                     var source = "file://" + path + "?" + Date.now(), address = String((sc.modelData.window || {}).address || "")
                     var next = {}
                     for (var key in view.previewCache) next[key] = view.previewCache[key]
+                    // Replacing a preview for this window: delete the old artifact first.
+                    if (next[address]) view.desk.removePreview(next[address])
                     next[address] = source
                     view.previewCache = next
                     sc.previewSource = source
