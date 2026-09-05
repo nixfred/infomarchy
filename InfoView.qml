@@ -366,9 +366,9 @@ Item {
     RowLayout {
       id: mrow
       width: parent.width
-      PlainText { text: label; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+      PlainText { text: label; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight; Layout.maximumWidth: Math.round(parent.width * 0.55) }
       Item { Layout.fillWidth: true }
-      PlainText { text: value; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+      PlainText { text: value; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight; horizontalAlignment: Text.AlignRight; Layout.maximumWidth: Math.round(parent.width * 0.7) }
     }
     Rectangle {
       id: bar
@@ -1201,7 +1201,7 @@ Item {
               Layout.fillWidth: true
               spacing: Style.spacing.xs
               Repeater {
-                model: Object.keys(view.usage)
+                model: Object.keys(view.usage).filter(function(k) { return view.usage[k] && view.usage[k].ready !== false })
                 delegate: Tag {
                   required property string modelData
                   text: view.desk.providerLabel(modelData)
@@ -1379,7 +1379,7 @@ Item {
           // so the column lines up; arrows are a compact fixed pair beside it.
           readonly property int actionWidth: Math.round(74 * Style.fontScale)
           readonly property int arrowWidth: Math.round(22 * Style.fontScale)
-          readonly property int metaWidth: Math.round(150 * Style.fontScale)
+          readonly property int metaWidth: Math.round(118 * Style.fontScale)
 
           function modelName(item) { return String((item && typeof item === "object") ? (item.name || "") : (item || "")) }
           function modelList() { return Array.isArray(availableModels) ? availableModels : [] }
