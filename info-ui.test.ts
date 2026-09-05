@@ -150,3 +150,13 @@ describe("zombie cleanup is explicit and two-click", () => {
     expect(model).toContain('["bun", root.stopPath, "term", String(Number(item.pid)), String(Math.round(Number(item.startedAt)))]');
   });
 });
+
+describe("right column fits a 1080p desk", () => {
+  test("MACHINE is a two-column grid with a one-line footer, and the SUPER legend sits under it", () => {
+    const view = readFileSync(join(import.meta.dir, "InfoView.qml"), "utf8");
+    expect(view).toContain("// Cockpit density: two meters per row");
+    expect(view).toContain('text: "WAN " + (view.machine.externalIp || "—")');
+    expect(view).toContain('"SUPER+I hide desk  ·  SUPER+D show desktop") + "  ·  right-click a card to inspect"');
+    expect(view).toContain("readonly property int metaWidth");
+  });
+});

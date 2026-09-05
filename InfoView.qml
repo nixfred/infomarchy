@@ -1230,7 +1230,7 @@ Item {
               Canvas {
                 id: trendCanvas
                 width: parent.width
-                height: Math.round(78 * Style.fontScale)
+                height: Math.round(62 * Style.fontScale)
                 readonly property var series: view.usageSeries
                 onSeriesChanged: requestPaint()
                 onWidthChanged: requestPaint()
@@ -1238,7 +1238,8 @@ Item {
                 Connections { target: view.desk; function onThemeForegroundChanged() { trendCanvas.requestPaint() } function onGreenChanged() { trendCanvas.requestPaint() } }
                 onPaint: {
                   var ctx = getContext("2d"); ctx.reset()
-                  var left = usageTrend.labelWidth, top = 4, bottom = height - 4, plot = width - left - 2
+                  // top padding keeps the topmost gridline label inside the canvas
+                  var left = usageTrend.labelWidth, top = Math.round(7 * Style.fontScale), bottom = height - 4, plot = width - left - 2
                   var list = series, n = list.length ? list[0].points.length : 0
                   if (!n) return
                   var max = 1
@@ -1326,7 +1327,8 @@ Item {
                 }
                 PlainText {
                   Layout.fillWidth: true
-                  visible: !!(up.u.value && up.u.value.totals)
+                  // A provider with no lifetime tokens has nothing to say here.
+                  visible: !!(up.u.value && up.u.value.totals) && (Number((up.u.value.totals || {}).inputTokens || 0) + Number((up.u.value.totals || {}).outputTokens || 0) + Number((up.u.value.totals || {}).cacheReadInputTokens || 0) + Number((up.u.value.totals || {}).cacheCreationInputTokens || 0)) > 0
                   elide: Text.ElideRight
                   text: {
                     var v = up.u.value || {}, t = v.totals || {}
@@ -1377,6 +1379,7 @@ Item {
           // so the column lines up; arrows are a compact fixed pair beside it.
           readonly property int actionWidth: Math.round(74 * Style.fontScale)
           readonly property int arrowWidth: Math.round(22 * Style.fontScale)
+          readonly property int metaWidth: Math.round(150 * Style.fontScale)
 
           function modelName(item) { return String((item && typeof item === "object") ? (item.name || "") : (item || "")) }
           function modelList() { return Array.isArray(availableModels) ? availableModels : [] }
@@ -1462,7 +1465,9 @@ Item {
                 spacing: Style.spacing.sm
                 Rectangle { width: 8; height: 8; radius: 4; color: view.desk.green }
                 PlainText { text: modelData.name; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; Layout.fillWidth: true; elide: Text.ElideRight }
-                PlainText { text: "vram " + view.desk.bytes(modelData.vram); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
+                PlainText { text: "vram " + view.desk.bytes(modelData.vram); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; horizontalAlignment: Text.AlignRight; Layout.preferredWidth: localAiCard.metaWidth; elide: Text.ElideLeft }
+                // Reserve the selector's arrow slot so every action tag is one column.
+                Item { Layout.preferredWidth: localAiCard.arrowWidth * 2 + Style.spacing.xs; Layout.preferredHeight: 1 }
                 Tag {
                   Layout.preferredWidth: localAiCard.actionWidth
                   text: view.desk.ollamaBusy && view.desk.ollamaModel === loadedModelRow.modelData.name ? "WORKING" : "UNLOAD"
@@ -1482,8 +1487,9 @@ Item {
               PlainText { text: localAiCard.selectedModel.name || "no installed model"; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
               PlainText {
                 text: [localAiCard.selectedModel.parameterSize || "", localAiCard.selectedModel.quantization || "", localAiCard.selectedModel.size ? view.desk.bytes(localAiCard.selectedModel.size) : ""].filter(Boolean).join(" · ")
-                color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight
-                Layout.maximumWidth: Math.round(150 * Style.fontScale)
+                color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideLeft
+                horizontalAlignment: Text.AlignRight
+                Layout.preferredWidth: localAiCard.metaWidth
               }
               RowLayout {
                 spacing: Style.spacing.xs
@@ -1538,49 +1544,47 @@ Item {
           readonly property var disks: view.machine.disks || []
           readonly property var bat: view.machine.battery
           id: mc
-          ColumnLayout {
+          // Cockpit density: two meters per row, one footer line for the scalars.
+          // Seven single-line rows used to push BAT off the bottom of a 1080p desk.
+          GridLayout {
             width: parent.width
-            spacing: Style.spacing.md
-            Meter { Layout.fillWidth: true; label: "CPU"; value: view.desk.pct(mc.cpu.pct) + "  load " + ((mc.cpu.load || [0])[0] || 0).toFixed(2) + (view.machine.temp ? "  " + Math.round(view.machine.temp) + "°" : ""); fraction: (mc.cpu.pct || 0) / 100; tone: (mc.cpu.pct || 0) > 85 ? view.desk.red : view.desk.blue }
-            Meter { Layout.fillWidth: true; label: "RAM"; value: view.desk.bytes(mc.mem.used) + " / " + view.desk.bytes(mc.mem.total) + "  " + view.desk.pct(mc.mem.pct); fraction: (mc.mem.pct || 0) / 100; tone: (mc.mem.pct || 0) > 90 ? view.desk.red : view.desk.green }
+            columns: 2
+            columnSpacing: Style.spacing.lg
+            rowSpacing: Style.spacing.sm
+            Meter { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "CPU"; value: view.desk.pct(mc.cpu.pct) + " · " + ((mc.cpu.load || [0])[0] || 0).toFixed(2) + (view.machine.temp ? " · " + Math.round(view.machine.temp) + "°" : ""); fraction: (mc.cpu.pct || 0) / 100; tone: (mc.cpu.pct || 0) > 85 ? view.desk.red : view.desk.blue }
+            Meter { Layout.fillWidth: true; Layout.preferredWidth: 1; label: "RAM"; value: view.desk.bytes(mc.mem.used) + "/" + view.desk.bytes(mc.mem.total) + " · " + view.desk.pct(mc.mem.pct); fraction: (mc.mem.pct || 0) / 100; tone: (mc.mem.pct || 0) > 90 ? view.desk.red : view.desk.green }
             Repeater {
-              model: mc.disks
-              delegate: Meter { required property var modelData; Layout.fillWidth: true; label: "DISK " + modelData.mount; value: view.desk.bytes(modelData.used) + " / " + view.desk.bytes(modelData.size) + "  " + view.desk.pct(modelData.pct); fraction: (modelData.pct || 0) / 100; tone: (modelData.pct || 0) > 90 ? view.desk.red : view.desk.yellow }
+              model: mc.disks.slice(0, 2)
+              delegate: Meter { required property var modelData; Layout.fillWidth: true; Layout.preferredWidth: 1; label: "DISK " + modelData.mount; value: view.desk.bytes(modelData.used) + "/" + view.desk.bytes(modelData.size) + " · " + view.desk.pct(modelData.pct); fraction: (modelData.pct || 0) / 100; tone: (modelData.pct || 0) > 90 ? view.desk.red : view.desk.yellow }
             }
             Meter {
-              Layout.fillWidth: true
+              Layout.fillWidth: true; Layout.preferredWidth: 1
               label: mc.net.wireless ? "WIFI " + (mc.net.ssid || "") : "NET " + (mc.net.dev || "—")
-              value: (mc.net.signal !== null && mc.net.signal !== undefined ? mc.net.signal + " dBm" : "") + " · " + (mc.net.addr || "")
+              value: (mc.net.signal !== null && mc.net.signal !== undefined ? mc.net.signal + " dBm · " : "") + (mc.net.addr || "")
               // -30 dBm great … -90 dBm dead
               fraction: mc.net.signal !== null && mc.net.signal !== undefined ? Math.max(0, Math.min(1, (Number(mc.net.signal) + 90) / 60)) : (mc.net.dev ? 1 : 0)
               tone: mc.net.signal !== null && mc.net.signal !== undefined && Number(mc.net.signal) < -75 ? view.desk.yellow : view.desk.green
             }
+            // Scalars on one line: WAN · throughput · ping · battery.
             RowLayout {
+              Layout.columnSpan: 2
               Layout.fillWidth: true
-              PlainText { text: "WAN"; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+              spacing: Style.spacing.md
+              PlainText { text: "WAN " + (view.machine.externalIp || "—"); color: view.machine.externalIp ? view.desk.cyan : view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideMiddle; Layout.maximumWidth: Math.round(140 * Style.fontScale) }
+              PlainText { text: "↓" + view.desk.rate(mc.net.rxRate) + " ↑" + view.desk.rate(mc.net.txRate); color: view.desk.green; font.family: view.mono; font.pixelSize: Style.font.caption; font.bold: true }
+              PlainText { text: "⇄ " + (mc.ping.ok ? mc.ping.ms.toFixed(0) + " ms" : "timeout"); color: !mc.ping.ok ? view.desk.red : mc.ping.ms > 80 ? view.desk.yellow : view.desk.green; font.family: view.mono; font.pixelSize: Style.font.caption; font.bold: true }
               Item { Layout.fillWidth: true }
-              PlainText { text: view.machine.externalIp || "unavailable"; color: view.machine.externalIp ? view.desk.cyan : view.textFaint; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideMiddle }
-            }
-            RowLayout {
-              Layout.fillWidth: true
-              spacing: Style.spacing.lg
-              PlainText { text: "↓ " + view.desk.rate(mc.net.rxRate); color: view.desk.green; font.family: view.mono; font.pixelSize: Style.font.subtitle; font.bold: true }
-              PlainText { text: "↑ " + view.desk.rate(mc.net.txRate); color: view.desk.green; font.family: view.mono; font.pixelSize: Style.font.subtitle; font.bold: true }
-              Item { Layout.fillWidth: true }
-              PlainText {
-                text: "⇄ " + (mc.ping.ok ? mc.ping.ms.toFixed(0) + " ms" : "timeout") + " cf"
-                color: !mc.ping.ok ? view.desk.red : mc.ping.ms > 80 ? view.desk.yellow : view.desk.green
-                font.family: view.mono; font.pixelSize: Style.font.subtitle; font.bold: true
-              }
-            }
-            RowLayout {
-              Layout.fillWidth: true
-              visible: !!mc.bat
-              PlainText { text: "BAT"; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
-              Item { Layout.fillWidth: true }
-              PlainText { text: mc.bat ? mc.bat.pct + "% · " + mc.bat.status : ""; color: mc.bat && mc.bat.pct < 20 && mc.bat.status !== "Charging" ? view.desk.red : view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall }
+              PlainText { visible: !!mc.bat; text: mc.bat ? "BAT " + mc.bat.pct + "% " + String(mc.bat.status || "").toLowerCase() : ""; color: mc.bat && mc.bat.pct < 20 && mc.bat.status !== "Charging" ? view.desk.red : view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
             }
           }
+        }
+        // Legend — readable, one line, under the last card. Wording follows the surface.
+        PlainText {
+          Layout.row: 98; Layout.column: 0
+          Layout.fillWidth: true
+          elide: Text.ElideRight
+          text: (view.keyboardAvailable ? "SUPER+I hide desk  ·  SUPER+D / ESC close" : "SUPER+I hide desk  ·  SUPER+D show desktop") + "  ·  right-click a card to inspect"
+          color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption
         }
         Item { Layout.row: 99; Layout.column: 0; Layout.fillHeight: true }
         }
