@@ -1454,7 +1454,9 @@ Item {
           Component.onCompleted: ensureSelection()
           hint: ol.up ? "ollama up · " + (ol.modelCount || 0) + " models" : "ollama down"
           ColumnLayout {
-            width: parent.width
+            // Anchors, not a width binding: the rows must be handed exactly the
+            // card's inner width so their fill items shrink instead of overflowing.
+            anchors { left: parent.left; right: parent.right }
             spacing: Style.spacing.sm
             Repeater {
               model: ((view.ai.providers || {}).ollama || {}).loaded || []
