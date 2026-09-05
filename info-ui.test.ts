@@ -51,6 +51,8 @@ describe("interactive information modules", () => {
     expect(view).toContain("readonly property var visibleCollisions");
     expect(view).toContain("view.projectFilter === projectRow.key");
     expect(view).toContain('text: "1–9 MODULES');
+    expect(view).toContain('"SUPER+I HIDE DESK · SUPER+D SHOW OVER WINDOWS"');
+    expect(view).toContain('"SUPER+I HIDE DESK · SUPER+D / ESC CLOSE"');
     expect(overlay).toContain("event.key <= Qt.Key_9");
   });
 

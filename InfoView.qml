@@ -453,7 +453,11 @@ Item {
           tone: view.desk.cyan
           MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.projectFilter = "" }
         }
-        Tag { text: "1–9 MODULES · J/K SESSION · ENTER FOCUS · A CLEAR"; tone: view.textFaint }
+        // Discoverability, faint and in the strip: the two keys everyone needs.
+        // On the wallpaper SUPER+D opens the desktop view; in that view it closes it.
+        Tag { text: view.keyboardAvailable ? "SUPER+I HIDE DESK · SUPER+D / ESC CLOSE" : "SUPER+I HIDE DESK · SUPER+D SHOW OVER WINDOWS"; tone: view.textFaint }
+        // Keyboard shortcuts only reach the overlay (the wallpaper layer has no keyboard focus).
+        Tag { visible: view.keyboardAvailable; text: "1–9 MODULES · J/K SESSION · ENTER FOCUS · A CLEAR"; tone: view.textFaint }
         Tag {
           visible: view.desk.bunChecked && !view.desk.bunAvailable
           text: "⚠ " + view.desk.missingDependencyHint
