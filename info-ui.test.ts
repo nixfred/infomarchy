@@ -178,3 +178,15 @@ describe("LOCAL AI rows stay inside the card body", () => {
     expect(service).toContain("function geometry(): string { return root.deskView ? root.deskView.geometryReport() : \"{}\" }");
   });
 });
+
+describe("session card lines never spill into the neighbouring card", () => {
+  test("every fill-width single-line text in a session card elides", () => {
+    const view = readFileSync(join(import.meta.dir, "InfoView.qml"), "utf8");
+    const start = view.indexOf("hosted in \" + view.sessionHostLabel(sc.modelData)");
+    const block = view.slice(view.lastIndexOf("ColumnLayout", start), view.indexOf("\n                }", start));
+    // The merged pid/cpu line had no elide: the taller first card's line ran under its
+    // neighbour's git line ("git mainc·uclean · ram 360M"). Fill-width, one line ⇒ elide.
+    for (const line of block.split("\n").filter(l => l.includes("PlainText {") && l.includes("Layout.fillWidth: true") && !l.includes("wrapMode")))
+      expect(line).toContain("elide: Text.ElideRight");
+  });
+});
