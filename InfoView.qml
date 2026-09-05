@@ -346,6 +346,7 @@ Item {
       }
       Item {
         id: body
+        clip: true
         Layout.fillWidth: true
         Layout.fillHeight: true
         // Flexible cards such as Recent Tasks intentionally size their children
@@ -366,9 +367,9 @@ Item {
     RowLayout {
       id: mrow
       width: parent.width
-      PlainText { text: label; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight; Layout.maximumWidth: Math.round(parent.width * 0.55) }
-      Item { Layout.fillWidth: true }
-      PlainText { text: value; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight; horizontalAlignment: Text.AlignRight; Layout.maximumWidth: Math.round(parent.width * 0.7) }
+      PlainText { text: label; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight; Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.maximumWidth: Math.round(parent.width * 0.55) }
+      Item { Layout.fillWidth: true; Layout.minimumWidth: Style.spacing.sm }
+      PlainText { text: value; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; elide: Text.ElideRight; horizontalAlignment: Text.AlignRight; Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.maximumWidth: Math.round(parent.width * 0.7) }
     }
     Rectangle {
       id: bar
@@ -1372,11 +1373,11 @@ Item {
           property string loadNotice: ""
           // One width for every action tag (LOAD / LOADED / CONFIRM / WORKING / UNLOAD)
           // so the column lines up; arrows are a compact fixed pair beside it.
-          readonly property int actionWidth: Math.round(74 * Style.fontScale)
-          readonly property int arrowWidth: Math.round(22 * Style.fontScale)
+          readonly property int actionWidth: Math.round(66 * Style.fontScale)
+          readonly property int arrowWidth: Math.round(20 * Style.fontScale)
           // Meta text keeps its natural width up to this cap; the fixed arrow and
           // action slots after it are what line the rows up.
-          readonly property int metaWidth: Math.round(170 * Style.fontScale)
+          readonly property int metaWidth: Math.round(130 * Style.fontScale)
 
           function modelName(item) { return String((item && typeof item === "object") ? (item.name || "") : (item || "")) }
           function modelList() { return Array.isArray(availableModels) ? availableModels : [] }
@@ -1461,8 +1462,8 @@ Item {
                 Layout.fillWidth: true
                 spacing: Style.spacing.sm
                 Rectangle { width: 8; height: 8; radius: 4; color: view.desk.green }
-                PlainText { text: modelData.name; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; Layout.fillWidth: true; elide: Text.ElideRight }
-                PlainText { text: "vram " + view.desk.bytes(modelData.vram); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideLeft; Layout.maximumWidth: localAiCard.metaWidth }
+                PlainText { text: modelData.name; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight }
+                PlainText { text: "vram " + view.desk.bytes(modelData.vram); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideLeft; horizontalAlignment: Text.AlignRight; Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.maximumWidth: localAiCard.metaWidth }
                 // Reserve the selector's arrow slot so every action tag is one column.
                 Item { Layout.preferredWidth: localAiCard.arrowWidth * 2 + Style.spacing.xs; Layout.preferredHeight: 1 }
                 Tag {
@@ -1481,11 +1482,12 @@ Item {
               Layout.fillWidth: true
               spacing: Style.spacing.sm
               Rectangle { width: 8; height: 8; radius: 4; color: "transparent"; border.width: 1; border.color: view.textFaint }
-              PlainText { text: localAiCard.selectedModel.name || "no installed model"; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; font.bold: true; Layout.fillWidth: true; elide: Text.ElideRight }
+              PlainText { text: localAiCard.selectedModel.name || "no installed model"; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; font.bold: true; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight }
               PlainText {
                 text: [localAiCard.selectedModel.parameterSize || "", localAiCard.selectedModel.quantization || "", localAiCard.selectedModel.size ? view.desk.bytes(localAiCard.selectedModel.size) : ""].filter(Boolean).join(" · ")
                 color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideLeft
-                Layout.maximumWidth: localAiCard.metaWidth
+                horizontalAlignment: Text.AlignRight
+                Layout.fillWidth: true; Layout.minimumWidth: 0; Layout.maximumWidth: localAiCard.metaWidth
               }
               RowLayout {
                 spacing: Style.spacing.xs
