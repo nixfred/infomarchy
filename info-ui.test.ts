@@ -128,3 +128,13 @@ describe("overlay shows the real desktop", () => {
     expect(overlay).not.toContain("Util.alpha(infoModel.themeBackground, 0.88)");
   });
 });
+
+describe("background sessions are reachable", () => {
+  test("a card with a background host attaches a terminal on click", () => {
+    const model = readFileSync(join(import.meta.dir, "InfoModel.qml"), "utf8");
+    const view = readFileSync(join(import.meta.dir, "InfoView.qml"), "utf8");
+    expect(model).toContain("function attachBackground(session)");
+    expect(model).toContain('["bun", root.resumePath, "claude-attach", id, String(item.cwd || "")]');
+    expect(view).toContain('" · click attaches a terminal"');
+  });
+});

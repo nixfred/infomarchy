@@ -22,3 +22,11 @@ describe("provider-specific session resume", () => {
   });
 });
 
+
+import { resumeAgentCommand as _cmd } from "./resume-session";
+describe("background attach", () => {
+  test("claude-attach opens the running background session, not a copy", () => {
+    expect(_cmd("claude-attach", "2f866b35-c6d5-4204-a546-7d13608ae3ce")).toEqual(["claude", "attach", "2f866b35-c6d5-4204-a546-7d13608ae3ce"]);
+    expect(_cmd("claude-attach", "short")).toBeNull();
+  });
+});

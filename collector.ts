@@ -494,6 +494,9 @@ export function providerOf(cmd: string[]): string | null {
       if (name === "ollama" && !(cmd[1] === "run" || cmd[1] === "runner")) return null; // only chats/runners, not the daemon
       // Codex app-server / mcp-server are long-lived daemons, not a desk session.
       if (name === "codex" && cmd.some(a => a === "app-server" || a === "mcp-server")) return null;
+      // `claude daemon run` is Claude Code's background-session supervisor. It
+      // showed up as a card ("Improving Pi", cwd ~) with nothing to click.
+      if (name === "claude" && cmd[1] === "daemon") return null;
       // OpenCode also exposes several persistent services. Only its TUI/run
       // invocations represent a session that belongs on the desk.
       if (name === "opencode" && cmd.some(a => ["serve", "web", "acp", "mcp", "github"].includes(a))) return null;
@@ -555,6 +558,8 @@ export type SessionHost = {
   window?: string;
   pane?: string;
   attached?: boolean;
+  // Background (daemon-hosted) sessions: the id `claude attach` takes.
+  attachId?: string;
   // True when an attached client is currently showing this very pane; only
   // then does the terminal's title describe this agent.
   activePane?: boolean;
@@ -1063,6 +1068,40 @@ export function herdrWindowFor(host: SessionHost, clients: HerdrClient[]): any {
   const same = host.socket ? withWindow.find(client => client.socket === host.socket) : null;
   return (same || withWindow[0]).window;
 }
+// `claude agents --json` is Claude Code's own registry of every running
+// session on this machine: pid → session id, kind (interactive | background),
+// display name, live status. It replaces heuristics for Claude and makes a
+// background session reachable (`claude attach <id>`). Only asked when a
+// daemon is already running — the CLI would otherwise start a transient one.
+export type ClaudeAgent = { pid: number; sessionId: string; kind: string; name: string; status: string; state: string; cwd: string };
+export function parseClaudeAgents(text: string): Map<number, ClaudeAgent> {
+  const result = new Map<number, ClaudeAgent>();
+  const parsed = parseJsonBounded(String(text || ""), 5000, 8);
+  const items = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.agents) ? parsed.agents : Array.isArray(parsed?.sessions) ? parsed.sessions : [];
+  for (const item of items.slice(0, 128)) {
+    if (!item || typeof item !== "object") continue;
+    const pid = Number(item.pid);
+    if (!Number.isInteger(pid) || pid <= 1) continue;
+    result.set(pid, {
+      pid,
+      sessionId: cleanSessionId(item.sessionId ?? item.session_id ?? item.id),
+      kind: uiString(item.kind, 24).toLowerCase(),
+      name: uiString(item.name, 80),
+      status: uiString(item.status, 24).toLowerCase(),
+      state: uiString(item.state, 24).toLowerCase(),
+      cwd: uiString(item.cwd, 512),
+    });
+  }
+  return result;
+}
+function claudeDaemonPresent(): boolean {
+  for (const cmd of cmdByPid.values()) if (backgroundDaemonKind(cmd) || (/(^|\/)claude$/.test(cmd[0] || "") && cmd[1] === "daemon")) return true;
+  return false;
+}
+async function claudeAgents(): Promise<Map<number, ClaudeAgent>> {
+  if (!claudeDaemonPresent() || !Bun.which("claude")) return new Map();
+  return parseClaudeAgents(await run(["claude", "agents", "--json"], 2000));
+}
 // Boomux (best effort — documented behaviour, not observed live here): the
 // daemon owns each shell's pty, so the agent descends from `boomux daemon run`
 // and never from the terminal. A native terminal attaches through a Boomux
@@ -1156,7 +1195,7 @@ async function liveSessions(pids: number[]) {
     c && typeof c === "object" && Number.isInteger(c.pid) && c.pid > 0 && typeof c.address === "string");
   const winByPid = new Map<number, any>(clients.map((c: any) => [c.pid, c]));
   const sessions: any[] = [];
-  const [gpuByPid, tmux] = await Promise.all([gpuMemoryByPid(), tmuxState(winByPid, pids)]);
+  const [gpuByPid, tmux, claudeRegistry] = await Promise.all([gpuMemoryByPid(), tmuxState(winByPid, pids), claudeAgents()]);
   const herdrClients = herdrState(winByPid);
   const boomuxClients = boomuxState(winByPid);
   for (const pid of pids) {
@@ -1208,6 +1247,23 @@ async function liveSessions(pids: number[]) {
       if (clientWindow) { w = clientWindow; herdrHost.attached = true; }
     }
     const sessionIds = processSessionIds(p.pid, prov, p.cmd);
+    // Claude's own registry wins over heuristics: exact id, display name, and
+    // whether this is a background session we can `claude attach` to.
+    const registered = prov === "claude" ? claudeRegistry.get(p.pid) : undefined;
+    let sessionName = "";
+    let registryBusy: boolean | null = null;
+    let registryBlocked = false;
+    if (registered) {
+      if (registered.sessionId && !sessionIds.includes(registered.sessionId)) sessionIds.unshift(registered.sessionId);
+      sessionName = registered.name;
+      if (registered.status === "busy") registryBusy = true; else if (registered.status === "idle") registryBusy = false;
+      registryBlocked = registered.state === "blocked";
+      if (registered.kind === "background") {
+        const existing = hosts.find(host => host.kind === "background");
+        if (existing) { existing.label = "background · claude daemon"; existing.attachId = registered.sessionId; }
+        else hosts.push({ kind: "background", label: "background · claude daemon", attachId: registered.sessionId });
+      }
+    }
     const sample = processTreeSample(p.pid);
     // A reused pid with a fresh process must not inherit the old baseline.
     const agentKey = `${p.pid}:${Math.round(p.start)}`;
@@ -1218,7 +1274,10 @@ async function liveSessions(pids: number[]) {
       _cwd: p.cwd,
       startedAt: p.start, uptimeSec: Math.max(0, (now - p.start) / 1000),
       session: sessionIds[0] || "", sessionIds,
+      name: sessionName,
       hosts,
+      _registryBusy: registryBusy,
+      _registryBlocked: registryBlocked,
       window: presentation.window,
       args: presentation.args,
       resources: {
@@ -1246,7 +1305,9 @@ async function liveSessions(pids: number[]) {
     if (tmuxHostOf && tmuxHostOf.attached && !tmuxHostOf.activePane && s.window) s.window = { ...s.window, title: "" };
     const titleBusy = !!(s.window && titleLooksBusy(s.window.title));
     // Grok's terminal title sticks on 🧠 after the turn. Trust the inhibitor.
-    s.busy = s.provider === "grok" ? turnBusy.has(s.pid) : (titleBusy || turnBusy.has(s.pid));
+    // Claude's registry status is authoritative when present.
+    s.busy = s._registryBusy !== null && s._registryBusy !== undefined ? s._registryBusy
+      : s.provider === "grok" ? turnBusy.has(s.pid) : (titleBusy || turnBusy.has(s.pid));
     if (!s.busy && s.window && titleLooksBusy(s.window.title) && s.provider === "grok")
       s.window = { ...s.window, title: "" };
   }
@@ -1268,12 +1329,16 @@ async function liveSessions(pids: number[]) {
     session.ci = repo?.ci || null;
     // Title words like "permission" or "failed" describe the TASK while the
     // agent is still working. Only an idle agent can be blocked/waiting/done.
-    const signal = session.busy ? null : attentionSignal(session.window?.title, session.git?.conflicts || 0);
+    let signal = session.busy ? null : attentionSignal(session.window?.title, session.git?.conflicts || 0);
+    // Claude reporting "blocked" means it is waiting on the human — a real
+    // signal, not a title guess.
+    if (session._registryBlocked && !session.busy && (!signal || signal.state === "done"))
+      signal = { state: "waiting", reason: "Claude reports it is blocked on you", action: "answer", detail: String(session.window?.title || session.name || "") };
     session.attention = signal?.state || "";
     session.attentionReason = signal?.reason || "";
     session.attentionAction = signal?.action || "";
     session.attentionDetail = signal?.detail || "";
-    delete session._cwd;
+    delete session._cwd; delete session._registryBusy; delete session._registryBlocked;
   }));
   sessions.sort((a, b) => b.startedAt - a.startedAt);
   return sessions;

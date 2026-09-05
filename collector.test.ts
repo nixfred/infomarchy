@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join, relative } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents } from "./collector.ts";
 
 const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
 const historyFixture = join(testRoot, "history");
@@ -778,5 +778,26 @@ describe("background daemon sessions are labelled, not hidden or duplicated", ()
     expect(backgroundDaemonKind(["/usr/bin/claude", "bg-pty-host"])).toBe("claude");
     expect(backgroundDaemonKind(["/usr/bin/claude", "--resume", "x"])).toBe("");
     expect(backgroundDaemonKind(["kitty"])).toBe("");
+  });
+});
+
+describe("Claude's own session registry", () => {
+  test("the daemon supervisor is not a session", () => {
+    expect(providerOf(["/home/u/.local/share/mise/installs/claude/2.1.259/claude", "daemon", "run", "--origin", "transient"])).toBeNull();
+    expect(providerOf(["claude", "--resume", "abc"])).toBe("claude");
+  });
+
+  test("parses `claude agents --json` into a pid map with clean ids and kinds", () => {
+    const map = parseClaudeAgents(JSON.stringify([
+      { pid: 2149500, id: "2f866b35", cwd: "/home/u/p", kind: "background", sessionId: "2f866b35-c6d5-4204-a546-7d13608ae3ce", name: "Mark all read button", status: "idle", state: "blocked" },
+      { pid: 305287, cwd: "/home/u/q", kind: "interactive", sessionId: "0e60976f-fc28-4e82-819a-b61afe11b56d", name: "blip-40", status: "busy" },
+      { pid: "junk" }, null, { pid: 7, sessionId: { toString: 0 } },
+    ]));
+    expect(map.size).toBe(3);
+    expect(map.get(2149500)?.kind).toBe("background");
+    expect(map.get(2149500)?.sessionId).toBe("2f866b35-c6d5-4204-a546-7d13608ae3ce");
+    expect(map.get(305287)?.status).toBe("busy");
+    expect(map.get(7)?.sessionId).toBe("");
+    expect(parseClaudeAgents("not json").size).toBe(0);
   });
 });

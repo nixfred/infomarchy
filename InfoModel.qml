@@ -300,12 +300,25 @@ Item {
   // Focus the terminal window, then ask the multiplexer inside it to show the
   // agent's own pane. Herdr, tmux and (best effort) Boomux are handled; a host
   // we cannot address still gets the window focused.
+  // A background (daemon-hosted) Claude session has no terminal at all; open
+  // one attached to it. Returns false when there is nothing to attach to.
+  function attachBackground(session) {
+    var item = session || {}
+    var host = (item.hosts || []).filter(function(h) { return h && h.kind === "background" && h.attachId })[0]
+    var id = host ? String(host.attachId) : String(item.session || "")
+    if (!canResume("claude-attach", id)) return false
+    Quickshell.execDetached(["bun", root.resumePath, "claude-attach", id, String(item.cwd || "")])
+    return true
+  }
   function focusSession(session) {
     var item = session || {}
     if (!(item.window && item.window.address)) {
-      // No window we can point at, but Boomux can (re)open the shell's own terminal.
+      // No window we can point at: Boomux can (re)open the shell's own terminal,
+      // and a background Claude session can be attached in a new terminal.
       var boomux = (item.hosts || []).filter(function(host) { return host && host.kind === "boomux" && host.shellId })[0]
-      return boomux ? focusBoomuxShell(boomux) : false
+      if (boomux) return focusBoomuxShell(boomux)
+      if (item.provider === "claude" && (item.hosts || []).some(function(h) { return h && h.kind === "background" })) return attachBackground(item)
+      return false
     }
     focusWindow(item.window.address)
     var hosts = item.hosts || []
@@ -330,7 +343,7 @@ Item {
   }
 
   function canResume(provider, sessionId) {
-    var supported = ["claude", "codex", "grok", "opencode"]
+    var supported = ["claude", "codex", "grok", "opencode", "claude-attach"]
     return supported.indexOf(String(provider || "").toLowerCase()) >= 0 &&
       /^[A-Za-z0-9][A-Za-z0-9_-]{7,127}$/.test(String(sessionId || ""))
   }

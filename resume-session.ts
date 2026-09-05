@@ -3,6 +3,9 @@
 const RESUME_COMMANDS: Record<string, (id: string) => string[]> = {
   codex: id => ["codex", "resume", id],
   claude: id => ["claude", "--resume", id],
+  // A daemon-hosted background session: attach to the RUNNING session instead
+  // of resuming a copy. "The session keeps running either way" (claude attach --help).
+  "claude-attach": id => ["claude", "attach", id],
   grok: id => ["grok", "--resume", id],
   opencode: id => ["opencode", "--session", id],
 };
