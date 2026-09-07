@@ -7,6 +7,7 @@ const RESUME_COMMANDS: Record<string, (id: string) => string[]> = {
   // of resuming a copy. "The session keeps running either way" (claude attach --help).
   "claude-attach": id => ["claude", "attach", id],
   grok: id => ["grok", "--resume", id],
+  hermes: id => ["hermes", "--resume", id],
   opencode: id => ["opencode", "--session", id],
 };
 

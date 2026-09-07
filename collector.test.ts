@@ -422,6 +422,47 @@ describe("history collection", () => {
     });
   });
 
+  test("reads Hermes sessions from a fake state.db and skips cron", async () => {
+    const hermesHome = join(testRoot, "hermes-home");
+    mkdirSync(hermesHome, { recursive: true });
+    const db = new Database(join(hermesHome, "state.db"));
+    db.run(`CREATE TABLE sessions (
+      id TEXT PRIMARY KEY, source TEXT, title TEXT, cwd TEXT,
+      last_activity_at REAL, archived INTEGER, hidden INTEGER
+    )`);
+    db.run(`CREATE TABLE messages (
+      id INTEGER PRIMARY KEY, session_id TEXT, role TEXT, content TEXT,
+      timestamp REAL, active INTEGER
+    )`);
+    const nowSec = Date.now() / 1000;
+    db.run(`INSERT INTO sessions VALUES ('20260907_154615_0a2b78', 'cli', 'Fix the dashboard', '/tmp/proj', ?, 0, 0)`, [nowSec]);
+    db.run(`INSERT INTO sessions VALUES ('cron_37d543206d2c_20260907', 'cron', 'nightly curator', NULL, ?, 0, 0)`, [nowSec]);
+    db.run(`INSERT INTO sessions VALUES ('20260907_hidden0001', 'cli', 'hidden', '/tmp/proj', ?, 0, 1)`, [nowSec]);
+    db.run(`INSERT INTO messages (session_id, role, content, timestamp, active) VALUES
+      ('20260907_154615_0a2b78', 'user', 'please fix the dashboard tokens', ?, 1)`, [nowSec]);
+    db.close();
+
+    const home = join(testRoot, "hermes-empty-home");
+    mkdirSync(home, { recursive: true });
+    const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
+      env: { HOME: home, USER: "tester", HERMES_HOME: hermesHome, XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = await new Response(proc.stdout).text();
+    expect(await proc.exited).toBe(0);
+    const snap = decodeFrames(output);
+    expect(snap.ai.providers.hermes).toMatchObject({ present: true, sessions: 1 });
+    expect(snap.ai.recent.filter((entry: any) => entry.provider === "hermes")).toEqual([
+      expect.objectContaining({
+        provider: "hermes",
+        session: "20260907_154615_0a2b78",
+        project: "/tmp/proj",
+        text: "Fix the dashboard",
+      }),
+    ]);
+  });
+
   test("reads the Grok Bot roster without opening a transcript", async () => {
     const root = join(testRoot, "grok-bot");
     const persistence = join(root, ".config", "Grok Bot", "sand-client-persistence");

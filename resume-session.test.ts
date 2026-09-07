@@ -6,6 +6,7 @@ describe("provider-specific session resume", () => {
     expect(resumeAgentCommand("codex", "session-123")).toEqual(["codex", "resume", "session-123"]);
     expect(resumeAgentCommand("claude", "session-123")).toEqual(["claude", "--resume", "session-123"]);
     expect(resumeAgentCommand("grok", "session-123")).toEqual(["grok", "--resume", "session-123"]);
+    expect(resumeAgentCommand("hermes", "session-123")).toEqual(["hermes", "--resume", "session-123"]);
     expect(resumeAgentCommand("opencode", "session-123")).toEqual(["opencode", "--session", "session-123"]);
   });
 
