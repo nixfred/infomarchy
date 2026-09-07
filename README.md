@@ -289,3 +289,37 @@ Made by [Fred Nix](https://github.com/nixfred) with Larry, Atlanta, 2026.
 ## License
 
 [MIT](LICENSE)
+
+### External roster file
+
+Set `INFOMARCHY_REMOTE_ROSTER` in the collector environment to a local JSON file.
+There is no default path. Both wallpaper and overlay read it each tick and never
+write it. Unset or missing files show no section; unreadable or malformed files
+show **unavailable**. The read-only **REMOTE** card shows status counts and up to
+four attention rows (two on compact desks), with `+N` for the rest. These agents
+do not become local sessions or generate notifications.
+
+```json
+{
+  "v": 1,
+  "fetchedAt": "2026-09-06T12:00:00Z",
+  "agents": [
+    { "id": "ara", "name": "ARA", "status": "busy", "attention": "waiting", "lastLine": "Review requested" }
+  ]
+}
+```
+
+`v` must be 1 and `agents` must be an array. The file limit is 256 KiB; only the
+first 100 entries are considered. IDs are 1–64 ASCII letters, digits, `_` or `-`,
+starting with a letter or digit; first occurrence wins. Status is `busy`, `idle`
+or `offline`; unknown statuses drop the row. Optional attention is `blocked`,
+`waiting` or `done`, ranked in that order, then file order. Unknown attention is
+ignored. Names are capped at 64 characters, last lines at 140 with best-effort
+credential redaction; both render as plain text.
+
+`fetchedAt` is RFC3339, at least year 2000 and no more than 60 seconds ahead of
+the collector clock; invalid timestamps fall back to file mtime. Older than five
+minutes is **stale**, and counts and rows remain visible. A plausible but old
+producer timestamp remains stale even after a fresh copy. Writers needing copy
+freshness should stamp receiver time before atomically replacing the file. If
+adding the roster would exceed the dashboard snapshot budget, that tick omits it.

@@ -1388,10 +1388,10 @@ Item {
         }
       }
 
-      // RIGHT COLUMN: usage + local AI + machine corner
+      // RIGHT COLUMN: usage + local AI + remote roster + machine corner
       GridLayout {
         id: rightColumn
-        visible: view.sectionEnabled("usage") || view.sectionEnabled("localAi") || view.sectionEnabled("machine")
+        visible: view.sectionEnabled("usage") || view.sectionEnabled("localAi") || view.sectionEnabled("machine") || !!view.ai.remoteRoster
         Layout.fillHeight: true
         // A fixed column: content-driven widths let the column drift narrower
         // whenever card text became shrinkable, and rows then overran the border.
@@ -1784,6 +1784,53 @@ Item {
               Tag { visible: !!(provRow.ps.grok && provRow.ps.grok.present); text: "grok " + (provRow.ps.grok ? provRow.ps.grok.sessions : 0) + " sess"; tone: view.desk.providerColor("grok") }
               Tag { visible: !!(provRow.ps.grokBot && provRow.ps.grokBot.present); text: "grok bot " + (provRow.ps.grokBot ? provRow.ps.grokBot.sessions : 0) + " bots" + (provRow.ps.grokBot && provRow.ps.grokBot.unread ? " · " + provRow.ps.grokBot.unread + " unread" : ""); tone: view.desk.providerColor("grok-bot") }
               Tag { visible: !!(provRow.ps.opencode && provRow.ps.opencode.present); text: "opencode " + (provRow.ps.opencode ? provRow.ps.opencode.sessions : 0) + " sess"; tone: view.desk.providerColor("opencode") }
+            }
+          }
+        }
+
+        // Remote agents are compact, read-only lines, independent of sessions.
+        Card {
+          id: remoteRosterCard
+          Layout.row: view.settings.rightIndex("remoteRoster")
+          Layout.column: 0
+          Layout.fillWidth: true
+          visible: !!view.ai.remoteRoster
+          title: "REMOTE"
+          readonly property var roster: view.ai.remoteRoster || ({ state: "unavailable", fetchedAt: 0, counts: {}, needsYou: [], overflow: 0 })
+          // Keep the 1080p right column compact; larger desks may show all four.
+          readonly property int rowLimit: view.height / Style.fontScale <= 1080 ? 2 : 4
+          readonly property var rows: roster.needsYou.slice(0, rowLimit)
+          readonly property int remaining: roster.overflow + roster.needsYou.length - rows.length
+          hint: roster.state === "unavailable" ? "unavailable" : (roster.state === "stale" ? "stale · " : "") + view.desk.ago(roster.fetchedAt)
+          ColumnLayout {
+            anchors { left: parent.left; right: parent.right }
+            spacing: Style.spacing.xs
+            PlainText {
+              Layout.fillWidth: true
+              text: remoteRosterCard.roster.state === "unavailable" ? "roster unavailable" : remoteRosterCard.roster.counts.busy + " busy · " + remoteRosterCard.roster.counts.idle + " idle · " + remoteRosterCard.roster.counts.offline + " offline"
+              color: view.textDim
+              font.family: view.mono
+              font.pixelSize: Style.font.caption
+              elide: Text.ElideRight
+            }
+            Repeater {
+              model: remoteRosterCard.rows
+              delegate: PlainText {
+                required property var modelData
+                Layout.fillWidth: true
+                text: modelData.attention + " · " + (modelData.name || modelData.id) + " · " + modelData.lastLine
+                color: modelData.attention === "blocked" ? view.desk.red : view.desk.providerColor("remote")
+                font.family: view.mono
+                font.pixelSize: Style.font.caption
+                elide: Text.ElideRight
+              }
+            }
+            PlainText {
+              visible: remoteRosterCard.remaining > 0
+              text: "+" + remoteRosterCard.remaining
+              color: view.textFaint
+              font.family: view.mono
+              font.pixelSize: Style.font.caption
             }
           }
         }

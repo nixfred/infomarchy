@@ -16,6 +16,11 @@ describe("interactive information modules", () => {
     expect(adjacentEnabledIndex(["usage", "localAi", "machine"], 0, 1, { localAi: false })).toBe(2);
     expect(adjacentEnabledIndex(["changes", "needs", "projects"], 2, -1, { needs: false })).toBe(0);
     expect(adjacentEnabledIndex(["usage", "localAi", "machine"], 0, -1, {})).toBe(0);
+    const migrated = ["usage", "localAi", "remoteRoster", "machine"];
+    expect(adjacentEnabledIndex(migrated, 1, 1, {})).toBe(3);
+    expect(adjacentEnabledIndex(migrated, 3, -1, {})).toBe(1);
+    expect(adjacentEnabledIndex(migrated, 3, -1, { localAi: false })).toBe(0);
+    expect(adjacentEnabledIndex(migrated, 1, 1, { machine: false })).toBe(1);
     expect(settings).toContain("adjacentEnabledIndex(next, from, direction, sections)");
   });
 
@@ -378,5 +383,61 @@ describe("github activity heatmap", () => {
     // A pinned GitHub cell keeps its breakdown in the status line once the pointer leaves it.
     expect(view).toContain("pinnedBreakdown: true");
     expect(view).toContain('"pinned · " + panel.cellLabel(panel.selectedCell)');
+  });
+});
+
+describe("external roster presentation", () => {
+  const start = view.indexOf("id: remoteRosterCard");
+  const card = view.slice(start, view.indexOf("// ---- machine corner", start));
+  test("migrates persisted order next to LOCAL AI without adding an eleventh module", () => {
+    const normalize = Function(`return (${settings.match(/function normalizedRightOrder\([\s\S]*?\n  \}/)![0]})`)();
+    expect(normalize(["usage", "localAi", "machine"])).toEqual(["usage", "localAi", "remoteRoster", "machine"]);
+    expect(normalize(null)).toEqual(["usage", "localAi", "remoteRoster", "machine"]);
+    expect(normalize(["machine", "usage", "localAi"])).toEqual(["machine", "usage", "localAi", "remoteRoster"]);
+    expect(normalize(["remoteRoster", "machine", "localAi", "usage", "remoteRoster"])).toEqual(["remoteRoster", "machine", "localAi", "usage"]);
+    expect(settings.slice(settings.indexOf("readonly property var definitions"), settings.indexOf("property var sections"))).not.toContain("remoteRoster");
+    expect(view).toContain('|| !!view.ai.remoteRoster');
+    expect(card).toContain('rightIndex("remoteRoster")');
+    expect(card).toContain('title: "REMOTE"');
+    expect(card).not.toMatch(/moveId:|draggable:|MouseArea|onClicked|focusSession|inspect|resume|STOP|END/);
+    expect(model).toContain('case "remote": return "Remote"');
+  });
+  test("two-row overflow includes emitted rows that do not fit", () => {
+    const limit = card.match(/rowLimit: (.+)/)![1];
+    const remaining = card.match(/remaining: (.+)/)![1];
+    const rowLimit = Function("view", "Style", `return ${limit}`)({ height: 1080 }, { fontScale: 1 });
+    const roster = { needsYou: [{}, {}, {}, {}], overflow: 2 };
+    expect(rowLimit).toBe(2);
+    expect(Function("roster", "rows", `return ${remaining}`)(roster, roster.needsYou.slice(0, rowLimit))).toBe(4);
+    expect(Function("view", "Style", `return ${limit}`)({ height: 1440 }, { fontScale: 1 })).toBe(4);
+    expect(card).toContain("delegate: PlainText");
+  });
+  test("1080p differential: local Flow geometry and RECENT layout bindings ignore roster", () => {
+    // Source/binding regression, not a rendered-height measurement. Nine local
+    // sessions intentionally exercise wrapping; roster presence must not alter it.
+    const left = view.slice(view.indexOf("// LEFT COLUMN:"), view.indexOf("// RIGHT COLUMN:"));
+    expect(left).not.toContain("remoteRoster");
+    const expr = (pattern: RegExp) => view.match(pattern)![1];
+    const evaluate = (source: string, fixture: any, extra = {}) => Function("view", "Style", ...Object.keys(extra), `return ${source}`)(fixture, { fontScale: 1 }, ...Object.values(extra));
+    const fixture = { width: 1920, height: 1080, gap: 12, sessions: Array.from({ length: 9 }, (_, id) => ({ id })), ai: {}, sectionEnabled: () => true };
+    function layout(ai: any) {
+      const v = { ...fixture, ai };
+      const rightColumnWidth = evaluate(expr(/rightColumnWidth: (.+)/), v, { width: v.width });
+      const targetColumns = evaluate(expr(/targetColumns: (.+)/), v);
+      const minimumCardWidth = evaluate(expr(/minimumCardWidth: (.+)/), v);
+      const width = evaluate(expr(/Layout.maximumWidth: (view.width - view.rightColumnWidth[^\n]+)/), { ...v, rightColumnWidth });
+      const fittedCardWidth = evaluate(expr(/fittedCardWidth: (.+)/), v, { width, spacing: 12, targetColumns });
+      const recent = left.slice(left.indexOf("// ---- recent prompts"));
+      return { targetColumns, minimumCardWidth, fittedCardWidth,
+        rows: Math.ceil(v.sessions.length / targetColumns),
+        recentEnabled: evaluate(recent.match(/visible: (.+)/)![1], v),
+        recentMinimumHeight: evaluate(recent.match(/Layout.minimumHeight: (.+)/)![1], v) };
+    }
+    const absent = layout({ sessions: fixture.sessions });
+    const populated = layout({ sessions: fixture.sessions, remoteRoster: { counts: { busy: 100 }, needsYou: [{}, {}, {}, {}], overflow: 96 } });
+    expect(populated).toEqual(absent);
+    expect(absent).toMatchObject({ targetColumns: 6, rows: 2, recentEnabled: true, recentMinimumHeight: 150 });
+    // RECENT's enabled/minimum-height bindings are what this helper can assert;
+    // actual on-desk visibility still needs a renderer with real font metrics.
   });
 });

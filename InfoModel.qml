@@ -126,6 +126,7 @@ Item {
       case "ollama": return root.green
       case "opencode": return root.blue
       case "aider": return root.yellow
+      case "remote": return root.cyan
       case "copilot": return root.magenta
       default: return Color.accent
     }
@@ -154,6 +155,7 @@ Item {
       case "ollama": return "Ollama"
       case "opencode": return "opencode"
       case "aider": return "Aider"
+      case "remote": return "Remote"
       case "copilot": return "Copilot"
       default: return plainText(p, 64)
     }
