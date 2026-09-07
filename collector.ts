@@ -1608,31 +1608,35 @@ function hermesHistory() {
   try {
     db = new Database(path, { readonly: true });
     const countRows = db.query(`
-      SELECT timestamp FROM messages
-       WHERE role = 'user' AND ifnull(active, 1) = 1 AND timestamp IS NOT NULL
-       ORDER BY id DESC LIMIT 4000
+      SELECT m.timestamp AS timestamp FROM messages m
+        JOIN sessions s ON s.id = m.session_id
+       WHERE m.role = 'user' AND ifnull(m.active, 1) = 1 AND m.timestamp IS NOT NULL
+         AND ifnull(s.archived, 0) = 0 AND ifnull(s.hidden, 0) = 0
+         AND ifnull(s.source, '') NOT IN ('cron')
+       ORDER BY m.id DESC LIMIT 4000
     `).all() as any[];
     for (const row of countRows) {
       const ts = hermesTimestampMs(row.timestamp);
       if (ts) { bump(ts, "hermes"); cnt("hermes", ts); }
     }
+    // One Recent row per user prompt, like Claude jsonl — not one stale session title.
     const rows = db.query(`
-      SELECT s.id AS session, s.title AS title, s.cwd AS project, s.last_activity_at AS ts,
-             (SELECT substr(m.content, 1, 280) FROM messages m
-               WHERE m.session_id = s.id AND m.role = 'user' AND ifnull(m.active, 1) = 1
-               ORDER BY m.id DESC LIMIT 1) AS text
-        FROM sessions s
-       WHERE ifnull(s.archived, 0) = 0 AND ifnull(s.hidden, 0) = 0
+      SELECT m.timestamp AS ts, substr(m.content, 1, 280) AS text,
+             s.id AS session, s.cwd AS project
+        FROM messages m
+        JOIN sessions s ON s.id = m.session_id
+       WHERE m.role = 'user' AND ifnull(m.active, 1) = 1
+         AND ifnull(s.archived, 0) = 0 AND ifnull(s.hidden, 0) = 0
          AND ifnull(s.source, '') NOT IN ('cron')
-       ORDER BY s.last_activity_at DESC
-       LIMIT 80
+       ORDER BY m.id DESC
+       LIMIT 2000
     `).all() as any[];
     let prompts = 0;
     const sessionIds = new Set<string>();
     for (const row of rows) {
       const ts = hermesTimestampMs(row.ts);
       const session = cleanSessionId(row.session);
-      const text = safePrompt(row.title || row.text || "");
+      const text = safePrompt(row.text || "");
       if (!ts || !text) continue;
       prompts++;
       if (session) sessionIds.add(session);

@@ -1143,8 +1143,9 @@ Item {
               cells: (view.ai.heatmap || {}).cells || []
               startTs: (view.ai.heatmap || {}).start || 0
               days: (view.ai.heatmap || {}).days || []
-              kinds: ["claude", "codex", "grok", "opencode", "gemini", "ollama"]
+              kinds: ["claude", "codex", "grok", "hermes", "opencode", "gemini", "ollama"]
               unit: "prompts"
+              kindFiltersCells: true
               selectedCell: view.activityCellFilter
               selectedKind: view.activityProviderFilter
               filterActive: view.activityFilterActive

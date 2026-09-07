@@ -439,7 +439,11 @@ describe("history collection", () => {
     db.run(`INSERT INTO sessions VALUES ('cron_37d543206d2c_20260907', 'cron', 'nightly curator', NULL, ?, 0, 0)`, [nowSec]);
     db.run(`INSERT INTO sessions VALUES ('20260907_hidden0001', 'cli', 'hidden', '/tmp/proj', ?, 0, 1)`, [nowSec]);
     db.run(`INSERT INTO messages (session_id, role, content, timestamp, active) VALUES
-      ('20260907_154615_0a2b78', 'user', 'please fix the dashboard tokens', ?, 1)`, [nowSec]);
+      ('20260907_154615_0a2b78', 'user', 'please fix the dashboard tokens', ?, 1)`, [nowSec - 10]);
+    db.run(`INSERT INTO messages (session_id, role, content, timestamp, active) VALUES
+      ('20260907_154615_0a2b78', 'user', 'and show each prompt like Claude', ?, 1)`, [nowSec]);
+    db.run(`INSERT INTO messages (session_id, role, content, timestamp, active) VALUES
+      ('cron_37d543206d2c_20260907', 'user', 'nightly should not appear', ?, 1)`, [nowSec]);
     db.close();
 
     const home = join(testRoot, "hermes-empty-home");
@@ -458,7 +462,13 @@ describe("history collection", () => {
         provider: "hermes",
         session: "20260907_154615_0a2b78",
         project: "/tmp/proj",
-        text: "Fix the dashboard",
+        text: "and show each prompt like Claude",
+      }),
+      expect.objectContaining({
+        provider: "hermes",
+        session: "20260907_154615_0a2b78",
+        project: "/tmp/proj",
+        text: "please fix the dashboard tokens",
       }),
     ]);
   });
