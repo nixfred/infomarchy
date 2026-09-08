@@ -706,6 +706,19 @@ describe("prompt text never leaves the machine by default", () => {
     expect(topicRefinementAllowed({ OLLAMA_HOST: "http://100.68.193.41:11434", INFOMARCHY_ALLOW_REMOTE_OLLAMA: "1" } as any)).toBe(true);
   });
 
+  test("INFOMARCHY_SKIP_REFINEMENT overrides loopback eligibility and the remote opt-in", () => {
+    // A forward is indistinguishable from a local socket by address, so the
+    // switch has to win over both the loopback test and the explicit opt-in.
+    expect(topicRefinementAllowed({ OLLAMA_HOST: "http://127.0.0.1:11434" } as any)).toBe(true);
+    expect(topicRefinementAllowed({ OLLAMA_HOST: "http://127.0.0.1:11434", INFOMARCHY_SKIP_REFINEMENT: "1" } as any)).toBe(false);
+    expect(topicRefinementAllowed({ INFOMARCHY_SKIP_REFINEMENT: "1" } as any)).toBe(false);
+    expect(topicRefinementAllowed({ OLLAMA_HOST: "http://100.68.193.41:11434", INFOMARCHY_ALLOW_REMOTE_OLLAMA: "1", INFOMARCHY_SKIP_REFINEMENT: "1" } as any)).toBe(false);
+    // Only the exact value opts out; anything else leaves behaviour unchanged.
+    expect(topicRefinementAllowed({ OLLAMA_HOST: "http://127.0.0.1:11434", INFOMARCHY_SKIP_REFINEMENT: "0" } as any)).toBe(true);
+    expect(topicRefinementAllowed({ OLLAMA_HOST: "http://127.0.0.1:11434", INFOMARCHY_SKIP_REFINEMENT: "true" } as any)).toBe(true);
+  });
+
+
   test("redaction covers env assignments, URLs, PEM, JWT and cloud keys", () => {
     expect(safePrompt("AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY")).toBe("AWS_SECRET_ACCESS_KEY=[redacted]");
     // Only the credential inside an authenticated URL is masked; the rest stays readable.

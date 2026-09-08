@@ -4,6 +4,9 @@ All notable changes to Infomarchy. The format follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Fixed
+- **Automatic topic refinement can be switched off, because the loopback test cannot see an SSH forward.** Refinement is gated on `OLLAMA_HOST` being loopback, but that test reads the address rather than the destination: an `ssh -L 11434:localhost:11434` forward answers on `127.0.0.1`, passes the check, and refinement then posts prompt text to another machine. A forward is indistinguishable from a local socket by address, so this does not make the check smarter — `INFOMARCHY_SKIP_REFINEMENT=1` disables automatic refinement outright, checked before both the loopback test and the explicit `INFOMARCHY_ALLOW_REMOTE_OLLAMA` opt-in. Scope is refinement only: inventory polling and explicit LOAD/UNLOAD are unchanged, the latter posting an empty prompt to set model residency rather than session text. Set it in the shell's own environment and restart the shell, since the collectors inherit theirs at launch. It also suits anyone who simply wants a desk that does not refine on its own, on a metered link or a shared box.
+
 ## [1.1.3] — 2026-09-07
 
 ### Fixed

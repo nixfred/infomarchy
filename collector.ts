@@ -924,6 +924,16 @@ export function ollamaHostIsLocal(hostValue: unknown): boolean {
   } catch { return false; }
 }
 export function topicRefinementAllowed(env = process.env): boolean {
+  // Checked first, so nothing below can re-enable it. ollamaHostIsLocal() reads
+  // the address, not the destination: an `ssh -L 11434:localhost:11434` forward
+  // makes a remote Ollama answer on 127.0.0.1, the loopback test passes, and
+  // refinement posts prompt text to another machine while believing it never
+  // left this one. A forward cannot be told from a local socket by the
+  // configured address, so this is an operator switch rather than a detection.
+  // Scope: automatic refinement only. Explicit LOAD/UNLOAD in ollama-control.ts
+  // still reaches /api/generate, but with an empty prompt to set keep_alive —
+  // model residency, not session text.
+  if (env.INFOMARCHY_SKIP_REFINEMENT === "1") return false;
   return env.INFOMARCHY_ALLOW_REMOTE_OLLAMA === "1" || ollamaHostIsLocal(env.OLLAMA_HOST);
 }
 async function refineSessionTopics(sessions: any[], recentEntries: any[], ollama: any): Promise<Record<string, any>> {
