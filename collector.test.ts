@@ -77,6 +77,20 @@ describe("providerOf", () => {
     expect(providerOf(["/home/user/.hermes/bin/hermes"])).toBe("hermes");
   });
 
+  test("recognizes Hermes launched via the -m hermes_cli.main module form", () => {
+    // A bare module form or one with an interactive flag is a live session
+    // (this is how optional shebang-less installs actually launch). It was
+    // invisible before the hermes_cli.main pattern was added.
+    expect(providerOf(["/home/j_kro/.hermes/hermes-agent/venv/bin/python", "-m", "hermes_cli.main", "--yolo"])).toBe("hermes");
+    expect(providerOf(["/home/j_kro/.hermes/hermes-agent/venv/bin/python", "-m", "hermes_cli.main", "chat"])).toBe("hermes");
+  });
+
+  test("keeps Hermes daemons and service subcommands off the desk", () => {
+    expect(providerOf(["/home/j_kro/.hermes/hermes-agent/venv/bin/python", "-m", "hermes_cli.main", "gateway", "run"])).toBeNull();
+    expect(providerOf(["/home/j_kro/.hermes/hermes-agent/venv/bin/python", "-m", "hermes_cli.main", "proxy", "start", "--provider", "nous"])).toBeNull();
+    expect(providerOf(["python", "-m", "hermes_cli.main", "cron", "list"])).toBeNull();
+  });
+
   test("recognizes Muse however mise resolved it", () => {
     // Muse installs as a shell launcher on PATH that execs the real CLI out of
     // a mise install directory, so the process can present either path.
