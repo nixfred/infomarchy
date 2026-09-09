@@ -230,6 +230,18 @@ describe("zombie cleanup is explicit and two-click", () => {
   });
 });
 
+describe("module strip spacing matches the rest of the desk", () => {
+  test("the gap under the chip row is view.gap, not the tighter chip-to-chip sm", () => {
+    const start = view.indexOf("id: moduleStrip");
+    const column = view.lastIndexOf("ColumnLayout {", start);
+    const beforeFlow = view.slice(column, view.lastIndexOf("Flow {", start));
+    expect(beforeFlow).toContain("spacing: view.gap");
+    expect(beforeFlow).not.toContain("spacing: Style.spacing.sm");
+    const flow = view.slice(view.lastIndexOf("Flow {", start), view.indexOf("Repeater {", start));
+    expect(flow).toContain("spacing: Style.spacing.sm");
+  });
+});
+
 describe("right column fits a 1080p desk", () => {
   test("the per-model rows name no model, so a new one needs no edit here", () => {
     const block = view.match(/Repeater \{\s*\n\s*model: \(up\.u\.models[\s\S]*?\n                \}/)?.[0];
@@ -376,14 +388,42 @@ describe("LOCAL AI rows stay inside the card body", () => {
 });
 
 describe("session card lines never spill into the neighbouring card", () => {
+  const view = readFileSync(join(import.meta.dir, "InfoView.qml"), "utf8");
+  const start = view.indexOf("hosted in \" + view.sessionHostLabel(sc.modelData)");
+  const card = view.slice(view.lastIndexOf("delegate: Rectangle {", start), view.indexOf("\n                MouseArea {", start));
+  const block = view.slice(view.lastIndexOf("ColumnLayout", start), view.indexOf("\n                }", start));
+  const tag = view.slice(view.indexOf("component Tag: Rectangle"), view.indexOf("component PowerToggle"));
+  const stale = card.slice(card.indexOf("sc.modelData.stale === true"), card.indexOf("Item { Layout.fillWidth: true; Layout.minimumWidth: 0 }"));
+  const topicMark = block.indexOf('sc.modelData.topic ? "↳ "');
+  const topic = block.slice(block.lastIndexOf("PlainText {", topicMark), block.indexOf("maximumLineCount", topicMark));
+
   test("every fill-width single-line text in a session card elides", () => {
-    const view = readFileSync(join(import.meta.dir, "InfoView.qml"), "utf8");
-    const start = view.indexOf("hosted in \" + view.sessionHostLabel(sc.modelData)");
-    const block = view.slice(view.lastIndexOf("ColumnLayout", start), view.indexOf("\n                }", start));
     // The merged pid/cpu line had no elide: the taller first card's line ran under its
     // neighbour's git line ("git mainc·uclean · ram 360M"). Fill-width, one line ⇒ elide.
-    for (const line of block.split("\n").filter(l => l.includes("PlainText {") && l.includes("Layout.fillWidth: true") && !l.includes("wrapMode")))
+    const lines = block.split("\n").filter(l => l.includes("PlainText {") && l.includes("Layout.fillWidth: true") && !l.includes("wrapMode"));
+    expect(lines.length).toBeGreaterThan(3);
+    for (const line of lines)
       expect(line).toMatch(/elide: Text\.Elide(Right|Middle|Left)/);
+  });
+
+  test("fill-width session text can shrink below the unelided string", () => {
+    // elide is a no-op until the layout may assign a width smaller than implicitWidth.
+    // A STALE card's topic/git/pid then painted into the next card.
+    const lines = block.split("\n").filter(l => l.includes("PlainText {") && l.includes("Layout.fillWidth: true"));
+    expect(lines.length).toBeGreaterThan(3);
+    for (const line of lines)
+      expect(line).toMatch(/Layout\.minimumWidth: 0/);
+    expect(topic).toContain("Layout.minimumWidth: 0");
+    expect(topic).toContain("wrapMode: Text.Wrap");
+  });
+
+  test("the STALE chip shares leftover header space and the Tag elides when squeezed", () => {
+    expect(stale).toContain("Layout.fillWidth: true");
+    expect(stale).toContain("Layout.minimumWidth: 0");
+    expect(stale).toContain("Layout.maximumWidth: implicitWidth");
+    expect(tag).toContain("clip: true");
+    expect(tag).toContain("elide: Text.ElideRight");
+    expect(card).toMatch(/clip: true/);
   });
 });
 
