@@ -4,6 +4,9 @@ All notable changes to Infomarchy. The format follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Added
+- Optional read-only **REMOTE** roster from `INFOMARCHY_REMOTE_ROSTER`: bounded local JSON ingest, freshness labels, status counts and compact attention rows beside LOCAL AI. Existing right-column orders migrate automatically; local sessions and notifications stay independent. Optionally, `INFOMARCHY_REMOTE_WORKSPACE` names a workspace and the card becomes a doorway to it: one click focuses that workspace, where the operator's own view of those agents lives. Unset, the card has no interactions at all.
+
 ## [1.3.0] — 2026-09-08
 
 ### Added

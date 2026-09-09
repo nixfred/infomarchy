@@ -2077,13 +2077,77 @@ function agentsUsage() {
   return out;
 }
 
+// External roster data is presentation-only: never merge it into local sessions.
+const MAX_REMOTE_ROSTER_BYTES = 256 * 1024;
+type RemoteAttention = "blocked" | "waiting" | "done";
+export type RemoteRoster = {
+  state: "ok" | "stale" | "unavailable";
+  fetchedAt: number;
+  counts: { busy: number; idle: number; offline: number };
+  needsYou: { id: string; name: string; lastLine: string; attention: RemoteAttention }[];
+  overflow: number;
+  // Where this operator's own view of those agents lives, if they have one.
+  workspace?: number;
+};
+function unavailableRoster(): RemoteRoster {
+  return { state: "unavailable", fetchedAt: 0, counts: { busy: 0, idle: 0, offline: 0 }, needsYou: [], overflow: 0 };
+}
+// A remote agent has no window on this machine, so there is nothing here for a
+// click to focus — unless the operator has built their own view of those agents
+// and says which workspace it is on. Unset, which is the default, keeps the card
+// inert; the desk never guesses, and never learns what that view contains.
+export function remoteWorkspace(value = process.env.INFOMARCHY_REMOTE_WORKSPACE): number | undefined {
+  return typeof value === "string" && /^[1-9][0-9]?$/.test(value) ? Number(value) : undefined;
+}
+export function parseRemoteRoster(text: string, mtime: number, stamp = Date.now()): RemoteRoster {
+  if (Buffer.byteLength(text, "utf8") > MAX_REMOTE_ROSTER_BYTES) return unavailableRoster();
+  const doc = parseJsonBounded(text);
+  if (!doc || doc.v !== 1 || !Array.isArray(doc.agents)) return unavailableRoster();
+  const parsedTime = typeof doc.fetchedAt === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(doc.fetchedAt)
+    ? Date.parse(doc.fetchedAt) : NaN;
+  const fetchedAt = Number.isFinite(parsedTime) && parsedTime >= 946_684_800_000 && parsedTime <= stamp + 60_000 ? parsedTime : mtime;
+  const result: RemoteRoster = { ...unavailableRoster(), state: stamp - fetchedAt > 300_000 ? "stale" : "ok", fetchedAt };
+  const seen = new Set<string>();
+  const rank = { blocked: 0, waiting: 1, done: 2 };
+  for (const row of doc.agents.slice(0, 100)) {
+    if (!row || typeof row.id !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(row.id) || seen.has(row.id)) continue;
+    if (row.status !== "busy" && row.status !== "idle" && row.status !== "offline") continue;
+    // First ingested row owns the id; a rejected status does not reserve it.
+    seen.add(row.id);
+    result.counts[row.status as keyof RemoteRoster["counts"]]++;
+    if (row.attention !== "blocked" && row.attention !== "waiting" && row.attention !== "done") continue;
+    result.needsYou.push({ id: row.id, name: uiString(row.name, 64), lastLine: safePrompt(row.lastLine), attention: row.attention });
+  }
+  result.needsYou.sort((a, b) => rank[a.attention] - rank[b.attention]);
+  result.overflow = Math.max(0, result.needsYou.length - 4);
+  result.needsYou = result.needsYou.slice(0, 4);
+  return result;
+}
+export function readRemoteRoster(path = process.env.INFOMARCHY_REMOTE_ROSTER, stamp = Date.now()): RemoteRoster | undefined {
+  if (!path) return undefined;
+  const workspace = remoteWorkspace();
+  const withWorkspace = (roster: RemoteRoster): RemoteRoster => workspace ? { ...roster, workspace } : roster;
+  let stat;
+  try { stat = lstatSync(path); }
+  catch (error) {
+    return ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code || "") ? undefined : withWorkspace(unavailableRoster());
+  }
+  const text = readRegularFileLimited(path, MAX_REMOTE_ROSTER_BYTES);
+  return withWorkspace(text === null ? unavailableRoster() : parseRemoteRoster(text, stat.mtimeMs, stamp));
+}
+
 // ---------------------------------------------------------------- main
 export function frameSnapshot(value: unknown): string {
   // sanitizeForUi caps depth at 12 and every collection, so an input that
   // passed its own bounds but sits deeper inside the snapshot (a 22-level
   // object smuggled in as a pid) can no longer trip the budget check into
   // replacing the whole desk with an error frame.
-  const sanitized = sanitizeForUi(value);
+  let sanitized = sanitizeForUi(value);
+  // Optional roster data must never turn a valid local desk into an error frame.
+  if (sanitized?.ai?.remoteRoster !== undefined &&
+      (!structureWithinBudget(sanitized, MAX_JSON_NODES, MAX_JSON_DEPTH) || Buffer.byteLength(JSON.stringify(sanitized), "utf8") > MAX_SNAPSHOT_BYTES)) {
+    delete sanitized.ai.remoteRoster;
+  }
   if (!structureWithinBudget(sanitized, MAX_JSON_NODES, MAX_JSON_DEPTH)) throw new Error("snapshot structure exceeded budget");
   const payload = JSON.stringify(sanitized);
   if (Buffer.byteLength(payload, "utf8") > MAX_SNAPSHOT_BYTES) throw new Error("snapshot exceeded byte budget");
@@ -2265,6 +2329,7 @@ async function runCollector() {
       usageDays: heatDays.map(localDayKey),
       heatmap: { start: start7, days: heatDays, cells: heat.map(c => [c.n, c.p]) },
       github,
+      remoteRoster: readRemoteRoster(),
       recent: dashboardRecent, recentTruncated,
     },
   };
