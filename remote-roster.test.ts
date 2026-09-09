@@ -2,7 +2,7 @@ import { afterAll, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync, symlinkSync, rmSync, readFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { parseRemoteRoster, readRemoteRoster, frameSnapshot } from "./collector";
+import { parseRemoteRoster, readRemoteRoster, remoteWorkspace, frameSnapshot } from "./collector";
 const root = mkdtempSync(join(tmpdir(), "remote-roster-"));
 afterAll(() => rmSync(root, { recursive: true, force: true }));
 const stamp = Date.UTC(2026, 8, 6);
@@ -51,6 +51,26 @@ test("existence is distinct from readable regular files; no writes", () => {
   writeFileSync(path, 'x'.repeat(256 * 1024 + 1));
   expect(readRemoteRoster(path)?.state).toBe("unavailable");
 });
+test("the doorway is opt-in, strictly numeric, and never invents a target", () => {
+  const path = join(root, "workspace.json");
+  writeFileSync(path, doc([row("ara")]));
+  expect(readRemoteRoster(path, stamp)).not.toHaveProperty("workspace");
+  expect(remoteWorkspace("10")).toBe(10);
+  expect(remoteWorkspace("1")).toBe(1);
+  for (const bad of [undefined, "", "0", "100", " 10", "10 ", "1e1", "+1", "-1", "10; hyprctl dispatch exit", "special:magic", "name:work"])
+    expect(remoteWorkspace(bad)).toBeUndefined();
+  process.env.INFOMARCHY_REMOTE_WORKSPACE = "10";
+  try {
+    expect(readRemoteRoster(path, stamp)?.workspace).toBe(10);
+    // A card that cannot be shown is not a doorway either.
+    expect(readRemoteRoster(join(root, "missing"))).toBeUndefined();
+    writeFileSync(path, "{");
+    expect(readRemoteRoster(path, stamp)).toEqual({ state: "unavailable", fetchedAt: 0, counts: { busy: 0, idle: 0, offline: 0 }, needsYou: [], overflow: 0, workspace: 10 });
+    process.env.INFOMARCHY_REMOTE_WORKSPACE = "workspace 10";
+    writeFileSync(path, doc([row("ara")]));
+    expect(readRemoteRoster(path, stamp)).not.toHaveProperty("workspace");
+  } finally { delete process.env.INFOMARCHY_REMOTE_WORKSPACE; }
+});
 test("100-agent cap, overflow, absence and near-budget local snapshot survive framing", () => {
   const roster = parse(Array.from({ length: 101 }, (_, i) => row("a" + i)));
   expect(roster.counts.busy).toBe(100);
@@ -74,13 +94,17 @@ test("overlay and wallpaper read the file; demo remains isolated", async () => {
   const path = join(root, "overlay.json"); writeFileSync(path, doc([row("ara"), row("max")]));
   for (const [args, source] of [[["--id", "overlay"], path], [["--id", "bg"], path], [["--demo"], path], [["--id", "overlay"], ""], [["--id", "overlay"], join(root, "missing")]] as [string[], string][]) {
     const proc = Bun.spawn([process.execPath, "--preload", join(import.meta.dir, "tests/collector-offline.ts"), join(import.meta.dir, "collector.ts"), ...args], {
-      env: { HOME: root, XDG_STATE_HOME: join(root, "state"), PATH: "/nonexistent", INFOMARCHY_SKIP_GITHUB: "1", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_REMOTE_ROSTER: source }, stdout: "pipe", stderr: "pipe",
+      env: { HOME: root, XDG_STATE_HOME: join(root, "state"), PATH: "/nonexistent", INFOMARCHY_SKIP_GITHUB: "1", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_REMOTE_ROSTER: source, INFOMARCHY_REMOTE_WORKSPACE: "10" }, stdout: "pipe", stderr: "pipe",
     });
     const output = await new Response(proc.stdout).text();
     expect(await proc.exited).toBe(0);
     const snapshot = decode(output);
     if (args[0] === "--demo" || source !== path) expect(snapshot.ai).not.toHaveProperty("remoteRoster");
-    else expect(snapshot.ai.remoteRoster.needsYou.map((r: any) => r.id)).toEqual(["ara", "max"]);
+    else {
+      expect(snapshot.ai.remoteRoster.needsYou.map((r: any) => r.id)).toEqual(["ara", "max"]);
+      // The env var reaches the shipped collector, not just the exported helper.
+      expect(snapshot.ai.remoteRoster.workspace).toBe(10);
+    }
     if (args[0] !== "--demo") {
       for (const key of ["sessions", "attention", "events", "projects", "workspaces", "collisions", "recent"]) {
         const local = JSON.stringify(snapshot.ai[key]);

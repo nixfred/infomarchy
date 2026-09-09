@@ -323,3 +323,9 @@ minutes is **stale**, and counts and rows remain visible. A plausible but old
 producer timestamp remains stale even after a fresh copy. Writers needing copy
 freshness should stamp receiver time before atomically replacing the file. If
 adding the roster would exceed the dashboard snapshot budget, that tick omits it.
+
+Set `INFOMARCHY_REMOTE_WORKSPACE` to a workspace number (1–99) and the card
+becomes a doorway: one click focuses that workspace, where your own view of those
+agents lives. Infomarchy neither draws that view nor knows what is on it — it
+focuses a workspace and nothing else. Unset, which is the default, the card stays
+inert, because a remote agent has no window here to focus.

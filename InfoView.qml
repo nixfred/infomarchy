@@ -1801,7 +1801,7 @@ Item {
           readonly property int rowLimit: view.height / Style.fontScale <= 1080 ? 2 : 4
           readonly property var rows: roster.needsYou.slice(0, rowLimit)
           readonly property int remaining: roster.overflow + roster.needsYou.length - rows.length
-          hint: roster.state === "unavailable" ? "unavailable" : (roster.state === "stale" ? "stale · " : "") + view.desk.ago(roster.fetchedAt)
+          hint: (roster.state === "unavailable" ? "unavailable" : (roster.state === "stale" ? "stale · " : "") + view.desk.ago(roster.fetchedAt)) + (roster.workspace ? " · click to open" : "")
           ColumnLayout {
             anchors { left: parent.left; right: parent.right }
             spacing: Style.spacing.xs
@@ -1832,6 +1832,17 @@ Item {
               font.family: view.mono
               font.pixelSize: Style.font.caption
             }
+          }
+          // The only action the card offers, and only when the operator has said
+          // where their own view of these agents is. It focuses a workspace; it
+          // never touches the agents themselves.
+          MouseArea {
+            anchors.fill: parent
+            z: 1
+            enabled: view.interactive && !!remoteRosterCard.roster.workspace
+            hoverEnabled: enabled
+            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+            onClicked: view.desk.focusWorkspace(remoteRosterCard.roster.workspace)
           }
         }
 

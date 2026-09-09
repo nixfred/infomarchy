@@ -399,8 +399,21 @@ describe("external roster presentation", () => {
     expect(view).toContain('|| !!view.ai.remoteRoster');
     expect(card).toContain('rightIndex("remoteRoster")');
     expect(card).toContain('title: "REMOTE"');
-    expect(card).not.toMatch(/moveId:|draggable:|MouseArea|onClicked|focusSession|inspect|resume|STOP|END/);
+    expect(card).not.toMatch(/moveId:|draggable:|focusSession|inspect|resume|STOP|END/);
     expect(model).toContain('case "remote": return "Remote"');
+  });
+  test("the card's one action is a workspace, opt-in, and inert without one", () => {
+    // Exactly one MouseArea: no per-row actions, no drag target, nothing that
+    // reaches an agent — a remote agent has no window on this machine.
+    expect(card.match(/MouseArea/g)).toHaveLength(1);
+    expect(card).toContain("enabled: view.interactive && !!remoteRosterCard.roster.workspace");
+    expect(card).toContain("onClicked: view.desk.focusWorkspace(remoteRosterCard.roster.workspace)");
+    expect(card).toContain('(roster.workspace ? " · click to open" : "")');
+    const guard = model.match(/function focusWorkspace\(workspace\)[\s\S]*?\n  \}/)![0];
+    expect(guard).toContain("if (!/^[1-9][0-9]?$/.test(ws)) return");
+    expect(guard).toContain("hl.dsp.focus({ workspace = ");
+    expect(guard).toContain('"hyprctl", "dispatch", "workspace", ws');
+    expect(guard).not.toMatch(/exec_cmd|killactive|exit|movetoworkspace/);
   });
   test("two-row overflow includes emitted rows that do not fit", () => {
     const limit = card.match(/rowLimit: (.+)/)![1];

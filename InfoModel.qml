@@ -279,6 +279,17 @@ Item {
       Quickshell.execDetached(["hyprctl", "dispatch", "focuswindow", "address:0x" + addr])
   }
 
+  // Focus a Hyprland workspace by number, on both dispatch syntaxes. Used only
+  // by the REMOTE card, whose agents have no window here to focus.
+  function focusWorkspace(workspace) {
+    var ws = String(workspace || "")
+    if (!/^[1-9][0-9]?$/.test(ws)) return
+    if (root.snap && root.snap.hyprLua)
+      Quickshell.execDetached(["hyprctl", "dispatch", 'hl.dsp.focus({ workspace = ' + ws + ' })'])
+    else
+      Quickshell.execDetached(["hyprctl", "dispatch", "workspace", ws])
+  }
+
   // An agent inside tmux may live on a window/pane the client is not showing.
   // After focusing the terminal, select that pane so the agent is on screen.
   // Both values come from the collector and are validated here again.

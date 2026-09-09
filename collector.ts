@@ -2086,9 +2086,18 @@ export type RemoteRoster = {
   counts: { busy: number; idle: number; offline: number };
   needsYou: { id: string; name: string; lastLine: string; attention: RemoteAttention }[];
   overflow: number;
+  // Where this operator's own view of those agents lives, if they have one.
+  workspace?: number;
 };
 function unavailableRoster(): RemoteRoster {
   return { state: "unavailable", fetchedAt: 0, counts: { busy: 0, idle: 0, offline: 0 }, needsYou: [], overflow: 0 };
+}
+// A remote agent has no window on this machine, so there is nothing here for a
+// click to focus — unless the operator has built their own view of those agents
+// and says which workspace it is on. Unset, which is the default, keeps the card
+// inert; the desk never guesses, and never learns what that view contains.
+export function remoteWorkspace(value = process.env.INFOMARCHY_REMOTE_WORKSPACE): number | undefined {
+  return typeof value === "string" && /^[1-9][0-9]?$/.test(value) ? Number(value) : undefined;
 }
 export function parseRemoteRoster(text: string, mtime: number, stamp = Date.now()): RemoteRoster {
   if (Buffer.byteLength(text, "utf8") > MAX_REMOTE_ROSTER_BYTES) return unavailableRoster();
@@ -2116,13 +2125,15 @@ export function parseRemoteRoster(text: string, mtime: number, stamp = Date.now(
 }
 export function readRemoteRoster(path = process.env.INFOMARCHY_REMOTE_ROSTER, stamp = Date.now()): RemoteRoster | undefined {
   if (!path) return undefined;
+  const workspace = remoteWorkspace();
+  const withWorkspace = (roster: RemoteRoster): RemoteRoster => workspace ? { ...roster, workspace } : roster;
   let stat;
   try { stat = lstatSync(path); }
   catch (error) {
-    return ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code || "") ? undefined : unavailableRoster();
+    return ["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code || "") ? undefined : withWorkspace(unavailableRoster());
   }
   const text = readRegularFileLimited(path, MAX_REMOTE_ROSTER_BYTES);
-  return text === null ? unavailableRoster() : parseRemoteRoster(text, stat.mtimeMs, stamp);
+  return withWorkspace(text === null ? unavailableRoster() : parseRemoteRoster(text, stat.mtimeMs, stamp));
 }
 
 // ---------------------------------------------------------------- main

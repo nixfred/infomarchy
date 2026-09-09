@@ -4,6 +4,9 @@ All notable changes to Infomarchy. The format follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Added
+- Optional read-only **REMOTE** roster from `INFOMARCHY_REMOTE_ROSTER`: bounded local JSON ingest, freshness labels, status counts and compact attention rows beside LOCAL AI. Existing right-column orders migrate automatically; local sessions and notifications stay independent. Optionally, `INFOMARCHY_REMOTE_WORKSPACE` names a workspace and the card becomes a doorway to it: one click focuses that workspace, where the operator's own view of those agents lives. Unset, the card has no interactions at all.
+
 ## [1.3.0] — 2026-09-08
 
 ### Added
@@ -42,7 +45,6 @@ All notable changes to Infomarchy. The format follows [Keep a Changelog](https:/
 ## [1.1.0] — 2026-09-07
 
 ### Added
-- Optional read-only **REMOTE** roster from `INFOMARCHY_REMOTE_ROSTER`: bounded local JSON ingest, freshness labels, status counts and compact attention rows beside LOCAL AI. Existing right-column orders migrate automatically; local sessions and notifications stay independent.
 - **GITHUB · LAST 7 DAYS.** The activity row is now two half-width cards: the AI prompt heatmap on the left and, on the right, the same hour-by-hour grid fed from GitHub — commits, PRs, reviews, issues, comments and other events, coloured by dominant kind, hover for the breakdown and the repositories, today/week counts in the header. Click pins a cell; a legend kind recolours the grid to that kind alone. It is a removable module (**4** in the overlay; the modules after it shift one key and **0** reaches the tenth) and either card takes the full row when the other is hidden.
 - **ABOUT.** The version sits at the quiet end of the legend line under the last card — on screen always, never in the way of the data. Clicking it opens ABOUT: the version, a link to the repository, and a link to nixfred.com. The version is read from `manifest.json` at load, so it cannot drift from the version the plugin actually ships as, and `openUrl` refuses any address other than those two. Esc closes ABOUT before it closes the desk.
 - **Grok Bot gets a card per bot.** The xAI desktop app runs its whole roster inside one Electron process, so `/proc` can only ever show one agent. Infomarchy reads the app's own local roster (`~/.config/Grok Bot/sand-client-persistence`, one plain-JSON file per state slice, named by the base32 of its key) and expands it into one **Live AI session** card per bot: the bot's name, the last line it wrote (markdown flattened, secrets redacted the same way prompts are), and its **Needs You** state — *waiting for your answer*, or *has replies you have not read* with the count on the card. Hidden-from-sidebar bots get no card, and transcripts are never opened. Because the bots share one process, its CPU/RAM/GPU counters are attributed once — to the bot the app currently has open — and the other cards report `—` rather than repeating the same process nine times. The alert key omits the unread count, so a bot notifies when it goes unread, not again on every further reply.
