@@ -99,6 +99,7 @@ Item {
       case "claude": return root.yellow
       case "codex": return root.cyan
       case "grok": return root.magenta
+      case "grok-bot": return root.magenta
       case "gemini": return root.blue
       case "hermes": return root.green
       case "ollama": return root.green
@@ -118,6 +119,7 @@ Item {
       case "claude": return "Claude"
       case "codex": return "Codex"
       case "grok": return "Grok"
+      case "grok-bot": return "Grok Bot"
       case "gemini": return "Gemini"
       case "hermes": return "Hermes"
       case "ollama": return "Ollama"

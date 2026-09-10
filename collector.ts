@@ -38,6 +38,9 @@ const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_COMMAND_BYTES = 1024 * 1024;
 const MAX_HTTP_BYTES = 1024 * 1024;
 const MAX_COLLECTION_ITEMS = 256;
+// One desk card per Grok Bot. A roster is a handful of bots; the cap only
+// stops a corrupt or synthetic roster from burying every other session.
+const MAX_GROK_BOT_CARDS = 12;
 const MAX_MODELS = 128;
 const MAX_JSON_NODES = 50_000;
 const MAX_JSON_DEPTH = 24;
@@ -496,6 +499,7 @@ const PROVIDERS: [string, RegExp][] = [
   ["claude", /(^|\/)claude(\.js|\.mjs|\.cjs)?$/],
   ["codex", /(^|\/)codex(\.js|\.mjs)?$/],
   ["grok", /(^|\/)grok(\.js|\.mjs)?$/],
+  ["grok-bot", /(^|\/)grok-bot(\s|$)/],
   ["gemini", /(^|\/)gemini(\.js|\.mjs)?$/],
   ["hermes", /(^|\/)hermes(\.js|\.mjs|\.py)?$/],
   ["opencode", /(^|\/)opencode$/],
@@ -517,6 +521,19 @@ export function providerOf(cmd: string[]): string | null {
       // `claude daemon run` is Claude Code's background-session supervisor. It
       // showed up as a card ("Improving Pi", cwd ~) with nothing to click.
       if (name === "claude" && cmd[1] === "daemon") return null;
+      // Grok Bot is Electron: the zygote/renderer/gpu/utility helpers all carry
+      // the same argv[0] as the browser process, and the local-exec daemon runs
+      // that binary against a script. Only the browser process owns the window
+      // and is the session a human is looking at.
+      if (name === "grok-bot") {
+        // Electron rewrites its process title, so /proc/<pid>/cmdline can be a
+        // single unsplit argv[0] holding every flag. Test the whole line.
+        const line = cmd.join(" ");
+        // Zygote/renderer/gpu/utility helpers share the browser process's
+        // argv[0], and the local-exec daemon runs the same binary against a
+        // script. Only the browser process owns the window a human looks at.
+        if (/\s--type=/.test(line) || /\.(c|m)?js(\s|$)/.test(line)) return null;
+      }
       // OpenCode also exposes several persistent services. Only its TUI/run
       // invocations represent a session that belongs on the desk.
       if (name === "opencode" && cmd.some(a => ["serve", "web", "acp", "mcp", "github"].includes(a))) return null;
@@ -733,6 +750,11 @@ function openSessionIds(pid: number, provider: string): string[] {
       match = target.match(/\/thread-writer-locks\/([^/]+)\.lock$/) || target.match(/\/rollout-[^/]*-([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$/i);
     else if (provider === "claude")
       match = target.match(/\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\.jsonl$/i);
+    else if (provider === "grok")
+      // Grok keeps its own session files open under
+      // sessions/<encoded-cwd>/<session-id>/. The directory name IS the id, so
+      // this is the exact session, not a guess from history.
+      match = target.match(/\/sessions\/[^/]+\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\/[^/]+$/i);
     const id = cleanSessionId(match?.[1]);
     if (id) ids.add(id);
   }
@@ -1521,8 +1543,13 @@ function codexHistory() {
   threads.sort((a, b) => b.updatedAt - a.updatedAt);
   return { present: true, prompts, threads: threads.slice(0, 8), threadCount: threads.length };
 }
+// Grok >= 1.0 gives every session its own directory under the encoded cwd
+// (sessions/<encoded-cwd>/<session-id>/), while prompts stay in the one
+// prompt_history.jsonl per cwd that older builds also wrote. Counting the
+// directories reports sessions that have not been prompted yet, which the
+// history alone cannot see.
 function grokHistory() {
-  const base = join(HOME, ".grok");
+  const base = process.env.GROK_HOME || join(HOME, ".grok");
   if (!existsSync(base)) return { present: false };
   const activeRaw = readJson(join(base, "active_sessions.json"));
   const active = Array.isArray(activeRaw) ? activeRaw : [];
@@ -1530,7 +1557,9 @@ function grokHistory() {
   for (const dir of ls(join(base, "sessions"))) {
     const full = join(base, "sessions", dir);
     try { const state = lstatSync(full); if (state.isSymbolicLink() || !state.isDirectory()) continue; } catch { continue; }
-    const project = shortPath(decodeProjectDir(dir));
+    // A group name over 255 bytes is a slug plus a hash; grok records the real
+    // working directory in a .cwd file beside the sessions.
+    const project = shortPath((read(join(full, ".cwd"), 4096) || "").trim() || decodeProjectDir(dir));
     const history = readHistoryTail(join(full, "prompt_history.jsonl")) || "";
     for (const l of history.split("\n").filter(Boolean)) {
       try {
@@ -1541,6 +1570,11 @@ function grokHistory() {
         bump(ts, "grok"); cnt("grok", ts);
         if (plausibleTimestamp(ts)) recent.push({ provider: "grok", ts, project, text: safePrompt(e.prompt), session });
       } catch {}
+    }
+    for (const entry of ls(full).slice(0, MAX_COLLECTION_ITEMS)) {
+      if (!cleanSessionId(entry) || sessionIds.has(entry)) continue;
+      try { const state = lstatSync(join(full, entry)); if (state.isSymbolicLink() || !state.isDirectory()) continue; } catch { continue; }
+      sessionIds.add(entry);
     }
   }
   const activeSessions = active.filter((a: any) => a && typeof a === "object")
@@ -1553,6 +1587,146 @@ function grokHistory() {
     .filter((a: any) => a.pid !== null);
   return { present: true, sessions: sessionIds.size, active: activeSessions };
 }
+
+// ------------------------------------------------------------------ Grok Bot
+// The xAI desktop app keeps its client state as one file per "slice" under
+// sand-client-persistence, each named by the RFC 4648 base32 of the slice key.
+// The roster slice is the bot list: name, last message, unread and awaiting
+// state. It is plain JSON; transcripts are never opened.
+const BASE32_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+export function decodeBase32(value: string): string {
+  if (!value || value.length > 512) return "";
+  let bits = 0, accumulator = 0;
+  const bytes: number[] = [];
+  for (const character of value.toUpperCase()) {
+    if (character === "=") break;
+    const index = BASE32_ALPHABET.indexOf(character);
+    if (index < 0) return "";
+    accumulator = (accumulator << 5) | index;
+    bits += 5;
+    if (bits >= 8) { bits -= 8; bytes.push((accumulator >> bits) & 0xff); }
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+// Bot replies are markdown; a card is one wrapped line of plain text.
+export function grokBotLine(value: unknown): string {
+  // Redact last, so a credential inside a code fence is still caught, and let
+  // safePrompt apply the same length cap every other prompt on the desk gets.
+  return safePrompt(uiString(value, 480)
+    .replace(/```[\s\S]*?(?:```|$)/g, " ")
+    .replace(/[*_`#>]+/g, "")
+    .replace(/\s+/g, " ")
+    .trim());
+}
+export function grokBotRow(row: any): any | null {
+  if (!row || typeof row !== "object") return null;
+  const name = uiString(row.name, 64);
+  if (!name) return null;
+  const last = row.lastEntry && typeof row.lastEntry === "object" ? row.lastEntry : {};
+  const activity = Number(row.lastActivityAt) || Number(row.updatedAt) || 0;
+  return {
+    id: cleanSessionId(row.id),
+    name,
+    // The bot's own last line is the closest thing Grok Bot has to a terminal
+    // title, so it becomes the card's topic. Redacted like every other prompt.
+    lastText: grokBotLine(last.text),
+    unread: Number.isInteger(row.unreadCount) && row.unreadCount > 0 ? row.unreadCount : (row.hasUnread ? 1 : 0),
+    awaiting: !!row.awaitingUserResponse,
+    updatedAt: plausibleTimestamp(activity) ? activity : 0,
+    hidden: !!row.isHiddenFromSidebar,
+  };
+}
+function grokBotHistory() {
+  const dir = join(HOME, ".config", "Grok Bot", "sand-client-persistence");
+  if (!existsSync(dir)) return { present: false };
+  const rows: any[] = [];
+  let selected = "";
+  for (const file of ls(dir).slice(0, MAX_COLLECTION_ITEMS)) {
+    if (!file.endsWith(".blob")) continue;
+    const key = decodeBase32(file.slice(0, -".blob".length));
+    if (key.endsWith(".roster.last-roster")) {
+      // One roster per signed-in account; merge them and let the id dedupe.
+      const value = readJson(join(dir, file))?.value;
+      if (Array.isArray(value?.rows)) rows.push(...value.rows.slice(0, MAX_COLLECTION_ITEMS));
+    } else if (key.endsWith(".selection.last-agent")) {
+      selected = cleanSessionId(readJson(join(dir, file))?.value?.agentId) || selected;
+    }
+  }
+  const bots: any[] = [];
+  const seen = new Set<string>();
+  for (const row of rows) {
+    const bot = grokBotRow(row);
+    if (!bot) continue;
+    const key = bot.id || bot.name;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    bots.push(bot);
+  }
+  bots.sort((a, b) => b.updatedAt - a.updatedAt);
+  return {
+    present: true,
+    sessions: bots.length,
+    unread: bots.reduce((sum, bot) => sum + bot.unread, 0),
+    awaiting: bots.filter(bot => bot.awaiting).length,
+    selected,
+    bots: bots.slice(0, MAX_GROK_BOT_CARDS),
+  };
+}
+// Grok Bot runs its whole roster inside one Electron process, so /proc can
+// only ever see one agent. The desk wants a card per bot, so the roster is
+// expanded into one session each: the app supplies pid, window and uptime,
+// the roster supplies the identity, the last line, and the Needs You state.
+export function grokBotAttention(bot: any): Record<string, string> {
+  if (bot.awaiting) return {
+    attention: "waiting",
+    attentionReason: `${bot.name} is waiting for your answer`,
+    attentionAction: "answer",
+    attentionDetail: bot.lastText || bot.name,
+  };
+  // The reason is part of the notification key, so it must not carry the
+  // count: every further message would otherwise re-fire the same alert.
+  // One notification when a bot goes unread, and the count lives in the detail.
+  if (bot.unread > 0) return {
+    attention: "done",
+    attentionReason: "has replies you have not read",
+    attentionAction: "review",
+    attentionDetail: `${bot.unread} unread · ${bot.lastText || bot.name}`,
+  };
+  return { attention: "", attentionReason: "", attentionAction: "", attentionDetail: "" };
+}
+export function attachGrokBotRoster(sessions: any[], grokBot: any): void {
+  const bots: any[] = (Array.isArray(grokBot?.bots) ? grokBot.bots : [])
+    .filter((bot: any) => bot && !bot.hidden)
+    .slice(0, MAX_GROK_BOT_CARDS);
+  const selected = cleanSessionId(grokBot?.selected);
+  for (let index = sessions.length - 1; index >= 0; index--) {
+    const session = sessions[index];
+    if (session.provider !== "grok-bot") continue;
+    // cwd is wherever the launcher ran, usually ~. "pi" is not a project.
+    session.project = "Grok Bot";
+    if (!bots.length) continue;
+    // Every bot shares the one process, so its CPU/RAM/GPU counters describe
+    // the app. Attribute them once — to the bot the app currently has open —
+    // rather than reporting the same process nine times over.
+    const owner = bots.find(bot => bot.id && bot.id === selected) || bots[0];
+    sessions.splice(index, 1, ...bots.map(bot => ({
+      ...session,
+      project: bot.name,
+      name: "Grok Bot",
+      // A bot is a hosted conversation, not a shell in a directory. Leaving it
+      // the launcher's cwd would file every bot under that project and, if the
+      // app was started inside a repo, report nine agents colliding on it.
+      cwd: "", repoRoot: "", git: null, changes: null, ci: null,
+      session: bot.id,
+      sessionIds: bot.id ? [bot.id] : [],
+      topic: bot.lastText || bot.name,
+      topicAt: bot.updatedAt,
+      resources: bot === owner ? session.resources : { cpuPct: null, rss: null, processes: null, gpuMemory: null },
+      ...grokBotAttention(bot),
+    })));
+  }
+}
+
 function opencodeHistory() {
   const dataRoot = process.env.XDG_DATA_HOME || join(HOME, ".local/share");
   const path = join(dataRoot, "opencode/opencode.db");
@@ -1928,7 +2102,9 @@ function demoSnapshot(stamp = Date.now()) {
       counts: { claude: { today: 18, week: 96, total: 640 }, codex: { today: 27, week: 144, total: 1102 }, opencode: { today: 11, week: 51, total: 214 } },
       providers: {
         claude: { present: true, prompts: 640 }, codex: { present: true, prompts: 1102, threadCount: 37 },
-        grok: { present: true, sessions: 9 }, opencode: { present: true, prompts: 214, sessions: 12 },
+        grok: { present: true, sessions: 9 },
+        grokBot: { present: true, sessions: 4, unread: 1, awaiting: 0, bots: [] },
+        opencode: { present: true, prompts: 214, sessions: 12 },
         ollama: { present: true, up: true, loaded: [{ name: "qwen3:8b", vram: 6_442_450_944 }], models: [
           { name: "qwen3:8b", size: 5_200_000_000, parameterSize: "8.2B", quantization: "Q4_K_M" },
           { name: "gemma3:4b", size: 3_300_000_000, parameterSize: "4.3B", quantization: "Q4_K_M" },
@@ -1952,11 +2128,12 @@ async function runCollector() {
   const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama, externalIpS, github] = await Promise.all([
     Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(), externalIp(), githubActivity(),
   ]);
-  const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory(), opencode = opencodeHistory();
+  const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory(), grokBot = grokBotHistory(), opencode = opencodeHistory();
   recent.sort((a, b) => b.ts - a.ts);
   for (const entry of recent) entry.activityCell = activityCellIndex(entry.ts, heatDays);
   inferSessionIdsFromRecent(sessions, recent);
   attachSessionTopics(sessions, recent);
+  attachGrokBotRoster(sessions, grokBot);
   attachStaleness(sessions);
   const topicSummaries = await refineSessionTopics(sessions, recent, ollama);
   const notificationState = deriveNotificationEvents(prev.sessionNotifications, sessions);
@@ -1984,7 +2161,7 @@ async function runCollector() {
       attention: sessions.filter((s: any) => s.attention),
       events: notificationState.events,
       collisions: repoCollisions(sessions),
-      counts, providers: { claude, codex, grok, opencode, ollama }, usage: agentsUsage(),
+      counts, providers: { claude, codex, grok, grokBot, opencode, ollama }, usage: agentsUsage(),
       usageDays: heatDays.map(localDayKey),
       heatmap: { start: start7, days: heatDays, cells: heat.map(c => [c.n, c.p]) },
       github,

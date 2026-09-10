@@ -3,7 +3,8 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join, relative } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents, sessionStaleness, STALE_AFTER_MS } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents, sessionStaleness, STALE_AFTER_MS, decodeBase32, grokBotLine, grokBotRow, grokBotAttention, attachGrokBotRoster } from "./collector.ts";
+import { sessionEventId } from "./notification-events.ts";
 
 const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
 const historyFixture = join(testRoot, "history");
@@ -14,6 +15,20 @@ test("collector fixtures stay outside the live plugin tree", () => {
   const relativeFixture = relative(import.meta.dir, fixture);
   expect(relativeFixture === ".." || relativeFixture.startsWith("../")).toBe(true);
 });
+
+// Grok Bot names each persistence file with the RFC 4648 base32 of its slice
+// key. Encoding here also cross-checks the collector's decoder.
+function encodeBase32(value: string): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+  let bits = 0, accumulator = 0, out = "";
+  for (const byte of Buffer.from(value, "utf8")) {
+    accumulator = (accumulator << 8) | byte;
+    bits += 8;
+    while (bits >= 5) { bits -= 5; out += alphabet[(accumulator >> bits) & 31]; }
+  }
+  if (bits) out += alphabet[(accumulator << (5 - bits)) & 31];
+  return out.toLowerCase();
+}
 
 function decodeFrames(output: string): any {
   const frames = output.trim().split("\n").map(line => JSON.parse(line));
@@ -30,6 +45,21 @@ describe("providerOf", () => {
   test("ignores Codex app-server and mcp-server daemons", () => {
     expect(providerOf(["/usr/lib/chatgpt/resources/codex", "-c", "features.code_mode_host=true", "app-server"])).toBeNull();
     expect(providerOf(["codex", "mcp-server"])).toBeNull();
+  });
+
+  test("keeps the Grok Bot browser process and drops its Electron helpers", () => {
+    // Electron rewrites the process title, so /proc/<pid>/cmdline arrives as a
+    // single unsplit argv[0] — and the install path itself contains a space.
+    expect(providerOf(["/opt/Grok Bot/grok-bot --ozone-platform=wayland --enable-wayland-ime"])).toBe("grok-bot");
+    expect(providerOf(["/opt/Grok Bot/grok-bot --type=renderer --no-sandbox"])).toBeNull();
+    expect(providerOf(["/opt/Grok Bot/grok-bot --type=zygote --no-zygote-sandbox"])).toBeNull();
+    expect(providerOf(["/opt/Grok Bot/grok-bot", "/opt/Grok Bot/resources/app.asar/dist/local-exec-daemon/main.cjs"])).toBeNull();
+    expect(providerOf(["/opt/Grok Bot/chrome_crashpad_handler", "--monitor-self-annotation=ptype=crashpad-handler"])).toBeNull();
+  });
+
+  test("does not confuse the Grok CLI with the Grok Bot desktop app", () => {
+    expect(providerOf(["node", "/home/u/.local/share/mise/installs/npm-xai-official-grok/latest/bin/grok"])).toBe("grok");
+    expect(providerOf(["cat", "/opt/Grok Bot/grok-bot"])).toBeNull();
   });
 
   test("ignores the Ollama daemon but keeps chats", () => {
@@ -353,6 +383,82 @@ describe("history collection", () => {
       "then check status",
       "use ntn_[redacted]",
     ]);
+  });
+
+  test("counts Grok 1.x session directories and honours GROK_HOME", async () => {
+    // Grok >= 1.0 gives every session its own directory beside the shared
+    // prompt_history.jsonl, so a session that has not been prompted yet — and
+    // a long project path recorded in .cwd — are both invisible to history.
+    const root = join(testRoot, "grok-home");
+    const group = join(root, "sessions", "workspace-a1b2c3");
+    mkdirSync(join(group, "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000"), { recursive: true });
+    mkdirSync(join(group, "0199aaaa-bbbb-7ccc-8ddd-eeeeffff1111"), { recursive: true });
+    writeFileSync(join(group, ".cwd"), "/srv/very/long/workspace\n");
+    writeFileSync(join(group, "prompt_history.jsonl"), JSON.stringify({
+      timestamp: new Date().toISOString(),
+      session_id: "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000",
+      prompt: "rewrite the collector",
+      is_bash: false,
+    }));
+
+    const home = join(testRoot, "grok-home-empty");
+    mkdirSync(home, { recursive: true });
+    const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
+      env: { HOME: home, USER: "tester", GROK_HOME: root, XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = await new Response(proc.stdout).text();
+    expect(await proc.exited).toBe(0);
+    const snap = decodeFrames(output);
+
+    expect(snap.ai.providers.grok.sessions).toBe(2);
+    expect(snap.ai.counts.grok.today).toBe(1);
+    expect(snap.ai.recent[0]).toMatchObject({
+      provider: "grok",
+      session: "0199aaaa-bbbb-7ccc-8ddd-eeeeffff0000",
+      project: "/srv/very/long/workspace",
+      text: "rewrite the collector",
+    });
+  });
+
+  test("reads the Grok Bot roster without opening a transcript", async () => {
+    const root = join(testRoot, "grok-bot");
+    const persistence = join(root, ".config", "Grok Bot", "sand-client-persistence");
+    mkdirSync(persistence, { recursive: true });
+    const account = "sand.client.slice.account.oauth%7Cuser_1";
+    const stamp = Date.now() - 60_000;
+    writeFileSync(join(persistence, encodeBase32(account + ".roster.last-roster") + ".blob"), JSON.stringify({
+      schemaVersion: 2,
+      value: {
+        rows: [
+          { id: "14132727-3b9d-4f83-be58-8094b3f861ff", name: "Chief of Staff", lastEntry: { kind: "text", text: "**Docker:** enabled `docker.service`\nand verified it" }, unreadCount: 2, hasUnread: true, lastActivityAt: stamp },
+          { id: "8def009d-7484-4ac4-a961-d49a32305685", name: "QA Engineer", lastEntry: { kind: "text", text: "waiting on you" }, unreadCount: 0, awaitingUserResponse: true, lastActivityAt: stamp - 1000 },
+          { id: "nope", name: "", lastEntry: {}, lastActivityAt: stamp },
+        ],
+      },
+    }));
+    writeFileSync(join(persistence, encodeBase32(account + ".selection.last-agent") + ".blob"), JSON.stringify({
+      schemaVersion: 1, value: { agentId: "8def009d-7484-4ac4-a961-d49a32305685" },
+    }));
+    // A transcript slice sits in the same directory and must be left alone.
+    writeFileSync(join(persistence, encodeBase32(account + ".transcript.replicas.14132727") + ".blob"), JSON.stringify({
+      schemaVersion: 1, value: { entries: [{ kind: "message", role: "user", content: "my private conversation" }] },
+    }));
+
+    const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
+      env: { HOME: root, USER: "tester", XDG_STATE_HOME: join(root, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = await new Response(proc.stdout).text();
+    expect(await proc.exited).toBe(0);
+    const snap = decodeFrames(output);
+
+    expect(snap.ai.providers.grokBot).toMatchObject({ present: true, sessions: 2, unread: 2, awaiting: 1, selected: "8def009d-7484-4ac4-a961-d49a32305685" });
+    expect(snap.ai.providers.grokBot.bots.map((bot: any) => bot.name)).toEqual(["Chief of Staff", "QA Engineer"]);
+    expect(snap.ai.providers.grokBot.bots[0].lastText).toBe("Docker: enabled docker.service and verified it");
+    expect(JSON.stringify(snap)).not.toContain("my private conversation");
   });
 
   test("parses OpenCode user prompts, sessions, projects, and redacts secrets", async () => {
@@ -801,6 +907,88 @@ describe("Claude's own session registry", () => {
     expect(map.get(305287)?.status).toBe("busy");
     expect(map.get(7)?.sessionId).toBe("");
     expect(parseClaudeAgents("not json").size).toBe(0);
+  });
+});
+
+describe("Grok Bot roster becomes the card the app cannot draw", () => {
+  test("base32 slice names round-trip and reject non-base32 files", () => {
+    expect(decodeBase32(encodeBase32("sand.client.slice.client-meta.account-slot")))
+      .toBe("sand.client.slice.client-meta.account-slot");
+    expect(decodeBase32("not base32!")).toBe("");
+    expect(decodeBase32("")).toBe("");
+    expect(decodeBase32("a".repeat(600))).toBe("");
+  });
+
+  test("a markdown reply collapses to one plain line", () => {
+    expect(grokBotLine("## Done\n\n- enabled `docker.service`\n- **verified** it")).toBe("Done - enabled docker.service - verified it");
+    expect(grokBotLine("before ```js\nconst secret = 1\n``` after")).toBe("before after");
+    expect(grokBotLine("I sent eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcdefghij upstream")).toBe("I sent eyJ[redacted] upstream");
+    expect(grokBotLine("x".repeat(400)).length).toBe(140);
+  });
+
+  test("a row without a name is not a bot", () => {
+    expect(grokBotRow({ id: "a", name: "" })).toBeNull();
+    expect(grokBotRow(null)).toBeNull();
+    // hasUnread without a count still means one thing to read.
+    expect(grokBotRow({ id: "x", name: "Scout", hasUnread: true })).toMatchObject({ name: "Scout", unread: 1 });
+    // A timestamp from a wrong clock must not land on the heatmap.
+    expect(grokBotRow({ id: "x", name: "Scout", lastActivityAt: 12 })).toMatchObject({ updatedAt: 0 });
+    expect(grokBotRow({ id: "x", name: "Scout", isHiddenFromSidebar: true })).toMatchObject({ hidden: true });
+  });
+
+  test("one card per bot, each with its own identity, line, and Needs You state", () => {
+    const app = { provider: "grok-bot", pid: 42, project: "pi", topic: "Improving Pi", attention: "", window: { address: "0x1" }, resources: { cpuPct: 4, rss: 900, processes: 12, gpuMemory: null } };
+    const sessions: any[] = [app, { provider: "claude", project: "atmos", topic: "Improving atmos", attention: "" }];
+    attachGrokBotRoster(sessions, { selected: "8def009d-7484-4ac4-a961-d49a32305685", bots: [
+      { id: "14132727-3b9d-4f83-be58-8094b3f861ff", name: "Chief of Staff", lastText: "Docker enabled and verified", unread: 2, awaiting: false, updatedAt: 1_700_000_000_000 },
+      { id: "8def009d-7484-4ac4-a961-d49a32305685", name: "QA Engineer", lastText: "shall I run the suite", unread: 0, awaiting: true, updatedAt: 1_699_000_000_000 },
+      { id: "6ebe2665-c360-40f0-9eb0-ef3ca62f7a2f", name: "Hidden Bot", lastText: "not on the sidebar", unread: 9, hidden: true, updatedAt: 1_698_000_000_000 },
+    ] });
+
+    // Two visible bots replace the single app process; the hidden one gets no card.
+    expect(sessions.map((session: any) => session.project)).toEqual(["Chief of Staff", "QA Engineer", "atmos"]);
+    expect(sessions[0]).toMatchObject({
+      pid: 42, name: "Grok Bot",
+      session: "14132727-3b9d-4f83-be58-8094b3f861ff",
+      sessionIds: ["14132727-3b9d-4f83-be58-8094b3f861ff"],
+      topic: "Docker enabled and verified",
+      topicAt: 1_700_000_000_000,
+      attention: "done", attentionAction: "review",
+      attentionReason: "has replies you have not read",
+      attentionDetail: "2 unread · Docker enabled and verified",
+      window: { address: "0x1" },
+      // A bot is a hosted conversation, not a shell in a directory.
+      cwd: "", repoRoot: "", git: null,
+    });
+    expect(sessions[1]).toMatchObject({
+      session: "8def009d-7484-4ac4-a961-d49a32305685",
+      attention: "waiting", attentionAction: "answer",
+      attentionReason: "QA Engineer is waiting for your answer",
+    });
+    // Every bot shares the one Electron process, so its counters are reported
+    // once — against the bot the app currently has open — not per card.
+    expect(sessions[1].resources).toEqual({ cpuPct: 4, rss: 900, processes: 12, gpuMemory: null });
+    expect(sessions[0].resources).toEqual({ cpuPct: null, rss: null, processes: null, gpuMemory: null });
+    // Other providers are untouched.
+    expect(sessions[2]).toMatchObject({ provider: "claude", project: "atmos", attention: "" });
+  });
+
+  test("the alert key does not move when one more reply arrives", () => {
+    const before = grokBotAttention({ name: "Scout", unread: 3, lastText: "three headlines" });
+    const after = grokBotAttention({ name: "Scout", unread: 4, lastText: "four headlines" });
+    expect(before.attentionReason).toBe(after.attentionReason);
+    expect(sessionEventId({ provider: "grok-bot", session: "6ebe2665-c360-40f0-9eb0-ef3ca62f7a2f" }))
+      .toBe("grok-bot:6ebe2665-c360-40f0-9eb0-ef3ca62f7a2f");
+    // A single reply reads as one, and the count still reaches the card.
+    expect(grokBotAttention({ name: "Scout", unread: 1, lastText: "one" }).attentionDetail).toBe("1 unread · one");
+  });
+
+  test("no roster leaves the app's own card, labelled and honest", () => {
+    const noRoster: any[] = [{ provider: "grok-bot", project: "pi", topic: "Improving Pi", attention: "" }];
+    attachGrokBotRoster(noRoster, { present: false });
+    expect(noRoster).toHaveLength(1);
+    expect(noRoster[0]).toMatchObject({ project: "Grok Bot", topic: "Improving Pi", attention: "" });
+    expect(noRoster[0].name).toBeUndefined();
   });
 });
 
