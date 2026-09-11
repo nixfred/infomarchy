@@ -264,6 +264,10 @@ Still and animated image wallpapers share one image surface. Supported animated 
 A hideable, reorderable MEDIA CONTROLS card uses the local MPRIS service for title, artist, album, player identity, and previous/play-pause/next actions. A playing player is preferred, and playerctld is used only when no other player exists. Metadata is bounded plain text; album art is never fetched. Demo mode shows sample metadata and disables actions.
 Pi sessions are detected from the `pi` process and `~/.pi/agent/sessions` JSONL history. Recent Tasks includes Pi prompts, activity, and resume via `pi --session <id>`. The recent-task window reserves space for quieter providers while retaining pinned-first and newest-first display order.
 
+### Containers
+
+An optional CONTAINERS card joins the right column, with Docker (`/usr/bin/docker`) preferred over Podman. It shows up to eight rows and explicit start/stop toggles. Each action checks a fresh `ps -a` inventory and passes the matched name as a separate argument. The bounded snapshot retains only id, name, display label, compose service/project, short image, state, running status and health; it excludes compose working directories, env files, commands, mounts and ports. Hide/reorder the card through the existing module controls; `INFOMARCHY_SKIP_CONTAINERS=1` skips collection.
+
 ## FAQ
 
 **Does it drain my battery?** One `bun` run every 4 s (~0.2 s of CPU warm), no idle animation except the busy-dot pulse — a few percent of one core at most. Raise `refreshMs` if you want it lower.

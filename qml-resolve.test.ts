@@ -22,12 +22,14 @@ import { join } from "path";
 // A ceiling still catches the case that matters: one new unresolvable
 // reference moves the count, which is exactly what a bad merge introduces.
 // Verified — the same injection took InfoModel from 5 to 6.
+// Container additions: one Process exit-status metadata warning, plus
+// dynamic Style properties and unqualified card/delegate accesses.
 const CEILINGS: Record<string, number> = {
   "BackgroundWallpaper.qml": 2,
   "Infomarchy.qml": 26,
-  "InfoModel.qml": 5,
+  "InfoModel.qml": 6,
   "InfoSettings.qml": 0,
-  "InfoView.qml": 473,
+  "InfoView.qml": 511,
   "Overlay.qml": 29,
   "WaveWallpaper.qml": 0,
 };

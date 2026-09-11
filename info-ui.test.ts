@@ -16,6 +16,7 @@ describe("interactive information modules", () => {
     expect(adjacentEnabledIndex(["usage", "localAi", "machine"], 0, 1, { localAi: false })).toBe(2);
     expect(adjacentEnabledIndex(["changes", "needs", "projects"], 2, -1, { needs: false })).toBe(0);
     expect(adjacentEnabledIndex(["usage", "localAi", "machine"], 0, -1, {})).toBe(0);
+    expect(adjacentEnabledIndex(["usage", "localAi", "machine", "media", "containers"], 2, 1, {})).toBe(3);
     expect(settings).toContain("adjacentEnabledIndex(next, from, direction, sections)");
   });
 
@@ -357,6 +358,24 @@ describe("right column fits a 1080p desk", () => {
   });
 });
 
+describe("containers card", () => {
+  test("registers a reorderable lower-right module with per-row on/off toggles", () => {
+    expect(settings).toContain('{ id: "containers", label: "CONTAINERS" }');
+    expect(settings).toContain('property var rightOrder: ["usage", "localAi", "machine", "media", "containers"]');
+    expect(settings).toContain('var allowed = ["usage", "localAi", "machine", "media", "containers"]');
+    expect(view).toContain('title: "CONTAINERS"');
+    expect(view).toContain('moveId: "containers"');
+    expect(view).toContain("component PowerToggle: Item");
+    expect(view).toContain('view.desk.controlContainer(item.running ? "stop" : "start", item.name)');
+    expect(view).toContain("readonly property int visibleLimit: 8");
+    expect(view).toContain('visible: view.sectionEnabled("usage") || view.sectionEnabled("localAi") || view.sectionEnabled("machine") || view.sectionEnabled("media") || view.sectionEnabled("containers")');
+    expect(model).toContain('containerControlPath: Qt.resolvedUrl("container-control.ts")');
+    expect(model).toContain("containerProcess.pendingFrame");
+    expect(model).toContain('["start", "stop"].indexOf(operation)');
+    expect(view).toContain("lit: !!modelData.running");
+  });
+});
+
 describe("LOCAL AI rows stay inside the card body", () => {
   const view = readFileSync(join(import.meta.dir, "InfoView.qml"), "utf8");
   test("the provider chips are a Flow, so no rigid row can raise the column minimum above the body width", () => {
@@ -426,13 +445,15 @@ describe("github activity heatmap", () => {
   test("registers GITHUB as a removable module beside ACTIVITY and reaches it from the keyboard", () => {
     const ids = [...settings.matchAll(/\{ id: "([a-zA-Z]+)", label: "[^"]+" \}/g)].map(match => match[1]);
     expect(ids.indexOf("github")).toBe(ids.indexOf("activity") + 1);
-    expect(ids).toHaveLength(11);
+    expect(ids).toHaveLength(12);
     expect(ids[10]).toBe("media");
+
     expect(overlay).toContain("event.key >= Qt.Key_0 && event.key <= Qt.Key_9");
     expect(overlay).toContain("event.key === Qt.Key_0 ? 9 : event.key - Qt.Key_1");
     // Key n toggles definitions[n-1]; 0 is the tenth. Documented as 4 = GITHUB, 0 = PROJECTS.
     expect(ids[3]).toBe("github");
     expect(ids[9]).toBe("projects");
+    expect(ids[11]).toBe("containers");
   });
 
   test("splits the activity row into two half-width heatmap cards sharing one HeatPanel", () => {
@@ -475,7 +496,7 @@ test("persisted Ollama origins reject credentials and request paths", () => {
 describe("media controls card", () => {
   test("registers a reorderable lower-right MPRIS card with prev/play/next and a title line", () => {
     expect(settings).toContain('{ id: "media", label: "MEDIA" }');
-    expect(settings).toContain('property var rightOrder: ["usage", "localAi", "machine", "media"]');
+    expect(settings).toContain('property var rightOrder: ["usage", "localAi", "machine", "media", "containers"]');
     expect(view).toContain('title: "MEDIA CONTROLS"');
     expect(view).toContain('moveId: "media"');
     expect(view).toContain("import Quickshell.Services.Mpris");

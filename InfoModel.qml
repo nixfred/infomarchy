@@ -21,6 +21,7 @@ Item {
   property string sessionActionsPath: Qt.resolvedUrl("session-actions.ts").toString().replace(/^file:\/\//, "")
   property string copyTextPath: Qt.resolvedUrl("copy-text.ts").toString().replace(/^file:\/\//, "")
   property string ollamaControlPath: Qt.resolvedUrl("ollama-control.ts").toString().replace(/^file:\/\//, "")
+  property string containerControlPath: Qt.resolvedUrl("container-control.ts").toString().replace(/^file:\/\//, "")
   property string previewPath: Qt.resolvedUrl("window-preview.ts").toString().replace(/^file:\/\//, "")
   property string herdrFocusPath: Qt.resolvedUrl("herdr-focus.ts").toString().replace(/^file:\/\//, "")
   property string stopPath: Qt.resolvedUrl("stop-session.ts").toString().replace(/^file:\/\//, "")
@@ -34,6 +35,11 @@ Item {
   property string ollamaError: ""
   property string ollamaModel: ""
   property string ollamaAction: ""
+  property bool containerBusy: false
+  property string containerStatus: ""
+  property string containerError: ""
+  property string containerName: ""
+  property string containerAction: ""
   // Omarchy does not ship bun (verified against omarchy-base.packages and
   // omarchy-other.packages, 2026-09-04). Without it every helper here is dead
   // and the desk used to sit on "collecting…" forever with a one-word hint.
@@ -513,6 +519,57 @@ Item {
         root.ollamaStatus = ""
       }
       root.ollamaBusy = false
+      root.refresh()
+    }
+  }
+
+  function controlContainer(action, name) {
+    var operation = String(action || ""), id = String(name || "")
+    if (root.containerBusy || ["start", "stop"].indexOf(operation) < 0 || !/^[A-Za-z0-9][A-Za-z0-9_.-]{0,254}$/.test(id)) return false
+    root.containerBusy = true
+    root.containerAction = operation
+    root.containerName = id
+    root.containerError = ""
+    root.containerStatus = (operation === "start" ? "starting " : "stopping ") + id + "…"
+    containerProcess.pendingFrame = ({ action: operation, name: id })
+    containerProcess.running = true
+    return true
+  }
+
+  function acceptContainerResult(raw) {
+    var result
+    try { result = JSON.parse(String(raw || "")) } catch (e) { result = null }
+    containerProcess.responded = true
+    if (!result || result.ok !== true) {
+      root.containerError = root.plainText(result && result.message ? result.message : "Invalid container control response", 160)
+      root.containerStatus = ""
+      return
+    }
+    root.containerError = ""
+    root.containerStatus = root.plainText(result.message || "Container updated", 160)
+  }
+
+  Process {
+    id: containerProcess
+    property var pendingFrame: ({})
+    property bool responded: false
+    command: ["bun", root.containerControlPath]
+    stdinEnabled: true
+    onRunningChanged: if (running) responded = false
+    onStarted: {
+      write(JSON.stringify(pendingFrame) + "\n")
+      pendingFrame = ({})
+    }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.acceptContainerResult(text)
+    }
+    onExited: function(exitCode) {
+      if (!responded) {
+        root.containerError = "Container control helper exited " + exitCode
+        root.containerStatus = ""
+      }
+      root.containerBusy = false
       root.refresh()
     }
   }

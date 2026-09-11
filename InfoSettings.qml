@@ -20,7 +20,8 @@ Item {
     { id: "machine", label: "MACHINE" },
     { id: "changes", label: "CHANGES" },
     { id: "projects", label: "PROJECTS" },
-    { id: "media", label: "MEDIA" }
+    { id: "media", label: "MEDIA" },
+    { id: "containers", label: "CONTAINERS" }
   ]
   property var sections: ({})
   property var attentionMuted: ({})
@@ -39,11 +40,11 @@ Item {
   // restart from briefly re-enabling a dashboard the user turned off.
   property bool ready: false
   property bool dashboardVisible: false
-  property var rightOrder: ["usage", "localAi", "machine", "media"]
+  property var rightOrder: ["usage", "localAi", "machine", "media", "containers"]
   property var opsOrder: ["changes", "needs", "projects"]
 
   function normalizedRightOrder(value) {
-    var allowed = ["usage", "localAi", "machine", "media"], result = []
+    var allowed = ["usage", "localAi", "machine", "media", "containers"], result = []
     if (Array.isArray(value)) for (var i = 0; i < value.length; i++) if (allowed.indexOf(value[i]) >= 0 && result.indexOf(value[i]) < 0) result.push(value[i])
     for (var j = 0; j < allowed.length; j++) if (result.indexOf(allowed[j]) < 0) result.push(allowed[j])
     return result
