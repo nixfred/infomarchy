@@ -28,6 +28,10 @@ function instanceId(): string {
   const raw = i >= 0 ? String(process.argv[i + 1] || "") : "bg";
   return raw.replace(/[^A-Za-z0-9_-]/g, "").slice(0, 32) || "bg";
 }
+export function forceRefreshRequested(argv = process.argv): boolean {
+  return argv.includes("--force-refresh") || process.env.INFOMARCHY_FORCE_REFRESH === "1";
+}
+const FORCE_REFRESH = forceRefreshRequested();
 const PREV_FILE = join(STATE_DIR, `prev-${instanceId()}.json`);
 // Shared by every collector instance: the GitHub rows are the same for the
 // wallpaper and the overlay, and one 7-day store means one set of API calls.
@@ -352,7 +356,7 @@ export function externalIpCacheFresh(cached: any, stamp = Date.now()): boolean {
 async function externalIp() {
   const cached = prev.externalIp || {};
   // Cache failures too, otherwise a disconnected host would retry every tick.
-  if (externalIpCacheFresh(cached, now)) return cached;
+  if (!FORCE_REFRESH && externalIpCacheFresh(cached, now)) return cached;
   if (process.env.INFOMARCHY_SKIP_EXTERNAL_IP === "1") return { address: cached.address || null, checkedAt: now };
   try {
     const response = await fetch("https://1.1.1.1/cdn-cgi/trace", { signal: AbortSignal.timeout(1200) });
@@ -375,7 +379,8 @@ const GITHUB_WRITER = instanceId() !== "overlay";
 async function githubActivity() {
   const ghAvailable = !!Bun.which("gh");
   const store = parseGithubStoreText(read(GITHUB_FILE));
-  if (GITHUB_WRITER && ghAvailable && githubFetchEnabled() && githubRefreshDue(store, now)) {
+  const githubDue = FORCE_REFRESH || githubRefreshDue(store, now);
+  if ((GITHUB_WRITER || FORCE_REFRESH) && ghAvailable && githubFetchEnabled() && githubDue) {
     await refreshGithubActivity(store, now, run, ghAvailable);
     try { writePrivateStateFile(STATE_DIR, basename(GITHUB_FILE), JSON.stringify(store)); } catch {}
   }
@@ -2213,6 +2218,11 @@ export function normalizeUsage(j: any, stamp = now): any {
   const lifetime = valueSummary(j.modelUsage && typeof j.modelUsage === "object" ? j.modelUsage : {});
   const todayValue = todayValueEstimate(j.todayTokensByModel && typeof j.todayTokensByModel === "object" ? j.todayTokensByModel : {}, j.modelUsage && typeof j.modelUsage === "object" ? j.modelUsage : {});
   const dayKeys = heatDays.map(localDayKey);
+  const usageStatusText = uiString(j.usageStatusText, 160);
+  // Omarchy's collector seeds authHelpText with "Run `claude auth login`…"
+  // even on a successful limits probe. The desk then looks expired until a
+  // CLI poke refreshes the meters. Help is only real when a status is set.
+  const authHelpText = usageStatusText ? uiString(j.authHelpText, 200) : "";
   return {
     name: uiString(j.name, 64), ready: j.ready !== false, tierLabel: uiString(j.tierLabel, 32),
     // A provider that publishes no token counts must not read as one that used
@@ -2223,8 +2233,10 @@ export function normalizeUsage(j: any, stamp = now): any {
     // the QML re-derive it (the copy there had drifted out of test coverage).
     limits: (Array.isArray(j.limits) ? j.limits : []).slice(0, 16).map((limit: any) => normalizeUsageLimit(limit, stamp)).filter(Boolean),
     todayPrompts: count(j.todayPrompts), todaySessions: count(j.todaySessions), todayTotalTokens: count(j.todayTotalTokens),
-    totalPrompts: count(j.totalPrompts), totalSessions: count(j.totalSessions), updatedAt: count(j.updatedAt),
-    modelUsage, recentDays, usageStatusText: uiString(j.usageStatusText, 160),
+    totalPrompts: count(j.totalPrompts), totalSessions: count(j.totalSessions),
+    updatedAt: typeof j.updatedAt === "string" ? uiString(j.updatedAt, 40) : count(j.updatedAt),
+    modelUsage, recentDays, usageStatusText,
+    authHelpText,
     // Seven aligned daily token totals (oldest first) for the trend chart, and
     // API-value estimates from the attributed price table.
     dailyTokens: alignDailyTokens(j.recentDays, dayKeys),
@@ -2236,6 +2248,481 @@ export function normalizeUsage(j: any, stamp = now): any {
     },
   };
 }
+const LOCAL_USAGE_STATUS = "local session totals, not subscription limits";
+const GROK_BILLING_FILE = "grok-billing.json";
+const GROK_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
+export const GROK_BILLING_REFRESH_MS = 60 * 1000;
+const GROK_PRODUCT_LABELS: Record<string, string> = {
+  GrokBuild: "BUILD", PRODUCT_GROK_BUILD: "BUILD",
+  GrokVoice: "VOICE", PRODUCT_GROK_VOICE: "VOICE",
+  GrokChat: "CHAT", PRODUCT_GROK_CHAT: "CHAT",
+  GrokImagine: "IMAGINE", PRODUCT_GROK_IMAGINE: "IMAGINE",
+};
+export function parseGrokCreditsConfig(value: any): { percent: number; resetsAt: string; products: { label: string; percent: number }[] } | null {
+  if (!value || typeof value !== "object") return null;
+  const cfg = value.config && typeof value.config === "object" ? value.config : value;
+  const raw = Number(cfg.creditUsagePercent);
+  if (!Number.isFinite(raw) || raw < 0) return null;
+  const percent = Math.max(0, Math.min(1, raw / 100));
+  const period = cfg.currentPeriod && typeof cfg.currentPeriod === "object" ? cfg.currentPeriod : {};
+  const resetsAt = uiString(period.end || cfg.billingPeriodEnd, 40);
+  const products: { label: string; percent: number }[] = [];
+  const rows = Array.isArray(cfg.productUsage) ? cfg.productUsage : [];
+  for (const row of rows.slice(0, 4)) {
+    if (!row || typeof row !== "object") continue;
+    const p = Number(row.usagePercent);
+    if (!Number.isFinite(p) || p < 0) continue;
+    const key = uiString(row.product, 32);
+    const label = GROK_PRODUCT_LABELS[key] || key.replace(/^Grok/i, "").toUpperCase().slice(0, 12);
+    if (label) products.push({ label, percent: Math.max(0, Math.min(1, p / 100)) });
+  }
+  return { percent, resetsAt, products };
+}
+export function grokBillingFromUnifiedLog(text: string): { percent: number; resetsAt: string; products: { label: string; percent: number }[] } | null {
+  let latest: any = null;
+  for (const line of String(text || "").split("\n")) {
+    if (!line.includes("billing: fetched credits config")) continue;
+    const parsed = parseJsonBounded(line, 4096, 8);
+    if (parsed && typeof parsed === "object" && parsed.msg === "billing: fetched credits config") latest = parsed;
+  }
+  const ctx = latest && latest.ctx && typeof latest.ctx === "object" ? latest.ctx : null;
+  return ctx ? parseGrokCreditsConfig(ctx) : null;
+}
+function grokBillingMeters(parsed: { percent: number; resetsAt: string; products: { label: string; percent: number }[] } | null): any[] {
+  if (!parsed) return [];
+  const out: any[] = [{ label: "WEEKLY", title: "WEEKLY", percent: parsed.percent, resetsAt: parsed.resetsAt }];
+  for (const row of parsed.products.slice(0, 3)) {
+    if (row.label === "WEEKLY") continue;
+    out.push({ label: row.label, title: row.label, percent: row.percent, resetsAt: parsed.resetsAt });
+  }
+  return out;
+}
+function grokCliAccessToken(): string {
+  const path = join(process.env.GROK_HOME || join(HOME, ".grok"), "auth.json");
+  let fd = -1;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const st = fstatSync(fd);
+    const uid = typeof process.getuid === "function" ? process.getuid() : -1;
+    if (!st.isFile() || st.nlink !== 1 || (uid >= 0 && st.uid !== uid) || (st.mode & 0o077) || st.size > 16_384) return "";
+    const buf = Buffer.allocUnsafe(st.size);
+    const n = readSync(fd, buf, 0, buf.byteLength, 0);
+    const parsed = parseJsonBounded(buf.subarray(0, n).toString("utf8"), 16_384, 8);
+    if (!parsed || typeof parsed !== "object") return "";
+    let expired = "";
+    for (const rec of Object.values(parsed)) {
+      if (!rec || typeof rec !== "object") continue;
+      const key = String((rec as any).key || "");
+      if (key.length < 20 || key.length > 4000) continue;
+      const exp = Date.parse(String((rec as any).expires_at || ""));
+      if (Number.isFinite(exp) && exp < now - 30_000) { if (!expired) expired = key; continue; }
+      return key;
+    }
+    return expired;
+  } catch { return ""; }
+  finally { if (fd >= 0) try { closeSync(fd); } catch {} }
+  return "";
+}
+async function fetchGrokBilling(): Promise<any | null> {
+  const token = grokCliAccessToken();
+  if (!token) return null;
+  try {
+    const r = await fetch(GROK_BILLING_URL, {
+      redirect: "error",
+      signal: AbortSignal.timeout(4000),
+      headers: {
+        Authorization: "Bearer " + token,
+        "X-XAI-Token-Auth": "xai-grok-cli",
+        Accept: "application/json",
+        "user-agent": "xai-grok-cli",
+      },
+    });
+    if (!r.ok) return null;
+    const text = await boundedStream(r.body, 16 * 1024);
+    if (text === null) return null;
+    const parsed = parseJsonBounded(text, 16 * 1024, 8);
+    return parsed && typeof parsed === "object" ? parsed : null;
+  } catch { return null; }
+}
+export function grokBillingRefreshDue(existing: any, stamp: number, force = false): boolean {
+  if (process.env.INFOMARCHY_SKIP_GROK_BILLING === "1") return false;
+  if (force) return true;
+  const attemptedAt = Number(existing && existing.attemptedAt || existing && existing.fetchedAt || 0);
+  if (attemptedAt && stamp - attemptedAt < GROK_BILLING_REFRESH_MS) return false;
+  return true;
+}
+// flock operates on the inherited stdin descriptor's open-file description.
+// Keeping our descriptor open holds the lock after flock exits; closing it
+// (including process death) releases it. Never unlink/replace the lock inode.
+async function withGrokBillingLock(directory: string, action: () => Promise<void>): Promise<void> {
+  if (!ensurePrivateStateDir(directory)) return;
+  let fd = -1;
+  try {
+    fd = openSync(join(directory, "grok-billing.lock"), constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
+    const state = fstatSync(fd);
+    if (!state.isFile() || state.nlink !== 1 || state.uid !== process.getuid!() || (state.mode & 0o077) || state.size !== 0) return;
+    const proc = Bun.spawn(["/usr/bin/flock", "--nonblock", "0"], { stdin: fd, stdout: "ignore", stderr: "ignore" });
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const code = await Promise.race([proc.exited, new Promise<number>(resolve => { timer = setTimeout(() => resolve(-1), 1000); })]);
+    clearTimeout(timer);
+    if (code === -1) { await terminate(proc); return; }
+    if (code !== 0) return;
+    await action();
+  } catch {}
+  finally { if (fd >= 0) try { closeSync(fd); } catch {} }
+}
+export async function refreshGrokBilling(options: {
+  directory?: string; stamp?: number; force?: boolean;
+  fetchBilling?: () => Promise<any>; readLog?: () => string;
+} = {}) {
+  if (process.env.INFOMARCHY_SKIP_GROK_BILLING === "1") return;
+  const directory = options.directory ?? STATE_DIR;
+  const cached = parseJsonBounded(readRegularFileLimited(join(directory, GROK_BILLING_FILE), 4096) || "", 4096, 8);
+  if (!grokBillingRefreshDue(cached, options.stamp ?? Date.now(), options.force ?? FORCE_REFRESH)) return;
+  await withGrokBillingLock(directory, async () => {
+    const stamp = options.stamp ?? Date.now();
+    const existing = parseJsonBounded(readRegularFileLimited(join(directory, GROK_BILLING_FILE), 4096) || "", 4096, 8);
+    if (!grokBillingRefreshDue(existing, stamp, options.force ?? FORCE_REFRESH)) return;
+    // Persist the attempt before I/O, so failures and interrupted collectors
+    // receive the same backoff as successful requests.
+    const attempted = { ...(existing && typeof existing === "object" ? existing : {}), attemptedAt: stamp };
+    if (!writePrivateStateFile(directory, GROK_BILLING_FILE, JSON.stringify(attempted) + "\n")) return;
+    const live = parseGrokCreditsConfig(await (options.fetchBilling ?? fetchGrokBilling)());
+    const fromLog = live ? null : grokBillingFromUnifiedLog(options.readLog ? options.readLog() : (readHistoryTail(join(process.env.GROK_HOME || join(HOME, ".grok"), "logs", "unified.jsonl"), 64 * 1024) || ""));
+    const parsed = live || fromLog;
+    if (!parsed) return;
+    const next = { fetchedAt: stamp, attemptedAt: stamp, source: live ? "live" : "log", percent: parsed.percent, resetsAt: parsed.resetsAt, products: parsed.products, limits: grokBillingMeters(parsed) };
+    writePrivateStateFile(directory, GROK_BILLING_FILE, JSON.stringify(next) + "\n");
+  });
+}
+function normalizeLimitRows(rows: unknown, fallbackReset = ""): any[] {
+  const out: any[] = [];
+  if (!Array.isArray(rows)) return out;
+  for (const row of rows.slice(0, 4)) {
+    if (!row || typeof row !== "object") continue;
+    const percent = Number((row as any).percent);
+    const label = uiString((row as any).label ?? (row as any).title, 32);
+    const resetsAt = uiString((row as any).resetsAt, 40) || fallbackReset;
+    if (!label || !Number.isFinite(percent) || percent < 0) continue;
+    out.push({ label, title: label, percent: Math.max(0, Math.min(1, percent)), resetsAt });
+  }
+  return out;
+}
+export function grokObservedLimits(directory = STATE_DIR): any[] {
+  const liveRaw = readRegularFileLimited(join(directory, GROK_BILLING_FILE), 4096);
+  const live = liveRaw ? parseJsonBounded(liveRaw, 4096, 8) : null;
+  const fromLive = normalizeLimitRows(live && live.limits, uiString(live && live.resetsAt, 40));
+  if (fromLive.length) return fromLive;
+  if (directory === STATE_DIR) {
+    const meters = grokBillingMeters(grokBillingFromUnifiedLog(readHistoryTail(join(process.env.GROK_HOME || join(HOME, ".grok"), "logs", "unified.jsonl"), 64 * 1024) || ""));
+    if (meters.length) return meters;
+  }
+  const raw = readRegularFileLimited(join(directory, "grok-limits.json"), 4096);
+  if (!raw) return [];
+  const parsed = parseJsonBounded(raw, 4096, 8);
+  return normalizeLimitRows(parsed && typeof parsed === "object" ? parsed.limits : []);
+}
+export function withGrokObservedLimits(record: any, directory = STATE_DIR): any {
+  const limits = grokObservedLimits(directory);
+  if (!limits.length) return record;
+  return {
+    ...record,
+    limits,
+    tierLabel: "weekly",
+    usageStatusText: "weekly pool from Grok billing, plus local " + (record.hasTokenData ? "token totals" : "session counts"),
+  };
+}
+const MAX_GROK_USAGE_SESSIONS = 256;
+const MAX_GROK_UPDATE_TAIL = 512 * 1024;
+const MAX_OPENCODE_USAGE_ROWS = 20_000;
+let currentGrokUsageCache: any = null;
+let currentOpencodeUsageCache: any = null;
+
+function nToken(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) && n >= 0 ? n : 0;
+}
+function addTokenUsage(into: TokenUsage, add: TokenUsage): void {
+  into.inputTokens += add.inputTokens;
+  into.outputTokens += add.outputTokens;
+  into.cacheReadInputTokens += add.cacheReadInputTokens;
+  into.cacheCreationInputTokens += add.cacheCreationInputTokens;
+}
+function tokenTotal(u: TokenUsage): number {
+  return u.inputTokens + u.outputTokens + u.cacheReadInputTokens + u.cacheCreationInputTokens;
+}
+export type GrokUsageSnap = { ts: number; usage: TokenUsage; models: Record<string, TokenUsage> };
+function grokTokenFields(raw: any): TokenUsage | null {
+  if (!raw || typeof raw !== "object") return null;
+  const usage: TokenUsage = {
+    inputTokens: nToken(raw.inputTokens),
+    outputTokens: nToken(raw.outputTokens) + nToken(raw.reasoningTokens),
+    cacheReadInputTokens: nToken(raw.cachedReadTokens),
+    cacheCreationInputTokens: nToken(raw.cacheCreationTokens),
+  };
+  return tokenTotal(usage) > 0 ? usage : null;
+}
+export function grokUsageFromUpdate(value: any, fallbackTs = 0): GrokUsageSnap | null {
+  const stack: any[] = [value];
+  const candidates: any[] = [];
+  let steps = 0;
+  while (stack.length && steps++ < 128) {
+    const item = stack.pop();
+    if (!item || typeof item !== "object") continue;
+    if (!Array.isArray(item) && Number.isFinite(Number(item.inputTokens)) && Number.isFinite(Number(item.outputTokens)))
+      candidates.push(item);
+    const children = Array.isArray(item) ? item : Object.values(item);
+    for (const child of children.slice(0, 24)) stack.push(child);
+  }
+  const usage = candidates.find(item => item.modelUsage && typeof item.modelUsage === "object") || candidates[candidates.length - 1];
+  const totals = grokTokenFields(usage);
+  if (!totals) return null;
+  const models: Record<string, TokenUsage> = {};
+  const rawModels = usage.modelUsage && typeof usage.modelUsage === "object" ? usage.modelUsage : {};
+  for (const [name, raw] of Object.entries(rawModels).slice(0, 16)) {
+    const model = grokTokenFields(raw);
+    const key = uiString(name, 64);
+    if (model && key) models[key] = model;
+  }
+  if (!Object.keys(models).length) models.grok = totals;
+  const ts = stampOfUpdate(value) || fallbackTs;
+  return { ts, usage: totals, models };
+}
+function stampOfUpdate(value: any): number {
+  const raw = value && typeof value === "object" ? value.timestamp : 0;
+  if (typeof raw === "number" && Number.isFinite(raw) && raw > 0) return raw > 1e12 ? raw : raw * 1000;
+  const parsed = Date.parse(String(raw || ""));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+export function grokUsageFromUpdatesText(text: string): GrokUsageSnap[] {
+  const snaps: GrokUsageSnap[] = [];
+  for (const line of String(text || "").split("\n")) {
+    if (!line.includes("inputTokens")) continue;
+    const parsed = parseJsonBounded(line, 2048, 12);
+    const snap = grokUsageFromUpdate(parsed);
+    if (snap) snaps.push(snap);
+  }
+  return snaps.length > 256 ? snaps.slice(-256) : snaps;
+}
+export function foldGrokSessionSnaps(snaps: GrokUsageSnap[]): { last: GrokUsageSnap | null; daily: Map<string, number> } {
+  const daily = new Map<string, number>();
+  if (!snaps.length) return { last: null, daily };
+  const ordered = snaps.slice().sort((a, b) => a.ts - b.ts);
+  let previous = 0;
+  for (const snap of ordered) {
+    const total = tokenTotal(snap.usage);
+    const delta = total - previous;
+    if (delta > 0 && snap.ts) {
+      const day = localDayKey(snap.ts);
+      daily.set(day, (daily.get(day) || 0) + delta);
+    }
+    previous = total;
+  }
+  return { last: ordered[ordered.length - 1], daily };
+}
+function localUsageRecord(fields: {
+  name: string; todayPrompts: number; todaySessions: number; todayTotalTokens: number;
+  totalPrompts: number; totalSessions: number;
+  modelUsage: Record<string, TokenUsage>; todayTokensByModel: Record<string, number>;
+  recentDays: Array<{ date: string; messageCount: number }>;
+}): any {
+  return normalizeUsage({
+    name: fields.name, ready: true, tierLabel: "local", limits: [],
+    usageStatusText: LOCAL_USAGE_STATUS,
+    todayPrompts: fields.todayPrompts, todaySessions: fields.todaySessions, todayTotalTokens: fields.todayTotalTokens,
+    totalPrompts: fields.totalPrompts, totalSessions: fields.totalSessions, updatedAt: now,
+    modelUsage: fields.modelUsage, todayTokensByModel: fields.todayTokensByModel, recentDays: fields.recentDays,
+  });
+}
+function grokLocalUsage(): any | null {
+  const base = process.env.GROK_HOME || join(HOME, ".grok");
+  const root = join(base, "sessions");
+  const files: string[] = [];
+  for (const group of ls(root).slice(0, MAX_COLLECTION_ITEMS)) {
+    const groupPath = join(root, group);
+    try { const state = lstatSync(groupPath); if (state.isSymbolicLink() || !state.isDirectory()) continue; } catch { continue; }
+    for (const entry of ls(groupPath).slice(0, MAX_COLLECTION_ITEMS)) {
+      if (!cleanSessionId(entry)) continue;
+      const updates = join(groupPath, entry, "updates.jsonl");
+      try {
+        const state = lstatSync(updates);
+        if (state.isSymbolicLink() || !state.isFile()) continue;
+        files.push(updates);
+      } catch { continue; }
+      if (files.length >= MAX_GROK_USAGE_SESSIONS) break;
+    }
+    if (files.length >= MAX_GROK_USAGE_SESSIONS) break;
+  }
+  if (!files.length) return null;
+  const identity = files.map(path => {
+    try { const state = lstatSync(path); return `${path}:${state.size}:${Math.round(state.mtimeMs)}`; } catch { return path; }
+  }).join("|");
+  // Billing is attached after selecting the local record, including cache hits.
+  const hashed = String(Bun.hash(identity + "|" + localDayKey(now)));
+  const cached = prev.grokLocalUsage && prev.grokLocalUsage.identity === hashed ? prev.grokLocalUsage : null;
+  if (!FORCE_REFRESH && cached?.record) { currentGrokUsageCache = cached; return cached.record; }
+  const modelUsage: Record<string, TokenUsage> = {};
+  const todayTokensByModel: Record<string, number> = {};
+  const daily = new Map<string, number>();
+  const sessions = new Set<string>();
+  const todaySessions = new Set<string>();
+  const today = localDayKey(now);
+  for (const path of files) {
+    const text = readRegularFileTail(path, MAX_GROK_UPDATE_TAIL) || readRegularFileLimited(path, MAX_GROK_UPDATE_TAIL);
+    const folded = foldGrokSessionSnaps(grokUsageFromUpdatesText(text || ""));
+    if (!folded.last) continue;
+    sessions.add(path);
+    for (const [model, usage] of Object.entries(folded.last.models)) {
+      const bucket = modelUsage[model] || (modelUsage[model] = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 });
+      addTokenUsage(bucket, usage);
+    }
+    for (const [day, tokens] of folded.daily) daily.set(day, (daily.get(day) || 0) + tokens);
+    if (folded.daily.get(today)) todaySessions.add(path);
+  }
+  if (!sessions.size) return null;
+  const dayKeys = heatDays.map(localDayKey);
+  const todayTotalTokens = daily.get(today) || 0;
+  const record = localUsageRecord({
+    name: "Grok",
+    todayPrompts: counts.grok?.today || 0, todaySessions: todaySessions.size, todayTotalTokens,
+    totalPrompts: counts.grok?.total || 0, totalSessions: sessions.size,
+    modelUsage, todayTokensByModel,
+    recentDays: dayKeys.map(date => ({ date, messageCount: daily.get(date) || 0 })),
+  });
+  currentGrokUsageCache = { identity: hashed, record };
+  return record;
+}
+export function sqliteUsageIdentity(path: string, stamp = now): string | null {
+  try {
+    const stat = lstatSync(path, { bigint: true });
+    if (!stat.isFile()) return null;
+    const fileKey = (s: typeof stat) => `${s.dev}:${s.ino}:${s.size}:${s.mtimeNs}:${s.ctimeNs}`;
+    let wal = "absent";
+    try {
+      const state = lstatSync(path + "-wal", { bigint: true });
+      if (!state.isFile()) return null;
+      wal = fileKey(state);
+    } catch (error: any) {
+      if (error?.code !== "ENOENT") return null;
+    }
+    // WAL commits need not touch the database file. Date-sensitive totals
+    // also expire at local midnight even when neither file has changed.
+    return `${localDayKey(stamp)}|${fileKey(stat)}|${wal}`;
+  } catch { return null; }
+}
+function opencodeLocalUsage(): any | null {
+  const dataRoot = process.env.XDG_DATA_HOME || join(HOME, ".local/share");
+  const path = join(dataRoot, "opencode/opencode.db");
+  const identity = sqliteUsageIdentity(path);
+  if (!identity) return null;
+  const cached = prev.opencodeLocalUsage && prev.opencodeLocalUsage.identity === identity ? prev.opencodeLocalUsage : null;
+  if (!FORCE_REFRESH && cached?.record) { currentOpencodeUsageCache = cached; return cached.record; }
+  let db: Database | null = null;
+  try {
+    db = new Database(path, { readonly: true });
+    const rows = db.query(`
+      SELECT session_id AS session, time_created AS ts,
+        json_extract(data, '$.modelID') AS model,
+        json_extract(data, '$.tokens.input') AS input,
+        json_extract(data, '$.tokens.output') AS output,
+        json_extract(data, '$.tokens.reasoning') AS reasoning,
+        json_extract(data, '$.tokens.cache.read') AS cache_read,
+        json_extract(data, '$.tokens.cache.write') AS cache_write
+      FROM message
+      WHERE json_valid(data) AND json_extract(data, '$.role') = 'assistant'
+      LIMIT ${MAX_OPENCODE_USAGE_ROWS}
+    `).all() as any[];
+    const modelUsage: Record<string, TokenUsage> = {};
+    const todayTokensByModel: Record<string, number> = {};
+    const daily = new Map<string, number>();
+    const sessions = new Set<string>();
+    const todaySessions = new Set<string>();
+    const today = localDayKey(now);
+    let todayTotalTokens = 0;
+    for (const row of rows) {
+      const usage: TokenUsage = {
+        inputTokens: nToken(row.input),
+        outputTokens: nToken(row.output) + nToken(row.reasoning),
+        cacheReadInputTokens: nToken(row.cache_read),
+        cacheCreationInputTokens: nToken(row.cache_write),
+      };
+      const total = tokenTotal(usage);
+      if (total <= 0) continue;
+      const model = uiString(row.model, 64) || "opencode";
+      const bucket = modelUsage[model] || (modelUsage[model] = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 });
+      addTokenUsage(bucket, usage);
+      sessions.add(String(row.session || ""));
+      const ts = Number(row.ts || 0);
+      const day = ts > 0 ? localDayKey(ts) : "";
+      if (day) daily.set(day, (daily.get(day) || 0) + total);
+      if (day === today) {
+        todayTotalTokens += total;
+        todayTokensByModel[model] = (todayTokensByModel[model] || 0) + total;
+        todaySessions.add(String(row.session || ""));
+      }
+    }
+    if (!sessions.size) return null;
+    const dayKeys = heatDays.map(localDayKey);
+    const record = localUsageRecord({
+      name: "opencode",
+      todayPrompts: counts.opencode?.today || 0, todaySessions: todaySessions.size, todayTotalTokens,
+      totalPrompts: counts.opencode?.total || 0, totalSessions: [...sessions].filter(Boolean).length,
+      modelUsage, todayTokensByModel,
+      recentDays: dayKeys.map(date => ({ date, messageCount: daily.get(date) || 0 })),
+    });
+    currentOpencodeUsageCache = { identity, record };
+    return record;
+  } catch { return null; }
+  finally { try { db?.close(); } catch {} }
+}
+const CLAUDE_AUTH_REFRESH_MS = 15 * 60 * 1000;
+let currentClaudeAuthRefreshAt = Number(prev.claudeAuthRefreshAt || 0);
+let claudeUsageFresh: any = null;
+
+export function claudeOauthExpiredAt(expiresAt: unknown, nowMs = now): boolean {
+  const n = Number(expiresAt);
+  return Number.isFinite(n) && n > 0 && n <= nowMs;
+}
+
+function claudeOauthExpired(): boolean {
+  const path = join(process.env.CLAUDE_CONFIG_DIR || join(HOME, ".claude"), ".credentials.json");
+  let fd = -1;
+  try {
+    fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    const st = fstatSync(fd);
+    const uid = typeof process.getuid === "function" ? process.getuid() : -1;
+    if (!st.isFile() || st.nlink !== 1 || (uid >= 0 && st.uid !== uid) || (st.mode & 0o077) || st.size > 16_384) return false;
+    const buf = Buffer.allocUnsafe(st.size);
+    const n = readSync(fd, buf, 0, buf.byteLength, 0);
+    const parsed = parseJsonBounded(buf.subarray(0, n).toString("utf8"), 16_384, 8);
+    const oauth = parsed && typeof parsed === "object" ? (parsed as any).claudeAiOauth : null;
+    if (!oauth || typeof oauth !== "object") return false;
+    return claudeOauthExpiredAt(oauth.expiresAt);
+  } catch { return false; }
+  finally { if (fd >= 0) try { closeSync(fd); } catch {} }
+}
+
+async function refreshClaudeAuthIfNeeded() {
+  try {
+    if (process.env.INFOMARCHY_SKIP_CLAUDE_USAGE === "1") return;
+    if (!FORCE_REFRESH && instanceId() === "overlay") return;
+    const expired = claudeOauthExpired();
+    if (!FORCE_REFRESH && !expired) return;
+    if (expired) {
+      if (!FORCE_REFRESH && currentClaudeAuthRefreshAt && now - currentClaudeAuthRefreshAt < CLAUDE_AUTH_REFRESH_MS) return;
+      const claude = Bun.which("claude");
+      if (!claude) return;
+      currentClaudeAuthRefreshAt = now;
+      await run([claude, "-p", "ping", "--max-turns", "0", "--output-format", "json"], 12_000);
+    }
+    const collector = join(process.env.OMARCHY_PATH || "/usr/share/omarchy", "bin/omarchy-agent-usage-claude");
+    if (!existsSync(collector)) return;
+    const text = await run([collector, "--limits-only"], 8_000);
+    const parsed = parseJsonBounded(text, 4000, 12);
+    if (parsed && typeof parsed === "object" && parsed.id === "claude") claudeUsageFresh = parsed;
+  } catch {}
+}
+
 // Grok publishes no usage cache the way Claude and Codex do: Omarchy ships no
 // collector for it, it bills credits rather than rate-limit windows, and
 // `/usage` opens billing in a browser. What it does keep on disk is one
@@ -2269,7 +2756,7 @@ export function grokSessionUsage(base: string): { sessions: number; todaySession
 function grokUsage() {
   const base = process.env.GROK_HOME || join(HOME, ".grok");
   if (!existsSync(base)) return null;
-  const { sessions, todaySessions, models, modelSessions } = grokSessionUsage(base);
+  const { sessions, todaySessions, modelSessions } = grokSessionUsage(base);
   const prompts = counts.grok || { today: 0, week: 0, total: 0 };
   return normalizeUsage({
     name: "Grok",
@@ -2299,11 +2786,17 @@ function agentsUsage() {
     const j = text === null ? null : parseJsonBounded(text, 4000, 12);
     if (!j || typeof j !== "object") continue;
     const key = uiString(f.replace(/\.json$/, ""), 32);
-    if (key) out[key] = normalizeUsage(j);
+    if (!key) continue;
+    out[key] = key === "claude" && claudeUsageFresh ? normalizeUsage(claudeUsageFresh) : normalizeUsage(j);
   }
-  // Only when Omarchy has not grown a collector of its own; a real cache is
-  // always better than what can be inferred from the session directories.
-  if (!out.grok) { const grok = grokUsage(); if (grok) out.grok = grok; }
+  // Omarchy does not ship grok or opencode collectors. Fill those rows from
+  // local session files. Never write into Omarchy's usage directory, and never
+  // replace a record Omarchy already produced.
+  if (!out.grok) {
+    const grok = grokLocalUsage() || grokUsage();
+    if (grok) out.grok = withGrokObservedLimits(grok);
+  }
+  if (!out.opencode) { const oc = opencodeLocalUsage(); if (oc) out.opencode = oc; }
   return out;
 }
 
@@ -2456,7 +2949,7 @@ async function runCollector() {
   }
   const pids = scanProcs();
   const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama, externalIpS, github] = await Promise.all([
-    Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(), externalIp(), githubActivity(),
+    Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(), externalIp(), githubActivity(), refreshGrokBilling(), refreshClaudeAuthIfNeeded(),
   ]);
   const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory(), grokBot = grokBotHistory(), opencode = opencodeHistory(), pi = piHistory(), hermes = hermesHistory();
   recent.sort((a, b) => b.ts - a.ts);
@@ -2509,6 +3002,9 @@ async function runCollector() {
       topicSummaries,
       ciByRepo: currentCiByRepo,
       opencodeTotals: currentOpencodeTotals,
+      grokLocalUsage: currentGrokUsageCache,
+      opencodeLocalUsage: currentOpencodeUsageCache,
+      claudeAuthRefreshAt: currentClaudeAuthRefreshAt,
       sessionNotifications: notificationState.tracked,
     }));
   } catch {}

@@ -264,6 +264,16 @@ Still and animated image wallpapers share one image surface. Supported animated 
 A hideable, reorderable MEDIA CONTROLS card uses the local MPRIS service for title, artist, album, player identity, and previous/play-pause/next actions. A playing player is preferred, and playerctld is used only when no other player exists. Metadata is bounded plain text; album art is never fetched. Demo mode shows sample metadata and disables actions.
 Pi sessions are detected from the `pi` process and `~/.pi/agent/sessions` JSONL history. Recent Tasks includes Pi prompts, activity, and resume via `pi --session <id>`. The recent-task window reserves space for quieter providers while retaining pinned-first and newest-first display order.
 
+### Usage collection and refresh
+
+When Omarchy has no usage record, Grok `updates.jsonl` cumulative snapshots and OpenCode assistant token fields supply local totals. OpenCode cache invalidation includes its SQLite WAL and the local date. Grok falls back to session-directory counts when no token snapshots exist; observed billing limits remain independent of token availability. Providers appear in separate tinted blocks.
+
+Grok billing uses the local CLI credential in an Authorization header to its fixed HTTPS billing endpoint, with redirects refused and bounded response size/time. Wallpaper and overlay share a 60-second cache and a descriptor-held `flock`; failures back off too. `INFOMARCHY_SKIP_GROK_BILLING=1` disables the fetch. No credentials enter argv or the snapshot.
+
+When Claude's saved OAuth access token expires, the wallpaper collector may run `claude -p ping --max-turns 0`, at most every 15 minutes, to let the CLI refresh it, then read `--limits-only` in memory. `INFOMARCHY_SKIP_CLAUDE_USAGE=1` disables this. Successful limits no longer retain stale sign-in help. Omarchy's usage cache files are never written by Infomarchy.
+
+The first module-strip chip, **HARD REFRESH**, bypasses cached Grok billing, GitHub activity, external-IP and local usage reads, and re-reads Claude limits. IPC: `omarchy-shell infomarchy hardRefresh` or `omarchy-shell shell call nixfred.infomarchy hardRefresh` for the overlay. Explicit refresh still honors the skip environment variables.
+
 ## FAQ
 
 **Does it drain my battery?** One `bun` run every 4 s (~0.2 s of CPU warm), no idle animation except the busy-dot pulse — a few percent of one core at most. Raise `refreshMs` if you want it lower.

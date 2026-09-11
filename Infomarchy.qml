@@ -156,6 +156,7 @@ Scope {
   IpcHandler {
     target: "infomarchy"
     function refresh(): void { infoModel.refresh() }
+    function hardRefresh(): void { infoModel.hardRefresh() }
     function setWallpaperOpacity(v: string): void { var n = Number(v); if (isFinite(n)) root.wallpaperOpacity = Math.max(0, Math.min(1, n)) }
     function setDashboardVisible(v: string): void { dashboardSettings.setDashboardVisible(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
     function toggleDashboard(): void { dashboardSettings.toggleDashboardVisible() }

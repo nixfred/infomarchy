@@ -43,6 +43,7 @@ Item {
     return v.lifetime === null || v.lifetime === undefined || tokens <= 0 ? null : Number(v.lifetime) / tokens
   }
   readonly property var usageSeries: {
+    var _g = view.desk.dataGeneration
     var out = []
     var keys = Object.keys(usage).filter(function(k) { return usage[k] && usage[k].ready !== false && (!usageProviderFilter || usageProviderFilter === k) })
     for (var i = 0; i < keys.length; i++) {
@@ -844,6 +845,16 @@ Item {
         Layout.fillWidth: true
         Layout.preferredHeight: implicitHeight
         spacing: Style.spacing.sm
+        Tag {
+          text: view.desk.hardRefreshing ? "HARD REFRESH …" : "HARD REFRESH"
+          tone: view.desk.hardRefreshing ? view.desk.yellow : view.desk.cyan
+          MouseArea {
+            anchors.fill: parent
+            enabled: view.interactive && !view.desk.hardRefreshing
+            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+            onClicked: view.desk.hardRefresh()
+          }
+        }
         Repeater {
           model: view.settings.definitions
           delegate: SectionChip { required property var modelData; section: modelData }
@@ -1497,7 +1508,7 @@ Item {
           draggable: true
           title: "USAGE & LIMITS"
           hint: {
-            var keys = Object.keys(view.usage); return keys.length ? "via omarchy agents" : "enable the Agents bar widget"
+            var keys = Object.keys(view.usage); return keys.length ? "omarchy agents · grok/opencode local" : "enable the Agents bar widget"
           }
           ColumnLayout {
             width: parent.width
@@ -1506,7 +1517,10 @@ Item {
               Layout.fillWidth: true
               spacing: Style.spacing.xs
               Repeater {
-                model: Object.keys(view.usage).filter(function(k) { return view.usage[k] && view.usage[k].ready !== false })
+                model: {
+                  var _g = view.desk.dataGeneration
+                  return Object.keys(view.usage).filter(function(k) { return view.usage[k] && view.usage[k].ready !== false })
+                }
                 delegate: Tag {
                   required property string modelData
                   text: view.desk.providerLabel(modelData)
@@ -1615,76 +1629,87 @@ Item {
               }
             }
             Repeater {
-              model: Object.keys(view.usage).filter(function(k) { return view.usage[k] && view.usage[k].ready !== false && (!view.usageProviderFilter || view.usageProviderFilter === k) })
-              delegate: ColumnLayout {
+              model: {
+                var _g = view.desk.dataGeneration
+                return Object.keys(view.usage).filter(function(k) { return view.usage[k] && view.usage[k].ready !== false && (!view.usageProviderFilter || view.usageProviderFilter === k) })
+              }
+              delegate: Rectangle {
                 id: up
                 required property string modelData
                 readonly property var u: view.usage[modelData] || ({})
                 readonly property color tone: view.desk.providerColor(modelData)
                 Layout.fillWidth: true
-                spacing: Style.spacing.xs
-                RowLayout {
-                  Layout.fillWidth: true
-                  PlainText { text: up.u.name || up.modelData; color: up.tone; font.family: view.mono; font.bold: true; font.pixelSize: Style.font.body }
-                  PlainText { text: up.u.tierLabel || ""; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
-                  Item { Layout.fillWidth: true }
-                  PlainText { text: "today " + (up.u.todayPrompts || 0) + "p" + (up.u.todaySessions ? " · " + up.u.todaySessions + " sess" : "") + (up.u.hasTokenData ? " · " + view.desk.tokens(up.u.todayTotalTokens) + " tok" + (up.u.value && up.u.value.today !== null && up.u.value.today !== undefined ? " · ≈" + view.usageMoney(up.u.value.today) : "") : ""); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
-                }
-                PlainText {
-                  Layout.fillWidth: true
-                  // A provider with no lifetime tokens has nothing to say here.
-                  visible: !!(up.u.value && up.u.value.totals) && (Number((up.u.value.totals || {}).inputTokens || 0) + Number((up.u.value.totals || {}).outputTokens || 0) + Number((up.u.value.totals || {}).cacheReadInputTokens || 0) + Number((up.u.value.totals || {}).cacheCreationInputTokens || 0)) > 0
-                  elide: Text.ElideRight
-                  text: {
-                    var v = up.u.value || {}, t = v.totals || {}
-                    var all = Number(t.inputTokens || 0) + Number(t.outputTokens || 0) + Number(t.cacheReadInputTokens || 0) + Number(t.cacheCreationInputTokens || 0)
-                    var parts = ["lifetime " + view.desk.tokens(all) + " tok"]
-                    if (all > 0) parts.push(Math.round(100 * Number(t.cacheReadInputTokens || 0) / all) + "% cache reads")
-                    if (v.lifetime !== null && v.lifetime !== undefined) parts.push("≈" + view.usageMoney(v.lifetime) + (v.pricedShare < 0.999 ? " (" + Math.round(v.pricedShare * 100) + "% priced)" : "") + " est.")
-                    else if (all > 0) parts.push("unpriced")
-                    if (up.u.totalSessions) parts.push(up.u.totalSessions + " sessions")
-                    return parts.join(" · ")
-                  }
-                  color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption
-                }
-                // Per-model breakdown. Anthropic gives Fable its own rate-limit
-                // window above; OpenAI and xAI publish no per-model window, so
-                // this is each model's share of the work instead. Driven purely
-                // by what the provider reports — a model released tomorrow
-                // appears here on its own, with no change to this file.
-                Repeater {
-                  model: (up.u.models || []).filter(function(m) { return m && ((m.share || 0) > 0 || (m.sessions || 0) > 0) })
-                  delegate: Meter {
-                    required property var modelData
+                implicitHeight: upColumn.implicitHeight + Style.spacing.sm * 2
+                radius: view.radius
+                color: Util.alpha(up.tone, 0.07)
+                border.color: Util.alpha(up.tone, 0.28)
+                border.width: 1
+                ColumnLayout {
+                  id: upColumn
+                  anchors { left: parent.left; right: parent.right; verticalCenter: parent.verticalCenter; margins: Style.spacing.sm }
+                  spacing: Style.spacing.xs
+                  RowLayout {
                     Layout.fillWidth: true
-                    label: modelData.id || ""
-                    value: up.u.hasTokenData
-                      ? view.desk.tokens(modelData.todayTokens) + " tok  ·  " + Math.round((modelData.share || 0) * 100) + "%"
-                      : (modelData.sessions || 0) + " sess"
-                    // A provider with no token counts has no share to draw.
-                    fraction: up.u.hasTokenData ? (modelData.share || 0) : 0
-                    tone: up.tone
+                    PlainText { text: up.u.name || up.modelData; color: up.tone; font.family: view.mono; font.bold: true; font.pixelSize: Style.font.body }
+                    PlainText { text: up.u.tierLabel || ""; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+                    Item { Layout.fillWidth: true }
+                    PlainText { text: "today " + (up.u.todayPrompts || 0) + "p" + (up.u.todaySessions ? " · " + up.u.todaySessions + " sess" : "") + (up.u.hasTokenData ? " · " + view.desk.tokens(up.u.todayTotalTokens) + " tok" + (up.u.value && up.u.value.today !== null && up.u.value.today !== undefined ? " · ≈" + view.usageMoney(up.u.value.today) : "") : ""); color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption }
                   }
-                }
-                // Why a provider has no limit bars. Absent everywhere else, so it
-                // costs a row only for the provider that needs to explain itself.
-                PlainText {
-                  Layout.fillWidth: true
-                  visible: !!up.u.usageStatusText && !(up.u.limits || []).length
-                  text: up.u.usageStatusText || ""
-                  color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption
-                  elide: Text.ElideRight
-                }
-                Repeater {
-                  model: up.u.limits || []
-                  delegate: Meter {
-                    required property var modelData
-                    readonly property var projection: view.usageProjection(modelData)
+                  PlainText {
                     Layout.fillWidth: true
-                    label: modelData.label || modelData.title || ""
-                    value: (view.usageForecastMode ? (projection === null ? "learning" : "→ " + Math.round(projection * 100) + "% at reset") : Math.round((modelData.percent || 0) * 100) + "%") + (modelData.resetsAt ? "  ↻ " + view.desk.until(Date.parse(modelData.resetsAt)) : "")
-                    fraction: modelData.percent || 0
-                    tone: (modelData.percent || 0) > 0.85 ? view.desk.red : (modelData.percent || 0) > 0.6 ? view.desk.yellow : up.tone
+                    visible: !!up.u.authHelpText
+                    text: up.u.authHelpText || ""
+                    color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
+                  PlainText {
+                    Layout.fillWidth: true
+                    // A provider with no lifetime tokens has nothing to say here.
+                    visible: !!(up.u.value && up.u.value.totals) && (Number((up.u.value.totals || {}).inputTokens || 0) + Number((up.u.value.totals || {}).outputTokens || 0) + Number((up.u.value.totals || {}).cacheReadInputTokens || 0) + Number((up.u.value.totals || {}).cacheCreationInputTokens || 0)) > 0
+                    elide: Text.ElideRight
+                    text: {
+                      var v = up.u.value || {}, t = v.totals || {}
+                      var all = Number(t.inputTokens || 0) + Number(t.outputTokens || 0) + Number(t.cacheReadInputTokens || 0) + Number(t.cacheCreationInputTokens || 0)
+                      var parts = ["lifetime " + view.desk.tokens(all) + " tok"]
+                      if (all > 0) parts.push(Math.round(100 * Number(t.cacheReadInputTokens || 0) / all) + "% cache reads")
+                      if (v.lifetime !== null && v.lifetime !== undefined) parts.push("≈" + view.usageMoney(v.lifetime) + (v.pricedShare < 0.999 ? " (" + Math.round(v.pricedShare * 100) + "% priced)" : "") + " est.")
+                      else if (all > 0) parts.push("unpriced")
+                      if (up.u.totalSessions) parts.push(up.u.totalSessions + " sessions")
+                      return parts.join(" · ")
+                    }
+                    color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption
+                  }
+                  Repeater {
+                    model: (up.u.models || []).filter(function(m) { return m && ((m.share || 0) > 0 || (m.sessions || 0) > 0) })
+                    delegate: Meter {
+                      required property var modelData
+                      Layout.fillWidth: true
+                      label: modelData.id || ""
+                      value: up.u.hasTokenData
+                        ? view.desk.tokens(modelData.todayTokens) + " tok  ·  " + Math.round((modelData.share || 0) * 100) + "%"
+                        : (modelData.sessions || 0) + " sess"
+                      fraction: up.u.hasTokenData ? (modelData.share || 0) : 0
+                      tone: up.tone
+                    }
+                  }
+                  PlainText {
+                    Layout.fillWidth: true
+                    visible: !!up.u.usageStatusText && !(up.u.limits || []).length
+                    text: up.u.usageStatusText || ""
+                    color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption
+                    elide: Text.ElideRight
+                  }
+                  Repeater {
+                    model: up.u.limits || []
+                    delegate: Meter {
+                      required property var modelData
+                      readonly property var projection: view.usageProjection(modelData)
+                      Layout.fillWidth: true
+                      label: modelData.label || modelData.title || ""
+                      value: (view.usageForecastMode ? (projection === null ? "learning" : "→ " + Math.round(projection * 100) + "% at reset") : Math.round((modelData.percent || 0) * 100) + "%") + (modelData.resetsAt ? "  ↻ " + view.desk.until(Date.parse(modelData.resetsAt)) : "")
+                      fraction: modelData.percent || 0
+                      tone: (modelData.percent || 0) > 0.85 ? view.desk.red : (modelData.percent || 0) > 0.6 ? view.desk.yellow : up.tone
+                    }
                   }
                 }
               }
