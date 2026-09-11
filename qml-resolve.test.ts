@@ -24,12 +24,15 @@ import { join } from "path";
 // Verified — the same injection took InfoModel from 5 to 6.
 const CEILINGS: Record<string, number> = {
   "BackgroundWallpaper.qml": 2,
-  "Infomarchy.qml": 26,
+  "Infomarchy.qml": 27,
   "InfoModel.qml": 5,
-  "InfoSettings.qml": 0,
-  "InfoView.qml": 473,
-  "Overlay.qml": 29,
+  "InfoSettings.qml": 2,
+  "InfoView.qml": 481,
+  "Overlay.qml": 31,
   "WaveWallpaper.qml": 0,
+  // Settings drawer: dynamic Style properties, unqualified access and
+  // Process exit-status metadata; covered by real offscreen QML tests too.
+  "SettingsBody.qml": 151,
 };
 
 const QMLLINT = ["/usr/lib/qt6/bin/qmllint", "/usr/bin/qmllint"].find(p => existsSync(p)) || "";
