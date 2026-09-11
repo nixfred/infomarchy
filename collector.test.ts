@@ -356,7 +356,7 @@ describe("prev.json instance files", () => {
 
     async function collect(id: string) {
       const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts"), "--id", id], {
-        env: { HOME: fixture, USER: "tester", XDG_STATE_HOME: state, PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
+        env: { HOME: fixture, USER: "tester", XDG_STATE_HOME: state, PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1" },
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -396,7 +396,7 @@ describe("history collection", () => {
     ].join("\n"));
 
     const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
-      env: { HOME: historyFixture, USER: "tester", XDG_STATE_HOME: join(historyFixture, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
+      env: { HOME: historyFixture, USER: "tester", XDG_STATE_HOME: join(historyFixture, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -432,7 +432,7 @@ describe("history collection", () => {
     const home = join(testRoot, "grok-home-empty");
     mkdirSync(home, { recursive: true });
     const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
-      env: { HOME: home, USER: "tester", GROK_HOME: root, XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
+      env: { HOME: home, USER: "tester", GROK_HOME: root, XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -477,7 +477,7 @@ describe("history collection", () => {
     const home = join(testRoot, "hermes-empty-home");
     mkdirSync(home, { recursive: true });
     const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
-      env: { HOME: home, USER: "tester", HERMES_HOME: hermesHome, XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
+      env: { HOME: home, USER: "tester", HERMES_HOME: hermesHome, XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -526,7 +526,7 @@ describe("history collection", () => {
     }));
 
     const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
-      env: { HOME: root, USER: "tester", XDG_STATE_HOME: join(root, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
+      env: { HOME: root, USER: "tester", XDG_STATE_HOME: join(root, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -557,7 +557,7 @@ describe("history collection", () => {
     db.close();
 
     const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
-      env: { HOME: root, USER: "tester", XDG_DATA_HOME: data, XDG_STATE_HOME: join(root, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
+      env: { HOME: root, USER: "tester", XDG_DATA_HOME: data, XDG_STATE_HOME: join(root, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -834,7 +834,7 @@ describe("second-reviewer findings (2026-09-04)", () => {
     try {
       const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts"), "--id", "bigsnap"], {
         stdout: "pipe", stderr: "ignore",
-        env: { HOME: home, USER: "tester", XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", OLLAMA_HOST: "http://127.0.0.1:9" },
+        env: { HOME: home, USER: "tester", XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1", OLLAMA_HOST: "http://127.0.0.1:9" },
       });
       const output = await new Response(proc.stdout).text();
       await proc.exited;
