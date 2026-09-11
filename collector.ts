@@ -551,7 +551,7 @@ const PROVIDERS: [string, RegExp][] = [
   ["grok", /(^|\/)grok(\.js|\.mjs)?$/],
   ["grok-bot", /(^|\/)grok-bot(\s|$)/],
   ["gemini", /(^|\/)gemini(\.js|\.mjs)?$/],
-  ["hermes", /(^|\/)hermes(\.js|\.mjs|\.py)?$/],
+  ["hermes", /(^|\/)(hermes|hermes_cli\.main)(\.js|\.mjs|\.py)?$/],
   // Muse ships as a mise-managed launcher (~/.local/bin/muse) that execs the
   // real CLI, so the process on the desk answers to plain "muse" either way.
   ["muse", /(^|\/)muse$/],
@@ -578,6 +578,17 @@ export function providerOf(cmd: string[]): string | null {
       // `claude daemon run` is Claude Code's background-session supervisor. It
       // showed up as a card ("Improving Pi", cwd ~) with nothing to click.
       if (name === "claude" && cmd[1] === "daemon") return null;
+      // Hermes launched via `python -m hermes_cli.main <subcommand>` runs a
+      // service/daemon (gateway, proxy, cron, send, ...), not a desk session —
+      // those must not become cards. A bare `hermes`, `hermes --yolo`, or the
+      // direct-script `.../hermes` (no subcommand) is a live interactive turn
+      // and counts. The -m module form puts the subcommand at argv[2] when the
+      // interpreter is argv[0] and "-m" is argv[1].
+      if (name === "hermes") {
+        const mod = cmd[0] && /(^|\/)(python[0-9.]*)$/.test(cmd[0]) && cmd[1] === "-m";
+        if (mod && /(^|\/)hermes_cli\.main$/.test(cmd[2] || "") && cmd[3]
+            && /^(gateway|proxy|cron|send|webhook|slack|whatsapp|whatsapp-cloud|peer|cron|sync|logs|dashboard|serve|desktop|mcp|peers)$/.test(cmd[3])) return null;
+      }
       // Grok Bot is Electron: the zygote/renderer/gpu/utility helpers all carry
       // the same argv[0] as the browser process, and the local-exec daemon runs
       // that binary against a script. Only the browser process owns the window
