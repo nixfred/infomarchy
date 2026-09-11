@@ -60,13 +60,38 @@ Scope {
   // Fall back to its current list on an Omarchy whose Util predates video
   // wallpapers — calling a function that is not there would take the plugin
   // down on the very desktops the fallback exists for.
-  readonly property bool videoBackground: root.isVideo(root.background)
+  // A live stream overrides the wallpaper file while it is set. It is kept
+  // separate from `background` so stopping restores whatever file was there
+  // without having to re-read the symlink or guess.
+  property string streamUrl: ""
+  property bool playbackWanted: true
+
+  readonly property bool streaming: root.streamUrl !== ""
+  // What the wallpaper surface is actually showing right now.
+  readonly property string wallpaperSource: root.streaming ? root.streamUrl : root.background
+  readonly property bool videoBackground: root.streaming || root.isVideo(root.background)
   function isVideo(path) {
     if (typeof Util.isVideoPath === "function") return Util.isVideoPath(path)
     return /\.(mp4|m4v|mov|webm|mkv|avi)$/i.test(String(path || ""))
   }
   function refreshBackground() { if (!readlinkProc.running) readlinkProc.running = true }
-  function setBackground(path) { root.background = String(path || "").trim() }
+  // Two callers, two meanings. An explicit set is a choice and ends a stream —
+  // leaving the stream on top would silently ignore the file the user picked.
+  // The 5s symlink poll is not a choice: it must keep the file wallpaper up to
+  // date underneath a stream without tearing the stream down on every tick.
+  function setBackground(path) {
+    var next = String(path || "").trim()
+    // Only a set that actually CHANGES the wallpaper counts as a choice.
+    // Other plugins re-assert the current wallpaper on their own schedules
+    // (auto-wallpaper does), and treating those as a choice tore a running
+    // stream down a few seconds after it started.
+    if (next !== root.background) root.streamUrl = ""
+    root.trackBackground(next)
+  }
+
+  function trackBackground(path) {
+    root.background = String(path || "").trim()
+  }
 
   function dispatchNotifications() {
     if (root.demoMode || !dashboardSettings.ready || !infoModel.ready) return
@@ -117,7 +142,7 @@ Scope {
   Process {
     id: readlinkProc
     command: ["readlink", "-f", root.currentBackgroundLink]
-    stdout: StdioCollector { onStreamFinished: root.setBackground(String(text || "").trim()) }
+    stdout: StdioCollector { onStreamFinished: root.trackBackground(String(text || "").trim()) }
   }
   Timer { interval: 5000; running: true; repeat: true; triggeredOnStart: true; onTriggered: root.refreshBackground() }
 
@@ -152,6 +177,30 @@ Scope {
       root.themeTransition(fromPath, path, finalPath, colorsB64, shellB64)
     }
     function selector(): void { if (!bgSwitchProc.running) bgSwitchProc.running = true }
+    // Play a remote URL as the wallpaper without writing a file. Resolving the
+    // URL is the caller's job — it expires, so whoever owns it owns refreshing it.
+    function stream(url: string): string {
+      var next = String(url || "").trim()
+      if (!/^https?:\/\//i.test(next)) return "not a stream URL"
+      root.streamUrl = next
+      root.playbackWanted = true
+      return "streaming"
+    }
+    function stopStream(): string {
+      root.streamUrl = ""
+      root.refreshBackground()
+      return "stopped"
+    }
+    function streaming(): string { return root.streaming ? "on" : "off" }
+    // Pause decoding without changing the wallpaper.
+    function playback(state: string): string {
+      var want = String(state || "status").toLowerCase()
+      if (want === "on" || want === "play") root.playbackWanted = true
+      else if (want === "off" || want === "pause") root.playbackWanted = false
+      else if (want === "toggle") root.playbackWanted = !root.playbackWanted
+      else if (want !== "status") return "usage: playback on|off|toggle|status"
+      return root.playbackWanted ? "on" : "off"
+    }
     // Infomarchy owns this target while the desk runs, so the sound switch for
     // a video wallpaper has to live here too or the CLI has nowhere to call.
     function audio(state: string): string {
@@ -259,7 +308,7 @@ Scope {
         Binding {
           target: videoWallpaper.item
           property: "path"
-          value: root.background
+          value: root.wallpaperSource
           when: videoWallpaper.item !== null && root.videoBackground
           restoreMode: Binding.RestoreNone
         }
@@ -269,7 +318,7 @@ Scope {
         Binding {
           target: videoWallpaper.item
           property: "playbackEnabled"
-          value: !panel.fullscreenHere
+          value: root.playbackWanted && !panel.fullscreenHere
           when: videoWallpaper.item !== null
         }
 
