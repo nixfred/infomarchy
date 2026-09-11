@@ -151,8 +151,12 @@ describe("a video wallpaper plays instead of showing nothing", () => {
   const player = readFileSync(join(import.meta.dir, "BackgroundWallpaper.qml"), "utf8");
 
   test("each surface is handed only its own kind of file", () => {
+    // The desk can also be handed a live stream URL, which is a video no
+    // matter what the wallpaper file is. The overlay has no stream of its
+    // own, so it still asks the path and only the path.
+    expect(wallpaper).toContain("readonly property bool videoBackground: root.streaming || root.isVideo(root.background)");
+    expect(overlay).toContain("readonly property bool videoBackground: root.isVideo(root.background)");
     for (const source of [wallpaper, overlay]) {
-      expect(source).toContain("readonly property bool videoBackground: root.isVideo(root.background)");
       // Both the still and the player test the path itself. Deriving one from
       // the other lets a URL evaluate against the stale flag and hand the
       // wrong file over for a pass.
@@ -192,18 +196,32 @@ describe("a video wallpaper plays instead of showing nothing", () => {
     // Naming BackgroundMedia in Infomarchy.qml would fail the whole plugin to
     // compile where the type does not exist; an unloaded file resolves nothing.
     expect(player).toContain("BackgroundMedia {");
-    expect(player).toContain("audioEnabled: false");
+    // Silence used to be hardcoded here. It moved to the host when the desk
+    // gained a sound switch, so the guarantee is now asserted per surface
+    // below rather than in the shared player.
+    expect(player).not.toContain("audioEnabled: true");
     for (const source of [wallpaper, overlay]) {
       expect(source).toContain('source: "BackgroundWallpaper.qml"');
       expect(source).not.toContain("BackgroundMedia {");
     }
   });
 
+  test("a wallpaper only makes sound where a switch says so", () => {
+    // BackgroundMedia lives in Omarchy, not here, so its default for
+    // audioEnabled is not observable from this repo. Neither surface may rely
+    // on it. The desk binds the user's switch and gives the sound track to one
+    // output; the overlay has no switch and must say false out loud.
+    expect(wallpaper).toContain('property: "audioEnabled"');
+    expect(wallpaper).toContain("value: dashboardSettings.videoAudio && panel.firstScreen && !panel.fullscreenHere");
+    expect(overlay).toContain('property: "audioEnabled"');
+    expect(overlay).toContain("value: false");
+  });
+
   test("nothing decodes while nothing can see it", () => {
     // Qt's FFmpeg engine drives its own clock, so a covered wallpaper keeps
     // decoding until it is told to stop.
     expect(wallpaper).toContain("readonly property bool fullscreenHere: visibleWorkspace ? visibleWorkspace.hasFullscreen : false");
-    expect(wallpaper).toContain("value: !panel.fullscreenHere");
+    expect(wallpaper).toContain("value: root.playbackWanted && !panel.fullscreenHere");
     expect(overlay).toContain("active: root.videoBackground && root.opened");
   });
 });

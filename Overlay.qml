@@ -116,6 +116,17 @@ Scope {
             when: videoWallpaper.item !== null && root.videoBackground
             restoreMode: Binding.RestoreNone
           }
+
+          // The player stopped hardcoding silence when the desk gained a sound
+          // switch, and that switch is bound on the desk's surface only. This
+          // surface has no switch, so without an explicit binding the overlay
+          // would fall back to whatever BackgroundMedia defaults to. Say it.
+          Binding {
+            target: videoWallpaper.item
+            property: "audioEnabled"
+            value: false
+            when: videoWallpaper.item !== null
+          }
         }
         focus: root.opened
         // Esc closes ABOUT first, then the overlay — one panel deep, so a
