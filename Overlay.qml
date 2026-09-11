@@ -120,8 +120,15 @@ Scope {
         focus: root.opened
         // Esc closes ABOUT first, then the overlay — one panel deep, so a
         // reader who opened it does not lose the whole desk on the way out.
-        Keys.onEscapePressed: { if (infoView.aboutOpen) infoView.aboutOpen = false; else root.close() }
+        Keys.onEscapePressed: { if (infoView.settingsOpen) infoView.settingsOpen = false; else if (infoView.aboutOpen) infoView.aboutOpen = false; else root.close() }
         Keys.onPressed: function(event) {
+          if ((event.modifiers & Qt.MetaModifier) && event.key === Qt.Key_I) {
+            if (event.modifiers & Qt.ShiftModifier) {
+              if (!event.isAutoRepeat) dashboardSettings.togglePrivacyMode()
+            } else dashboardSettings.toggleDashboardVisible()
+            event.accepted = true
+            return
+          }
           if (event.key >= Qt.Key_0 && event.key <= Qt.Key_9) { var i = event.key === Qt.Key_0 ? 9 : event.key - Qt.Key_1; var def = dashboardSettings.definitions[i]; if (def) dashboardSettings.toggleSection(def.id); event.accepted = true; return }
           if (event.key === Qt.Key_J || event.key === Qt.Key_Down) { infoView.keyboardStep(1); event.accepted = true; return }
           if (event.key === Qt.Key_K || event.key === Qt.Key_Up) { infoView.keyboardStep(-1); event.accepted = true; return }

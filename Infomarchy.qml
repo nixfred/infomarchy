@@ -50,9 +50,60 @@ Scope {
     refreshMs: dashboardSettings.dashboardVisible ? 4000 : 16000
     demoMode: root.demoMode
     ollamaHost: dashboardSettings.ollamaHost
-    active: dashboardSettings.ready && (dashboardSettings.dashboardVisible || dashboardSettings.notificationsEnabled)
+    active: dashboardSettings.ready && (dashboardSettings.dashboardVisible || dashboardSettings.notificationsEnabled || dashboardSettings.webEnabled)
   }
   InfoSettings { id: dashboardSettings }
+  readonly property string webServerPath: Qt.resolvedUrl("web-server.ts").toString().replace(/^file:\/\//, "")
+  property bool webRetryPause: false
+  function retryWebSetup() {
+    if (!dashboardSettings.webEnabled || webServer.running || webRetryPause) return
+    dashboardSettings.webStarting = true
+    dashboardSettings.webStatusText = "Retrying setup…"
+    // Pulse the existing running binding, preserving WEB off and cleanup guards.
+    webRetryPause = true
+    Qt.callLater(function() { root.webRetryPause = false })
+  }
+  Process {
+    id: webServer
+    command: ["bun", root.webServerPath, "serve", dashboardSettings.webAccessMode]
+    running: dashboardSettings.ready && dashboardSettings.webEnabled && !webDisable.running && !root.webRetryPause
+    stdout: SplitParser {
+      splitMarker: "\n"
+      onRead: function(line) {
+        var raw = String(line || "")
+        if (raw.length > 512) return
+        try {
+          var parsed = JSON.parse(raw)
+          dashboardSettings.webReady = parsed && parsed.ready === true
+          dashboardSettings.webStarting = false
+          dashboardSettings.webStatusText = String(parsed.message || "").slice(0, 400)
+        } catch (e) {}
+      }
+    }
+    onRunningChanged: {
+      dashboardSettings.webStarting = running
+      if (!running) dashboardSettings.webReady = false
+    }
+    onExited: {
+      dashboardSettings.webStarting = false
+      dashboardSettings.webReady = false
+      if (dashboardSettings.webEnabled && !dashboardSettings.webStatusText)
+        dashboardSettings.webStatusText = "Web setup stopped. Choose RETRY SETUP to try again."
+    }
+  }
+  Process {
+    id: webDisable
+    property var pending: ["bun", root.webServerPath, "disable"]
+    command: pending
+  }
+  Connections {
+    target: dashboardSettings
+    function onWebEnabledChanged() {
+      if (dashboardSettings.webEnabled) return
+      webDisable.pending = ["bun", root.webServerPath, "disable"]
+      webDisable.running = true
+    }
+  }
 
   function imageUrl(path) { return Util.fileUrl(path) }
   // Omarchy decides what counts as a video wallpaper; ask it when it can
@@ -162,9 +213,27 @@ Scope {
     function getDashboardVisible(): string { return dashboardSettings.dashboardVisible ? "true" : "false" }
     function setOllamaHost(v: string): void { dashboardSettings.setOllamaHost(v) }
     function getOllamaHost(): string { return String(dashboardSettings.ollamaHost || "") }
+    function setPrivacy(v: string): void { dashboardSettings.setPrivacyMode(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
+    function togglePrivacy(): void { dashboardSettings.togglePrivacyMode() }
+    function getPrivacy(): string { return dashboardSettings.privacyMode ? "true" : "false" }
+    function retryWeb(): void { root.retryWebSetup() }
+    function toggleWeb(): void { dashboardSettings.toggleWebEnabled() }
+    function copyWebUrl(): void { if (dashboardSettings.webEnabled) Quickshell.execDetached(["bun", root.webServerPath, "copy-url"]) }
+    function setWebCidrs(v: string): void {
+      var parts = String(v || "").split(/[\s,]+/)
+      var cidrs = []
+      for (var i = 0; i < parts.length && cidrs.length < 8; i++) {
+        if (/^\d{1,3}(?:\.\d{1,3}){3}\/\d{1,2}$/.test(parts[i])) cidrs.push(parts[i])
+      }
+      if (!cidrs.length) return
+      webDisable.pending = ["bun", root.webServerPath, "cidrs"].concat(cidrs)
+      webDisable.running = true
+    }
     function geometry(): string { return root.deskView ? root.deskView.geometryReport() : "{}" }
     function setSection(id: string, v: string): void { dashboardSettings.setSection(id, ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
     function toggleSection(id: string): void { dashboardSettings.toggleSection(id) }
+    function setWebSection(id: string, v: string): void { dashboardSettings.setWebSection(id, ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
+    function toggleWebSection(id: string): void { dashboardSettings.toggleWebSection(id) }
     function setNotifications(v: string): void { dashboardSettings.setNotificationsEnabled(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
     function toggleNotifications(): void { dashboardSettings.toggleNotificationsEnabled() }
     function setQuietHours(v: string): void { dashboardSettings.setQuietHoursEnabled(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }

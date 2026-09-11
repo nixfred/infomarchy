@@ -165,7 +165,7 @@ function readJson(p: string): any {
 }
 function ls(p: string): string[] { try { return readdirSync(p); } catch { return []; } }
 
-function ensurePrivateStateDir(path: string): boolean {
+export function ensurePrivateStateDir(path: string): boolean {
   try {
     mkdirSync(path, { recursive: true, mode: 0o700 });
     let state = lstatSync(path);
@@ -2499,6 +2499,14 @@ async function runCollector() {
     },
   };
 
+  const webCfg = parseJsonBounded(readRegularFileLimited(join(STATE_DIR, "web.json"), 8192) || "", 8192, 12);
+  const webListening = !!(webCfg && typeof webCfg === "object" && (
+    webCfg.listening === true
+    || (webCfg.listening !== false && (typeof webCfg.token === "string" || (Array.isArray(webCfg.tokens) && webCfg.tokens.length)))
+  ));
+  if (webListening) {
+    writePrivateStateFile(STATE_DIR, "web-snapshot.json", JSON.stringify(snapshot));
+  }
   try {
     writePrivateStateFile(STATE_DIR, basename(PREV_FILE), JSON.stringify({
       ts: now,

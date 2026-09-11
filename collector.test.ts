@@ -355,7 +355,7 @@ describe("prev.json instance files", () => {
     writeFileSync(join(fixture, "keep"), "");
 
     async function collect(id: string) {
-      const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts"), "--id", id], {
+      const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts"), "--id", id], {
         env: { HOME: fixture, USER: "tester", XDG_STATE_HOME: state, PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
         stdout: "pipe",
         stderr: "pipe",
@@ -395,7 +395,7 @@ describe("history collection", () => {
       JSON.stringify({ timestamp, session_id: "session-b", prompt: "use ntn_abcdefghijklmnopqrstuvwxyz", is_bash: false }),
     ].join("\n"));
 
-    const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts")], {
       env: { HOME: historyFixture, USER: "tester", XDG_STATE_HOME: join(historyFixture, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
       stdout: "pipe",
       stderr: "pipe",
@@ -431,7 +431,7 @@ describe("history collection", () => {
 
     const home = join(testRoot, "grok-home-empty");
     mkdirSync(home, { recursive: true });
-    const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts")], {
       env: { HOME: home, USER: "tester", GROK_HOME: root, XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
       stdout: "pipe",
       stderr: "pipe",
@@ -476,7 +476,7 @@ describe("history collection", () => {
 
     const home = join(testRoot, "hermes-empty-home");
     mkdirSync(home, { recursive: true });
-    const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts")], {
       env: { HOME: home, USER: "tester", HERMES_HOME: hermesHome, XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
       stdout: "pipe",
       stderr: "pipe",
@@ -525,7 +525,7 @@ describe("history collection", () => {
       schemaVersion: 1, value: { entries: [{ kind: "message", role: "user", content: "my private conversation" }] },
     }));
 
-    const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts")], {
       env: { HOME: root, USER: "tester", XDG_STATE_HOME: join(root, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
       stdout: "pipe",
       stderr: "pipe",
@@ -556,7 +556,7 @@ describe("history collection", () => {
     db.query("INSERT INTO part VALUES (?, ?, ?, ?, ?)").run("part_1", "msg_1", "ses_test12345", Date.now(), JSON.stringify({ type: "text", text: "inspect with password: very-secret-value" }));
     db.close();
 
-    const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts")], {
       env: { HOME: root, USER: "tester", XDG_DATA_HOME: data, XDG_STATE_HOME: join(root, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
       stdout: "pipe",
       stderr: "pipe",
@@ -832,7 +832,7 @@ describe("second-reviewer findings (2026-09-04)", () => {
     for (let i = 0; i < 1100; i++) lines.push(JSON.stringify({ timestamp: base - i * 1000, display: "prompt " + i + " " + "words ".repeat(40), project: "/proj/" + (i % 7), sessionId: "aaaaaaaa-bbbb-cccc-dddd-" + String(100000000000 + i) }));
     writeFileSync(join(home, ".claude", "history.jsonl"), lines.join("\n") + "\n");
     try {
-      const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts"), "--id", "bigsnap"], {
+      const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts"), "--id", "bigsnap"], {
         stdout: "pipe", stderr: "ignore",
         env: { HOME: home, USER: "tester", XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", OLLAMA_HOST: "http://127.0.0.1:9" },
       });
@@ -919,7 +919,7 @@ describe("third-pass findings (Astra, 2026-09-05)", () => {
 
 describe("firm subprocess deadlines", () => {
   test("a tool that ignores SIGTERM is SIGKILLed within the grace period and reaped", async () => {
-    const proc = Bun.spawn(["bun", "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
+    const proc = Bun.spawn([process.execPath, "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"], { stdout: "ignore", stderr: "ignore" });
     await Bun.sleep(300); // let the child install its handler, as a real long-running tool has
     const started = performance.now();
     await terminate(proc, 200);

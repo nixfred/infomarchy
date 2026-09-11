@@ -351,8 +351,8 @@ describe("right column fits a 1080p desk", () => {
   test("MACHINE is a two-column grid with a one-line footer, and the SUPER legend sits under it", () => {
     const view = readFileSync(join(import.meta.dir, "InfoView.qml"), "utf8");
     expect(view).toContain("// Cockpit density: two meters per row");
-    expect(view).toContain('text: "WAN " + (view.machine.externalIp || "—")');
-    expect(view).toContain('"SUPER+I hide desk  ·  SUPER+D show desktop") + "  ·  right-click a card to inspect"');
+    expect(view).toContain('text: "WAN " + view.wanText()');
+    expect(view).toContain('"SUPER+I hide desk  ·  SUPER+D show desktop") + "  ·  SUPER+SHIFT+I privacy ×3 off  ·  right-click a card to inspect"');
     expect(view).toContain("readonly property int metaWidth");
   });
 });
@@ -507,4 +507,72 @@ test("media selection prefers playback and skips playerctld when another player 
   expect(choose({ mprisPlayers: [proxy, paused], mediaIsProxy })).toBe(paused);
   expect(choose({ mprisPlayers: [proxy], mediaIsProxy })).toBe(proxy);
   expect(choose({ mprisPlayers: [], mediaIsProxy })).toBeNull();
+});
+describe("stream privacy mode", () => {
+  test("persists a toggle that masks identity and leaves OSS project names", () => {
+    expect(settings).toContain("property bool privacyMode: true");
+    expect(settings).toContain("function togglePrivacyMode()");
+    expect(settings).toContain("privacyMode: privacyMode");
+    expect(settings).toContain("readonly property int privacyUnlockNeeded: 3");
+    expect(service).toContain("function togglePrivacy(): void { dashboardSettings.togglePrivacyMode() }");
+    expect(overlay).toContain("if (!event.isAutoRepeat) dashboardSettings.togglePrivacyMode()");
+    expect(service).toContain("function getPrivacy(): string");
+    expect(service).toContain("function toggleWeb(): void { dashboardSettings.toggleWebEnabled() }");
+    expect(view).toContain('text: view.settings.webEnabled ? (view.settings.webReady ? "WEB ON" : (view.settings.webStarting ? "WEB …" : "WEB FAILED")) : "WEB"');
+    expect(view).toContain('text: "SETTINGS"');
+    expect(view).not.toContain("PHONE");
+    expect(settings).toContain('command: ["bun", root.webServerPath, "status"]');
+    expect(settings).toContain("function refreshWebStatus()");
+    expect(settings).toContain("function webSectionEnabled(id)");
+    expect(view).toContain("SettingsBody");
+    expect(view).not.toContain("visible: view.keyboardAvailable && view.settings.webEnabled && !!view.settings.webUrl");
+    expect(view).toContain("function wanText()");
+    expect(view).toContain("function wifiLabel(net)");
+    expect(view).toContain("function machineHint()");
+    expect(view).toContain("function displayPath(path)");
+    expect(view).toContain('return privacyMode ? "—" : (view.machine.externalIp || "—")');
+    expect(view).toContain('return privacyMode ? "WIFI" : ("WIFI " + (n.ssid || ""))');
+    expect(view).toContain('if (privacyMode) return "privacy · " + up');
+    expect(view).toContain("p.replace(/^\\/home\\/[^/]+/, \"~\")");
+    expect(view).toContain("visible: !view.privacyMode && !!mc.net.addr");
+    expect(view).toContain("privacyMode || !github.login");
+    expect(view).toContain("onPrivacyModeChanged: if (privacyMode && previewsEnabled) previewsEnabled = false");
+    expect(view).toContain("view.previewsEnabled && !view.privacyMode");
+    expect(view).toContain('text: !view.privacyMode ? "PRIVACY" : (view.settings.privacyUnlockCount > 0 ? "PRIVACY ON · " + view.settings.privacyUnlockCount + "/" + view.settings.privacyUnlockNeeded : "PRIVACY ON")');
+    expect(view).not.toContain('text: "WAN " + (view.machine.externalIp || "—")');
+    expect(view).not.toContain("WIFI \" + (mc.net.ssid");
+  });
+
+  test("one press enables privacy, three presses disable it", () => {
+    const source = settings.match(/function privacyUnlockStep\([\s\S]*?\n  \}/)?.[0];
+    expect(source).toBeTruthy();
+    const privacyUnlockStep = Function(`return (${source})`)();
+    expect(privacyUnlockStep(false, 0, 3)).toEqual({ on: true, count: 0 });
+    expect(privacyUnlockStep(true, 0, 3)).toEqual({ on: true, count: 1 });
+    expect(privacyUnlockStep(true, 1, 3)).toEqual({ on: true, count: 2 });
+    expect(privacyUnlockStep(true, 2, 3)).toEqual({ on: false, count: 0 });
+    expect(privacyUnlockStep(true, 5, 3)).toEqual({ on: false, count: 0 });
+    expect(settings).toContain("privacyUnlockReset.restart()");
+    expect(settings).toContain("readonly property int privacyUnlockMs: 2000");
+    expect(service).toContain("function setPrivacy(v: string): void { dashboardSettings.setPrivacyMode(");
+  });
+
+  test("recent-task prompts keep the first four words and mask the rest", () => {
+    const source = view.match(/function obfuscatePrompt\([\s\S]*?\n  \}/)?.[0];
+    expect(source).toBeTruthy();
+    const obfuscatePrompt = Function(`return (${source})`)();
+    expect(obfuscatePrompt("one two three four five six seven")).toBe("one two three four ···");
+    expect(obfuscatePrompt("one two three four five")).toBe("one two three four ···");
+    expect(obfuscatePrompt("one two three four")).toBe("one two three four");
+    expect(obfuscatePrompt("one two three")).toBe("one two three");
+    expect(obfuscatePrompt("  one   two  three four   five  ")).toBe("one two three four ···");
+    expect(obfuscatePrompt("")).toBe("");
+    expect(obfuscatePrompt(null)).toBe("");
+    expect(view).toContain("function displayPrompt(text)");
+    expect(view).toContain("view.displayPrompt(ri.modelData.text)");
+    expect(view).toContain("view.displayPrompt(promptDrawer.prompt.text)");
+    expect(view).toContain("view.displayPrompt(modelData.text)");
+    expect(view).not.toContain("text: ri.modelData.text || \"\"");
+    expect(view).not.toContain("text: promptDrawer.prompt.text || \"\"");
+  });
 });
