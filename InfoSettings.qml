@@ -29,6 +29,9 @@ Item {
   property var notificationEvents: ({})
   property var notificationProviders: ({})
   property bool notificationsEnabled: true
+  // Sound for a video wallpaper. Off unless asked for: a wallpaper that
+  // starts talking the moment it is set is a bug, not a feature.
+  property bool videoAudio: false
   property bool quietHoursEnabled: false
   property int quietStartHour: 22
   property int quietEndHour: 8
@@ -65,6 +68,7 @@ Item {
       notificationEvents = parsed && parsed.notificationEvents && typeof parsed.notificationEvents === "object" ? parsed.notificationEvents : ({})
       notificationProviders = parsed && parsed.notificationProviders && typeof parsed.notificationProviders === "object" ? parsed.notificationProviders : ({})
       notificationsEnabled = !parsed || typeof parsed.notificationsEnabled !== "boolean" ? true : parsed.notificationsEnabled
+      videoAudio = !!(parsed && parsed.videoAudio === true)
       quietHoursEnabled = !!(parsed && parsed.quietHoursEnabled === true)
       quietStartHour = parsed && Number.isInteger(parsed.quietStartHour) ? Math.max(0, Math.min(23, parsed.quietStartHour)) : 22
       quietEndHour = parsed && Number.isInteger(parsed.quietEndHour) ? Math.max(0, Math.min(23, parsed.quietEndHour)) : 8
@@ -81,6 +85,7 @@ Item {
       notificationEvents = ({})
       notificationProviders = ({})
       notificationsEnabled = true
+      videoAudio = false
       quietHoursEnabled = false
       quietStartHour = 22
       quietEndHour = 8
@@ -140,6 +145,7 @@ Item {
       notificationEvents: notificationEvents,
       notificationProviders: notificationProviders,
       notificationsEnabled: notificationsEnabled,
+      videoAudio: videoAudio,
       quietHoursEnabled: quietHoursEnabled,
       quietStartHour: quietStartHour,
       quietEndHour: quietEndHour,
@@ -196,6 +202,8 @@ Item {
   function toggleNotificationProvider(provider) { return setNotificationProvider(provider, !notificationProviderEnabled(provider)) }
   function setNotificationsEnabled(enabled) { notificationsEnabled = !!enabled; persist() }
   function toggleNotificationsEnabled() { setNotificationsEnabled(!notificationsEnabled) }
+  function setVideoAudio(enabled) { videoAudio = !!enabled; persist() }
+  function toggleVideoAudio() { setVideoAudio(!videoAudio) }
   function setQuietHoursEnabled(enabled) { quietHoursEnabled = !!enabled; persist() }
   function toggleQuietHoursEnabled() { setQuietHoursEnabled(!quietHoursEnabled) }
   function inQuietHours(stamp) {

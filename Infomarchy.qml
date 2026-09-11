@@ -152,6 +152,16 @@ Scope {
       root.themeTransition(fromPath, path, finalPath, colorsB64, shellB64)
     }
     function selector(): void { if (!bgSwitchProc.running) bgSwitchProc.running = true }
+    // Infomarchy owns this target while the desk runs, so the sound switch for
+    // a video wallpaper has to live here too or the CLI has nowhere to call.
+    function audio(state: string): string {
+      var want = String(state || "status").toLowerCase()
+      if (want === "on" || want === "true") dashboardSettings.setVideoAudio(true)
+      else if (want === "off" || want === "false") dashboardSettings.setVideoAudio(false)
+      else if (want === "toggle") dashboardSettings.toggleVideoAudio()
+      else if (want !== "status") return "usage: audio on|off|toggle|status"
+      return dashboardSettings.videoAudio ? "on" : "off"
+    }
   }
   IpcHandler {
     target: "infomarchy"
@@ -200,6 +210,11 @@ Scope {
       readonly property var hyprlandMonitor: Hyprland.monitorFor(modelData)
       readonly property var visibleWorkspace: hyprlandMonitor ? hyprlandMonitor.activeWorkspace : null
       readonly property bool fullscreenHere: visibleWorkspace ? visibleWorkspace.hasFullscreen : false
+
+      // A wallpaper's sound track plays from one output only, or every monitor
+      // layers its own copy of it. Same rule the built-in renderer uses.
+      readonly property bool firstScreen: Quickshell.screens.length > 0
+        && String(Quickshell.screens[0].name || "") === String(modelData.name || "")
 
       ScreenMoveRemap {
         id: remapGuard
@@ -255,6 +270,15 @@ Scope {
           target: videoWallpaper.item
           property: "playbackEnabled"
           value: !panel.fullscreenHere
+          when: videoWallpaper.item !== null
+        }
+
+        // Off unless the user asked for it, and never from a paused player:
+        // a wallpaper that starts talking the moment it is set is a bug.
+        Binding {
+          target: videoWallpaper.item
+          property: "audioEnabled"
+          value: dashboardSettings.videoAudio && panel.firstScreen && !panel.fullscreenHere
           when: videoWallpaper.item !== null
         }
       }
