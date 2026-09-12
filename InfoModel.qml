@@ -50,6 +50,11 @@ Item {
   // Origin only, e.g. http://127.0.0.1:11435. Empty inherits OLLAMA_HOST.
   property string ollamaHost: ""
 
+  // HARD REFRESH: next collector pass bypasses GitHub / billing / usage TTLs.
+  property bool forceRefreshArmed: false
+  property bool hardRefreshing: false
+  property int dataGeneration: 0
+
   // --- theme ---------------------------------------------------------------
   // Omarchy's Color singleton gives fg/bg/accent/urgent/muted. The ANSI roles
   // (green/yellow/red/blue…) live in the theme's colors.toml; read them here
@@ -178,7 +183,8 @@ Item {
     property bool frameComplete: false
     readonly property int maxOutputBytes: 2 * 1024 * 1024
     readonly property int maxStderrBytes: 4096
-    command: root.demoMode ? ["bun", root.collectorPath, "--id", root.instance, "--demo"] : ["bun", root.collectorPath, "--id", root.instance]
+    property bool forceRun: false
+    command: ["bun", root.collectorPath, "--id", root.instance]
     environment: root.ollamaHost !== "" ? ({ OLLAMA_HOST: root.ollamaHost }) : ({})
 
     function fail(message) {
@@ -216,6 +222,7 @@ Item {
         root.ready = true
         root.snap = parsed
         root.error = ""
+        root.dataGeneration += 1
         frameComplete = true
         outputBuffer = ""
         outputBytes = 0
@@ -230,6 +237,8 @@ Item {
       stderrBytes += added
     }
     onRunningChanged: if (running) {
+      forceRun = root.forceRefreshArmed
+      root.forceRefreshArmed = false
       outputBuffer = ""
       outputBytes = 0
       stderrBytes = 0
@@ -246,16 +255,44 @@ Item {
       onRead: function(line) { collector.acceptStderr(line) }
     }
     onExited: function(exitCode) {
-      if (collector.protocolFailed) return
+      if (collector.forceRun && !root.forceRefreshArmed) root.hardRefreshing = false
+      if (collector.protocolFailed) {
+        if (root.forceRefreshArmed) root.startCollector()
+        return
+      }
       if (!collector.frameComplete) root.error = collector.lastStderr || (exitCode === 0 ? "collector ended without a complete snapshot" : "collector exited " + exitCode)
+      if (root.forceRefreshArmed) root.startCollector()
     }
+  }
+  function collectorCommand() {
+    var cmd = ["bun", root.collectorPath, "--id", root.instance]
+    if (root.demoMode) cmd.push("--demo")
+    else if (root.forceRefreshArmed) cmd.push("--force-refresh")
+    return cmd
+  }
+  function startCollector() {
+    if (collector.running || bunProbe.running) return
+    collector.command = collectorCommand()
+    collector.running = true
   }
   function refresh() {
     if (!root.active || collector.running || bunProbe.running) return
     // Once bun is known-good, skip the probe; re-probe every tick only while
     // it is missing so an install is picked up without a shell restart.
-    if (root.bunChecked && root.bunAvailable) collector.running = true
+    if (root.bunChecked && root.bunAvailable) root.startCollector()
     else bunProbe.running = true
+  }
+  function hardRefresh() {
+    root.forceRefreshArmed = true
+    root.hardRefreshing = true
+    if (collector.running || bunProbe.running) return
+    if (!root.bunChecked) { bunProbe.running = true; return }
+    if (root.bunAvailable) root.startCollector()
+    else {
+      root.hardRefreshing = false
+      root.forceRefreshArmed = false
+      root.error = root.missingDependencyHint
+    }
   }
   Process {
     id: bunProbe
@@ -263,8 +300,12 @@ Item {
     onExited: function(exitCode) {
       root.bunChecked = true
       root.bunAvailable = exitCode === 0
-      if (root.bunAvailable) { if (!collector.running) collector.running = true }
-      else root.error = root.missingDependencyHint
+      if (root.bunAvailable) { if (!collector.running) root.startCollector() }
+      else {
+        root.error = root.missingDependencyHint
+        root.hardRefreshing = false
+        root.forceRefreshArmed = false
+      }
     }
   }
 

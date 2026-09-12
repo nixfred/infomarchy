@@ -1,9 +1,10 @@
+import { parseGrokCreditsConfig, grokBillingFromUnifiedLog, grokObservedLimits, grokBillingRefreshDue, GROK_BILLING_REFRESH_MS, forceRefreshRequested, sqliteUsageIdentity, withGrokObservedLimits, refreshGrokBilling, claudeOauthExpiredAt } from "./collector.ts";
 import { afterAll, describe, expect, test } from "bun:test";
 import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "fs";
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join, relative } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents, sessionStaleness, STALE_AFTER_MS, decodeBase32, grokBotLine, grokBotRow, grokBotAttention, attachGrokBotRoster, grokSessionUsage, usageModelBreakdown, windowMatchesProvider, hermesSessionByPid, validNetDevice, observationalGitCommand, observationalGitEnv, piUserText, piSessionIdFromName } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents, sessionStaleness, STALE_AFTER_MS, decodeBase32, grokBotLine, grokBotRow, grokBotAttention, attachGrokBotRoster, grokSessionUsage, usageModelBreakdown, windowMatchesProvider, hermesSessionByPid, validNetDevice, observationalGitCommand, observationalGitEnv, piUserText, piSessionIdFromName, grokUsageFromUpdate, grokUsageFromUpdatesText, foldGrokSessionSnaps } from "./collector.ts";
 import { sessionEventId } from "./notification-events.ts";
 
 const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
@@ -609,6 +610,63 @@ describe("history collection", () => {
     });
     rmSync(root, { recursive: true, force: true });
   });
+
+  test("OpenCode assistant tokens become a local usage row", async () => {
+    const root = join(testRoot, "opencode-usage");
+    const data = join(root, "data");
+    mkdirSync(join(data, "opencode"), { recursive: true });
+    const db = new Database(join(data, "opencode", "opencode.db"));
+    db.exec(`CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);`);
+    const ts = Date.now();
+    db.query("INSERT INTO message VALUES (?, ?, ?, ?)").run("a1", "ses_aaaaaaa1", ts, JSON.stringify({
+      role: "assistant", modelID: "qwen3.8-flash", tokens: { input: 10, output: 20, reasoning: 5, cache: { read: 100, write: 50 } },
+    }));
+    db.query("INSERT INTO message VALUES (?, ?, ?, ?)").run("u1", "ses_aaaaaaa1", ts, JSON.stringify({ role: "user" }));
+    db.close();
+    const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
+      env: { HOME: root, USER: "tester", XDG_DATA_HOME: data, XDG_STATE_HOME: join(root, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const snap = decodeFrames(await new Response(proc.stdout).text());
+    expect(await proc.exited).toBe(0);
+    expect(snap.ai.usage.opencode.tierLabel).toBe("local");
+    expect(snap.ai.usage.opencode.limits).toEqual([]);
+    expect(snap.ai.usage.opencode.usageStatusText).toContain("not subscription");
+    expect(snap.ai.usage.opencode.modelUsage["qwen3.8-flash"]).toMatchObject({
+      inputTokens: 10, outputTokens: 25, cacheReadInputTokens: 100, cacheCreationInputTokens: 50,
+    });
+    expect(snap.ai.usage.opencode.todayTotalTokens).toBe(185);
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("Grok updates.jsonl cumulative usage becomes a local usage row", async () => {
+    const root = join(testRoot, "grok-usage");
+    const session = join(root, ".grok", "sessions", "proj", "session-aaaa");
+    mkdirSync(session, { recursive: true });
+    // Pin both cumulative samples and the collector to the same UTC day.
+    const t2 = Date.now();
+    const t1 = new Date(t2).setUTCHours(0, 0, 0, 0);
+    const line = (ts: number, input: number, output: number) => JSON.stringify({
+      timestamp: ts,
+      params: { update: { usage: {
+        inputTokens: input, outputTokens: output, reasoningTokens: 0, cachedReadTokens: 0, cacheCreationTokens: 0, totalTokens: input + output,
+        modelUsage: { "grok-4.6-build": { inputTokens: input, outputTokens: output, reasoningTokens: 0, cachedReadTokens: 0, cacheCreationTokens: 0 } },
+      } } },
+    });
+    writeFileSync(join(session, "updates.jsonl"), [line(t1, 100, 10), line(t2, 250, 40)].join("\n") + "\n");
+    writeFileSync(join(session, "..", "prompt_history.jsonl"), JSON.stringify({ timestamp: new Date(t2).toISOString(), session_id: "session-aaaa", prompt: "hello" }) + "\n");
+    const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
+      env: { TZ: "UTC", HOME: root, USER: "tester", GROK_HOME: join(root, ".grok"), XDG_STATE_HOME: join(root, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1" },
+      stdout: "pipe", stderr: "pipe",
+    });
+    const snap = decodeFrames(await new Response(proc.stdout).text());
+    expect(await proc.exited).toBe(0);
+    expect(snap.ai.usage.grok.tierLabel).toBe("local");
+    expect(snap.ai.usage.grok.limits).toEqual([]);
+    expect(snap.ai.usage.grok.modelUsage["grok-4.6-build"].inputTokens).toBe(250);
+    expect(snap.ai.usage.grok.todayTotalTokens).toBe(290);
+    rmSync(root, { recursive: true, force: true });
+  });
 });
 
 describe("degrading instead of crashing", () => {
@@ -803,6 +861,19 @@ describe("second-reviewer findings (2026-09-04)", () => {
     expect(plausibleTimestamp(Date.UTC(2099, 0, 1), stamp)).toBe(false);
     expect(plausibleTimestamp(0, stamp)).toBe(false);
     expect(plausibleTimestamp("nope", stamp)).toBe(false);
+  });
+
+  test("Grok usage snapshots fold cumulative totals into per-day deltas", () => {
+    const snaps = grokUsageFromUpdatesText([
+      JSON.stringify({ timestamp: Date.UTC(2026, 8, 5, 12), params: { usage: { inputTokens: 100, outputTokens: 20, cachedReadTokens: 0, cacheCreationTokens: 0, modelUsage: { m: { inputTokens: 100, outputTokens: 20 } } } } }),
+      JSON.stringify({ timestamp: Date.UTC(2026, 8, 6, 12), params: { usage: { inputTokens: 180, outputTokens: 40, cachedReadTokens: 0, cacheCreationTokens: 0, modelUsage: { m: { inputTokens: 180, outputTokens: 40 } } } } }),
+    ].join("\n"));
+    expect(snaps).toHaveLength(2);
+    const folded = foldGrokSessionSnaps(snaps);
+    expect(folded.last?.usage.inputTokens).toBe(180);
+    expect(folded.daily.get("2026-09-05")).toBe(120);
+    expect(folded.daily.get("2026-09-06")).toBe(100);
+    expect(grokUsageFromUpdate({ inputTokens: 0, outputTokens: 0 })).toBeNull();
   });
 
   test("usage caches are normalized to displayed fields with hard bounds", () => {
@@ -1321,4 +1392,181 @@ describe("zombie detection", () => {
     expect(sessionStaleness({ startedAt: 1000, topicAt: 5000, hosts: [], window: null }, now).idleSince).toBe(5000);
     expect(sessionStaleness({ startedAt: 7000, topicAt: 0, hosts: [], window: null }, now).idleSince).toBe(7000);
   });
+});
+
+  test("Grok credits config uses 0-100 percents and product rows", () => {
+    const parsed = parseGrokCreditsConfig({
+      config: {
+        creditUsagePercent: 17,
+        currentPeriod: { type: "USAGE_PERIOD_TYPE_WEEKLY", end: "2026-09-14T07:26:13Z" },
+        productUsage: [{ product: "GrokBuild", usagePercent: 14 }, { product: "GrokVoice", usagePercent: 3 }],
+      },
+    });
+    expect(parsed).toEqual({
+      percent: 0.17,
+      resetsAt: "2026-09-14T07:26:13Z",
+      products: [{ label: "BUILD", percent: 0.14 }, { label: "VOICE", percent: 0.03 }],
+    });
+    const log = grokBillingFromUnifiedLog(JSON.stringify({
+      msg: "billing: fetched credits config",
+      ctx: { config: { creditUsagePercent: 16, currentPeriod: { end: "2026-09-14T07:26:13Z" }, productUsage: [] } },
+    }) + "\n");
+    expect(log?.percent).toBe(0.16);
+    const dir = join(testRoot, "grok-billing");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "grok-billing.json"), JSON.stringify({
+      limits: [{ label: "WEEKLY", percent: 0.17, resetsAt: "2026-09-14T07:26:13Z" }, { label: "BUILD", percent: 0.14, resetsAt: "2026-09-14T07:26:13Z" }],
+    }));
+    expect(grokObservedLimits(dir).map((row: any) => row.label)).toEqual(["WEEKLY", "BUILD"]);
+    expect(grokObservedLimits(dir)[0].percent).toBe(0.17);
+  });
+
+  test("Grok billing refresh is due after 60s, immediately on force, and never when skipped", () => {
+    const stamp = 1_000_000;
+    const fresh = { attemptedAt: stamp - GROK_BILLING_REFRESH_MS + 1, limits: [{ label: "WEEKLY", percent: 0.02 }] };
+    expect(grokBillingRefreshDue(fresh, stamp)).toBe(false);
+    expect(grokBillingRefreshDue(fresh, stamp, true)).toBe(true);
+    expect(grokBillingRefreshDue({ attemptedAt: stamp - GROK_BILLING_REFRESH_MS, limits: [{ label: "WEEKLY", percent: 0.02 }] }, stamp)).toBe(true);
+    expect(grokBillingRefreshDue({ attemptedAt: stamp, limits: [] }, stamp)).toBe(false);
+    expect(grokBillingRefreshDue({}, stamp)).toBe(true);
+    expect(forceRefreshRequested(["bun", "collector.ts"])).toBe(false);
+    expect(forceRefreshRequested(["bun", "collector.ts", "--force-refresh"])).toBe(true);
+    const previous = process.env.INFOMARCHY_SKIP_GROK_BILLING;
+    process.env.INFOMARCHY_SKIP_GROK_BILLING = "1";
+    try {
+      expect(grokBillingRefreshDue(fresh, stamp)).toBe(false);
+      expect(grokBillingRefreshDue(fresh, stamp, true)).toBe(false);
+    }
+    finally {
+      if (previous === undefined) delete process.env.INFOMARCHY_SKIP_GROK_BILLING;
+      else process.env.INFOMARCHY_SKIP_GROK_BILLING = previous;
+    }
+  });
+
+describe("OpenCode usage cache invalidation", () => {
+  test("WAL commits and local midnight invalidate otherwise unchanged usage", () => {
+    const path = join(testRoot, "usage-wal.db");
+    const db = new Database(path);
+    try {
+      db.exec("PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE message (tokens INTEGER); INSERT INTO message VALUES (100); PRAGMA wal_checkpoint(TRUNCATE)");
+      const today = new Date(2026, 8, 9, 12).getTime();
+      const before = sqliteUsageIdentity(path, today);
+      expect(before).not.toBeNull();
+      expect(sqliteUsageIdentity(path, today)).toBe(before);
+      const main = lstatSync(path, { bigint: true });
+      db.exec("INSERT INTO message VALUES (200)");
+      expect(lstatSync(path, { bigint: true }).mtimeNs).toBe(main.mtimeNs);
+      expect(lstatSync(path, { bigint: true }).size).toBe(main.size);
+      const committed = sqliteUsageIdentity(path, today);
+      expect(committed).not.toBe(before);
+      expect(sqliteUsageIdentity(path, new Date(2026, 8, 10, 0).getTime())).not.toBe(committed);
+      db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+      expect(sqliteUsageIdentity(path, today)).not.toBe(committed);
+    } finally { db.close(); }
+    expect(sqliteUsageIdentity(join(testRoot, "missing.db"))).toBeNull();
+  });
+});
+
+describe("Grok billing without token snapshots", () => {
+  test("attaches observed limits to session-only usage without inventing tokens", () => {
+    const dir = join(testRoot, "grok-session-billing");
+    mkdirSync(dir, { recursive: true });
+    const sessions = normalizeUsage({ name: "Grok", totalSessions: 3, todaySessions: 1, modelSessions: { grok: 3 }, limits: [] });
+    expect(withGrokObservedLimits(sessions, dir).limits).toEqual([]);
+    writeFileSync(join(dir, "grok-billing.json"), JSON.stringify({ limits: [{ label: "WEEKLY", percent: 0.17 }] }));
+    const result = withGrokObservedLimits(sessions, dir);
+    expect(result.limits[0].percent).toBe(0.17);
+    expect(result.tierLabel).toBe("weekly");
+    expect(result.hasTokenData).toBe(false);
+    expect(result.todaySessions).toBe(1);
+    expect(result.totalSessions).toBe(3);
+    expect(result.models).toEqual(sessions.models);
+    expect(result.usageStatusText).toContain("session counts");
+    expect(sessions.limits).toEqual([]);
+    // A new billing result must be visible even when the local record is cached.
+    writeFileSync(join(dir, "grok-billing.json"), JSON.stringify({ limits: [{ label: "WEEKLY", percent: 0.28 }] }));
+    expect(withGrokObservedLimits(sessions, dir).limits[0].percent).toBe(0.28);
+    const tokens = normalizeUsage({ name: "Grok", todayTotalTokens: 100, limits: [] });
+    expect(withGrokObservedLimits(tokens, dir).usageStatusText).toContain("token totals");
+  });
+});
+
+describe("Grok billing backoff and mutual exclusion", () => {
+  test("failed first fetch backs off, expires after 60 seconds, and allows hard refresh", async () => {
+    const directory = join(testRoot, "billing-failure");
+    let calls = 0;
+    const options = { directory, readLog: () => "", fetchBilling: async () => { calls++; return null; } };
+    await refreshGrokBilling({ ...options, stamp: 1_000_000 });
+    await refreshGrokBilling({ ...options, stamp: 1_000_001 });
+    expect(calls).toBe(1);
+    await refreshGrokBilling({ ...options, stamp: 1_060_000 });
+    expect(calls).toBe(2);
+    await refreshGrokBilling({ ...options, stamp: 1_060_001, force: true });
+    expect(calls).toBe(3);
+  });
+
+  test("overlapping collectors share a lock, including hard refresh, and release after errors", async () => {
+    const directory = join(testRoot, "billing-overlap");
+    let entered!: () => void, release!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    let calls = 0;
+    const options = { directory, stamp: 2_000_000, readLog: () => "" };
+    const first = refreshGrokBilling({ ...options, fetchBilling: async () => {
+      calls++;
+      entered();
+      await blocked;
+      throw new Error("simulated interrupted fetch");
+    } });
+    try {
+      await started;
+      expect(JSON.parse(readFileSync(join(directory, "grok-billing.json"), "utf8")).attemptedAt).toBe(options.stamp);
+      await refreshGrokBilling({ ...options, force: true, fetchBilling: async () => { calls++; return null; } });
+      expect(calls).toBe(1);
+    } finally { release(); await first; }
+    await refreshGrokBilling({ ...options, force: true, fetchBilling: async () => { calls++; return { creditUsagePercent: 25 }; } });
+    expect(calls).toBe(2);
+    expect(grokObservedLimits(directory)[0].percent).toBe(0.25);
+    // A later outage preserves the successful result while recording backoff.
+    await refreshGrokBilling({ ...options, stamp: 2_060_000, fetchBilling: async () => null });
+    expect(grokObservedLimits(directory)[0].percent).toBe(0.25);
+  });
+
+  test("a killed collector releases its lock for the next hard refresh", async () => {
+    const directory = join(testRoot, "billing-killed");
+    const script = `import { refreshGrokBilling } from ${JSON.stringify(join(import.meta.dir, "collector.ts"))};
+      await refreshGrokBilling({ directory: process.argv[1], force: true, readLog: () => "",
+        fetchBilling: async () => { console.log("locked"); await Bun.sleep(60000); return null; } });`;
+    const child = Bun.spawn([process.execPath, "-e", script, directory], { stdout: "pipe", stderr: "ignore" });
+    try {
+      const reader = child.stdout.getReader();
+      const chunk = await reader.read();
+      expect(new TextDecoder().decode(chunk.value).trim()).toBe("locked");
+      reader.releaseLock();
+      child.kill("SIGKILL");
+      await child.exited;
+      let called = false;
+      await refreshGrokBilling({ directory, force: true, readLog: () => "", fetchBilling: async () => { called = true; return null; } });
+      expect(called).toBe(true);
+    } finally { await terminate(child); }
+  });
+
+  test("a planted lock symlink is refused without touching its target", async () => {
+    const directory = join(testRoot, "billing-lock-symlink");
+    mkdirSync(directory, { recursive: true });
+    const target = join(testRoot, "lock-victim");
+    writeFileSync(target, "must survive");
+    symlinkSync(target, join(directory, "grok-billing.lock"));
+    let called = false;
+    await refreshGrokBilling({ directory, force: true, fetchBilling: async () => { called = true; return null; }, readLog: () => "" });
+    expect(called).toBe(false);
+    expect(readFileSync(target, "utf8")).toBe("must survive");
+  });
+});
+
+test("Claude auth help follows status and OAuth expiry is explicit", () => {
+  expect(normalizeUsage({authHelpText: "Run claude auth login", limits: [{label:"Weekly", percent:0.2}]}).authHelpText).toBe("");
+  expect(normalizeUsage({usageStatusText: "expired", authHelpText: "Sign in"}).authHelpText).toBe("Sign in");
+  expect(claudeOauthExpiredAt(1000, 1001)).toBe(true);
+  expect(claudeOauthExpiredAt(2000, 1001)).toBe(false);
 });

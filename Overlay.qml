@@ -57,6 +57,7 @@ Scope {
   // `omarchy-shell shell call nixfred.infomarchy refresh` hits the overlay
   // loader, not the wallpaper IpcHandler.
   function refresh() { infoModel.refresh() }
+  function hardRefresh() { infoModel.hardRefresh() }
 
   Variants {
     model: Quickshell.screens
