@@ -889,7 +889,15 @@ Item {
           Layout.fillWidth: true
           visible: view.sectionEnabled("sessions")
           title: "LIVE AI SESSIONS"
-          hint: view.sessions.length + " running · left focus · right inspect" + (view.desk.error ? " · ⚠ " + view.desk.error : "")
+          // Under a project filter `sessions` is a subset, so reporting its
+          // length alone told the desk "1 running" while 24 were. A dashboard
+          // that miscounts the machine because of its own view state is worse
+          // than one that shows too much: report the real total, and name the
+          // filter doing the hiding so the small × chip is not the only clue.
+          hint: (view.projectFilter
+                  ? view.sessions.length + " of " + view.allSessions.length + " running · filtered by " + view.projectFilter.replace(/^.*\//, "")
+                  : view.sessions.length + " running")
+                + " · left focus · right inspect" + (view.desk.error ? " · ⚠ " + view.desk.error : "")
           Flow {
             id: sessionFlow
             width: parent.width
@@ -1015,7 +1023,12 @@ Item {
               // Parent is a Flow: Layout.* is ignored there, so size explicitly or wrapMode never wraps.
               width: sessionFlow.width
               wrapMode: Text.Wrap
+              // "go start something" is a lie when a filter is what emptied the
+              // list. Checked before the ready branch so the advice matches the
+              // reason, and says how to get back.
               text: view.desk.bunChecked && !view.desk.bunAvailable ? view.desk.missingDependencyHint
+                : view.projectFilter && view.allSessions.length > 0
+                  ? "no sessions in " + view.projectFilter.replace(/^.*\//, "") + " — " + view.allSessions.length + " running elsewhere · clear the PROJECT chip above to see them"
                 : view.desk.ready ? "no agents running — go start something"
                 : view.desk.error ? "collector error · " + view.desk.error
                 : "collecting…"

@@ -405,6 +405,30 @@ describe("LOCAL AI rows stay inside the card body", () => {
   });
 });
 
+describe("a project filter never makes the desk misreport the machine", () => {
+  // Reported from two surfaces side by side: the wallpaper desk said
+  // "1 running" while the overlay said "24 running". The filter is per-view by
+  // design — the overlay is the unfiltered picture — but the desk was counting
+  // its own filtered subset and presenting it as the machine's state.
+  test("the header reports the real total and names the filter hiding the rest", () => {
+    expect(view).toContain('" of " + view.allSessions.length + " running · filtered by "');
+    // The unfiltered wording must stay exactly as it was.
+    expect(view).toContain('view.sessions.length + " running"');
+  });
+
+  test("an empty list caused by a filter does not tell you to go start something", () => {
+    // The advice has to match the reason. "go start something" while two dozen
+    // agents run is worse than no message at all.
+    const emptyState = view.match(/text: view\.desk\.bunChecked[\s\S]*?"collecting…"/)?.[0] || "";
+    expect(emptyState).toContain("view.projectFilter && view.allSessions.length > 0");
+    expect(emptyState).toContain("running elsewhere");
+    // The filter branch must be tested BEFORE the ready branch, or the old
+    // message wins and the fix is dead code.
+    expect(emptyState.indexOf("view.projectFilter"))
+      .toBeLessThan(emptyState.indexOf("no agents running"));
+  });
+});
+
 describe("session card lines never spill into the neighbouring card", () => {
   const view = readFileSync(join(import.meta.dir, "InfoView.qml"), "utf8");
   const start = view.indexOf("hosted in \" + view.sessionHostLabel(sc.modelData)");
