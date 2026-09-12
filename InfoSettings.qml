@@ -42,6 +42,12 @@ Item {
   // restart from briefly re-enabling a dashboard the user turned off.
   property bool ready: false
   property bool dashboardVisible: false
+  // Stream/screenshot mask: hide WAN, LAN, SSID, user@host, GitHub login.
+  // OSS project names stay. Default off; persists until toggled.
+  property bool privacyMode: false
+  property int privacyUnlockCount: 0
+  readonly property int privacyUnlockNeeded: 3
+  readonly property int privacyUnlockMs: 2000
   property var rightOrder: ["usage", "localAi", "machine", "media"]
   property var opsOrder: ["changes", "needs", "projects"]
 
@@ -75,6 +81,8 @@ Item {
       selectedOllamaModel = parsed && /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,255}$/.test(String(parsed.selectedOllamaModel || "")) ? String(parsed.selectedOllamaModel) : ""
       ollamaHost = parsed ? normalizeOllamaHost(parsed.ollamaHost) : ""
       dashboardVisible = parsed && typeof parsed.dashboardVisible === "boolean" ? parsed.dashboardVisible : true
+      privacyMode = !!(parsed && parsed.privacyMode === true)
+      privacyUnlockCount = 0
       rightOrder = normalizedRightOrder(parsed ? parsed.rightOrder : null)
       opsOrder = normalizedOpsOrder(parsed ? parsed.opsOrder : null)
     } catch (e) {
@@ -92,6 +100,8 @@ Item {
       selectedOllamaModel = ""
       ollamaHost = ""
       dashboardVisible = true
+      privacyMode = false
+      privacyUnlockCount = 0
       rightOrder = normalizedRightOrder(null)
       opsOrder = normalizedOpsOrder(null)
     }
@@ -152,6 +162,7 @@ Item {
       selectedOllamaModel: selectedOllamaModel,
       ollamaHost: ollamaHost,
       dashboardVisible: dashboardVisible,
+      privacyMode: privacyMode,
       rightOrder: normalizedRightOrder(rightOrder),
       opsOrder: normalizedOpsOrder(opsOrder)
     }, null, 2) + "\n")
@@ -289,6 +300,35 @@ Item {
     persist()
   }
   function toggleDashboardVisible() { setDashboardVisible(!dashboardVisible) }
+  function privacyUnlockStep(on, count, needed) {
+    if (!on) return { on: true, count: 0 }
+    var next = Math.max(0, Math.floor(Number(count) || 0)) + 1
+    if (next >= Math.max(1, Math.floor(Number(needed) || 3))) return { on: false, count: 0 }
+    return { on: true, count: next }
+  }
+  Timer {
+    id: privacyUnlockReset
+    interval: root.privacyUnlockMs
+    repeat: false
+    onTriggered: root.privacyUnlockCount = 0
+  }
+  function setPrivacyMode(enabled) {
+    privacyUnlockCount = 0
+    privacyUnlockReset.stop()
+    privacyMode = !!enabled
+    persist()
+  }
+  function togglePrivacyMode() {
+    var step = privacyUnlockStep(privacyMode, privacyUnlockCount, privacyUnlockNeeded)
+    privacyUnlockCount = step.count
+    if (step.on !== privacyMode) {
+      privacyUnlockReset.stop()
+      setPrivacyMode(step.on)
+      return
+    }
+    if (privacyUnlockCount > 0) privacyUnlockReset.restart()
+    else privacyUnlockReset.stop()
+  }
   function rightIndex(id) { var index = rightOrder.indexOf(id); return index < 0 ? 99 : index }
   function moveRight(id, direction) {
     var next = normalizedRightOrder(rightOrder), from = next.indexOf(id), to = adjacentEnabledIndex(next, from, direction, sections)

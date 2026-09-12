@@ -221,6 +221,9 @@ Scope {
     function getDashboardVisible(): string { return dashboardSettings.dashboardVisible ? "true" : "false" }
     function setOllamaHost(v: string): void { dashboardSettings.setOllamaHost(v) }
     function getOllamaHost(): string { return String(dashboardSettings.ollamaHost || "") }
+    function setPrivacy(v: string): void { dashboardSettings.setPrivacyMode(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
+    function togglePrivacy(): void { dashboardSettings.togglePrivacyMode() }
+    function getPrivacy(): string { return dashboardSettings.privacyMode ? "true" : "false" }
     function geometry(): string { return root.deskView ? root.deskView.geometryReport() : "{}" }
     function setSection(id: string, v: string): void { dashboardSettings.setSection(id, ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
     function toggleSection(id: string): void { dashboardSettings.toggleSection(id) }
