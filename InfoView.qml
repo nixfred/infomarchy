@@ -763,9 +763,11 @@ Item {
     border.color: Util.alpha(tone, 0.5)
     border.width: 1
     radius: view.radius
+    clip: true
     implicitWidth: tl.implicitWidth + Style.spacing.md * 2
     implicitHeight: tl.implicitHeight + Style.spacing.xs * 2
-    PlainText { id: tl; anchors.centerIn: parent; text: parent.text; color: tone; font.family: view.mono; font.pixelSize: Style.font.caption; font.bold: true }
+    // Width is bound so a layout-squeezed Tag elides instead of painting past its border.
+    PlainText { id: tl; anchors.centerIn: parent; width: Math.max(0, parent.width - Style.spacing.md * 2); text: parent.text; color: tone; font.family: view.mono; font.pixelSize: Style.font.caption; font.bold: true; elide: Text.ElideRight }
   }
 
   // A labelled row in ABOUT that opens one of the plugin's own two addresses.
@@ -837,7 +839,9 @@ Item {
 
     ColumnLayout {
       anchors.fill: parent
-      spacing: Style.spacing.sm
+      // Same token as card-to-card and column-to-column. sm (4px at scale 1)
+      // left the module strip a gap short of the rest of the desk (lg / view.gap, 8px).
+      spacing: view.gap
 
       Flow {
         id: moduleStrip
@@ -926,6 +930,7 @@ Item {
                 // Fill four columns when they remain readable; narrower layouts
                 // retain a minimum width and let Flow wrap naturally.
                 width: Math.max(sessionFlow.minimumCardWidth, sessionFlow.fittedCardWidth); height: scol.implicitHeight + (sessionFlow.dense ? Style.spacing.sm : Style.spacing.lg) * 2
+                clip: true
                 // A daemon-hosted background session is real but unattended; dim it so it reads as secondary next to the interactive one.
                 opacity: (sc.modelData.hosts || []).some(function(h) { return h && h.kind === "background" }) ? 0.72 : 1
                 color: hover.containsMouse ? Util.alpha(tone, 0.16) : Util.alpha(tone, 0.08)
@@ -954,6 +959,7 @@ Item {
                   spacing: Style.spacing.xs
                   RowLayout {
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 0
                     Rectangle { id: dot; width: 8; height: 8; radius: 4; color: sc.tone
                       SequentialAnimation { running: sc.busy && sc.visible; loops: Animation.Infinite
                         onRunningChanged: if (!running) dot.opacity = 1
@@ -961,13 +967,23 @@ Item {
                         NumberAnimation { target: dot; property: "opacity"; from: 0.2; to: 1; duration: 700 } } }
                     PlainText { text: view.desk.providerLabel(sc.modelData.provider); color: sc.tone; font.family: view.mono; font.bold: true; font.pixelSize: Style.font.body }
                     // Unattended and idle for hours: probably a zombie. Right-click → inspector → STOP / END.
-                    Tag { visible: sc.modelData.stale === true; text: "STALE · idle " + view.desk.dur((Date.now() - Number(sc.modelData.idleSince || Date.now())) / 1000); tone: view.desk.yellow }
-                    Item { Layout.fillWidth: true }
+                    // Fill-and-cap: a non-fill Tag keeps its implicit width and paints into the next card.
+                    Tag {
+                      visible: sc.modelData.stale === true
+                      text: "STALE · idle " + view.desk.dur((Date.now() - Number(sc.modelData.idleSince || Date.now())) / 1000)
+                      tone: view.desk.yellow
+                      Layout.fillWidth: true
+                      Layout.minimumWidth: 0
+                      Layout.preferredWidth: implicitWidth
+                      Layout.maximumWidth: implicitWidth
+                    }
+                    Item { Layout.fillWidth: true; Layout.minimumWidth: 0 }
                     PlainText { text: view.desk.dur(sc.modelData.uptimeSec); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
                   }
-                  PlainText { Layout.fillWidth: true; text: sc.modelData.project || "/"; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.subtitle; elide: Text.ElideMiddle }
+                  PlainText { Layout.fillWidth: true; Layout.minimumWidth: 0; text: sc.modelData.project || "/"; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.subtitle; elide: Text.ElideMiddle }
                   PlainText {
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 0
                     text: sc.modelData.topic ? "↳ " + sc.modelData.topic : "↳ " + ((sc.modelData.window || {}).title || "topic unavailable")
                     color: sc.modelData.topic ? sc.tone : view.textDim
                     font.family: view.mono
@@ -977,11 +993,11 @@ Item {
                     maximumLineCount: sessionFlow.dense ? 1 : 2
                     elide: Text.ElideRight
                   }
-                  PlainText { Layout.fillWidth: true; visible: !sessionFlow.dense && (!!sc.modelData.cwd); text: sc.modelData.cwd || ""; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideMiddle }
-                  PlainText { Layout.fillWidth: true; visible: !sessionFlow.dense && ((sc.modelData.hosts || []).length > 0); text: "hosted in " + view.sessionHostLabel(sc.modelData) + (sc.modelData.window ? " · click jumps to the pane" : ((sc.modelData.hosts || []).some(function(h) { return h && h.kind === "background" && h.attachId }) ? " · click attaches a terminal" : " · no client window found")); color: sc.tone; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
-                  PlainText { Layout.fillWidth: true; visible: !sessionFlow.dense && (!!sc.modelData.topic && !!(sc.modelData.window && sc.modelData.window.title)); text: sc.modelData.window ? (sc.modelData.window.title || "") : ""; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
-                  PlainText { Layout.fillWidth: true; visible: !sessionFlow.dense && (!!sc.modelData.git); text: sc.modelData.git ? ("git " + sc.modelData.git.branch + (sc.modelData.git.dirty ? " · " + sc.modelData.git.dirty + " changed" : " · clean") + (sc.modelData.git.ahead ? " · ↑" + sc.modelData.git.ahead : "") + (sc.modelData.git.behind ? " · ↓" + sc.modelData.git.behind : "") + (sc.modelData.git.conflicts ? " · " + sc.modelData.git.conflicts + " conflicts" : "")) : ""; color: sc.modelData.git && sc.modelData.git.conflicts ? view.desk.red : sc.modelData.git && sc.modelData.git.dirty ? view.desk.yellow : view.desk.green; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
-                  PlainText { Layout.fillWidth: true; text: "pid " + sc.modelData.pid + (sc.modelData.name ? " · " + sc.modelData.name : "") + (sc.modelData.window ? " · ws " + sc.modelData.window.workspace : " · no window") + " · cpu " + (sc.modelData.resources && sc.modelData.resources.cpuPct !== null ? sc.modelData.resources.cpuPct.toFixed(1) + "%" : "—") + " · ram " + ((sc.modelData.resources || {}).rss !== null ? view.desk.bytes((sc.modelData.resources || {}).rss) : "—") + " · " + ((sc.modelData.resources || {}).processes !== null ? ((sc.modelData.resources || {}).processes || 0) : "—") + " proc" + ((sc.modelData.resources || {}).gpuMemory ? " · gpu " + view.desk.bytes(sc.modelData.resources.gpuMemory) : ""); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+                  PlainText { Layout.fillWidth: true; Layout.minimumWidth: 0; visible: !sessionFlow.dense && (!!sc.modelData.cwd); text: sc.modelData.cwd || ""; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideMiddle }
+                  PlainText { Layout.fillWidth: true; Layout.minimumWidth: 0; visible: !sessionFlow.dense && ((sc.modelData.hosts || []).length > 0); text: "hosted in " + view.sessionHostLabel(sc.modelData) + (sc.modelData.window ? " · click jumps to the pane" : ((sc.modelData.hosts || []).some(function(h) { return h && h.kind === "background" && h.attachId }) ? " · click attaches a terminal" : " · no client window found")); color: sc.tone; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+                  PlainText { Layout.fillWidth: true; Layout.minimumWidth: 0; visible: !sessionFlow.dense && (!!sc.modelData.topic && !!(sc.modelData.window && sc.modelData.window.title)); text: sc.modelData.window ? (sc.modelData.window.title || "") : ""; color: view.textDim; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+                  PlainText { Layout.fillWidth: true; Layout.minimumWidth: 0; visible: !sessionFlow.dense && (!!sc.modelData.git); text: sc.modelData.git ? ("git " + sc.modelData.git.branch + (sc.modelData.git.dirty ? " · " + sc.modelData.git.dirty + " changed" : " · clean") + (sc.modelData.git.ahead ? " · ↑" + sc.modelData.git.ahead : "") + (sc.modelData.git.behind ? " · ↓" + sc.modelData.git.behind : "") + (sc.modelData.git.conflicts ? " · " + sc.modelData.git.conflicts + " conflicts" : "")) : ""; color: sc.modelData.git && sc.modelData.git.conflicts ? view.desk.red : sc.modelData.git && sc.modelData.git.dirty ? view.desk.yellow : view.desk.green; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
+                  PlainText { Layout.fillWidth: true; Layout.minimumWidth: 0; text: "pid " + sc.modelData.pid + (sc.modelData.name ? " · " + sc.modelData.name : "") + (sc.modelData.window ? " · ws " + sc.modelData.window.workspace : " · no window") + " · cpu " + (sc.modelData.resources && sc.modelData.resources.cpuPct !== null ? sc.modelData.resources.cpuPct.toFixed(1) + "%" : "—") + " · ram " + ((sc.modelData.resources || {}).rss !== null ? view.desk.bytes((sc.modelData.resources || {}).rss) : "—") + " · " + ((sc.modelData.resources || {}).processes !== null ? ((sc.modelData.resources || {}).processes || 0) : "—") + " proc" + ((sc.modelData.resources || {}).gpuMemory ? " · gpu " + view.desk.bytes(sc.modelData.resources.gpuMemory) : ""); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight }
                 }
                 MouseArea {
                   id: hover; anchors.fill: parent; hoverEnabled: true; enabled: view.interactive
