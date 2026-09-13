@@ -266,19 +266,24 @@ Item {
   // Watch data sources that change on demand. The collector fires when a
   // watched file changes, not on a fixed timer — zero CPU when idle.
   // The 250ms debounce coalesces bursts (e.g. agent writes JSON then WAL).
+  // FileView watches single files only — never directories, which causes
+  // "Not a file" errors in a tight loop.
   FileView {
     path: "/home/j_kro/.hermes/state.db"
     watchChanges: true
+    printErrors: false
     onFileChanged: debounceTimer.restart()
   }
   FileView {
-    path: "/home/j_kro/.local/state/omarchy/agents/usage"
+    path: "/home/j_kro/.local/state/infomarchy/dashboard.json"
     watchChanges: true
+    printErrors: false
     onFileChanged: debounceTimer.restart()
   }
   FileView {
-    path: "/home/j_kro/.local/state/infomarchy"
+    path: "/home/j_kro/.hermes/state.db-wal"
     watchChanges: true
+    printErrors: false
     onFileChanged: debounceTimer.restart()
   }
 
@@ -296,11 +301,12 @@ Item {
   // --- initial refresh -----------------------------------------------------
   // One shot after shell start, so the desk populates without waiting for a
   // file change. A 750ms delay lets other plugins' initial bursts settle.
+  // Only fires when the dashboard is visible (root.active === true).
   Timer {
     id: initialTimer
     interval: 750
     repeat: false
-    running: true
+    running: root.active
     onTriggered: root.refresh()
   }
 
