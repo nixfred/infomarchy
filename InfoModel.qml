@@ -250,13 +250,7 @@ Item {
       if (!collector.frameComplete) root.error = collector.lastStderr || (exitCode === 0 ? "collector ended without a complete snapshot" : "collector exited " + exitCode)
     }
   }
-  function refresh() {
-    if (!root.active || collector.running || bunProbe.running) return
-    // Once bun is known-good, skip the probe; re-probe every tick only while
-    // it is missing so an install is picked up without a shell restart.
-    if (root.bunChecked && root.bunAvailable) collector.running = true
-    else bunProbe.running = true
-  }
+
   Process {
     id: bunProbe
     command: ["sh", "-c", "command -v bun >/dev/null 2>&1"]
@@ -268,15 +262,54 @@ Item {
     }
   }
 
+  // --- file watching -------------------------------------------------------
+  // Watch data sources that change on demand. The collector fires when a
+  // watched file changes, not on a fixed timer — zero CPU when idle.
+  // The 250ms debounce coalesces bursts (e.g. agent writes JSON then WAL).
+  FileView {
+    path: "/home/j_kro/.hermes/state.db"
+    watchChanges: true
+    onFileChanged: debounceTimer.restart()
+  }
+  FileView {
+    path: "/home/j_kro/.local/state/omarchy/agents/usage"
+    watchChanges: true
+    onFileChanged: debounceTimer.restart()
+  }
+  FileView {
+    path: "/home/j_kro/.local/state/infomarchy"
+    watchChanges: true
+    onFileChanged: debounceTimer.restart()
+  }
+
+  // --- debounce timer ------------------------------------------------------
+  // Coalesces rapid file changes so a single agent update does not spawn
+  // 5 collector runs (JSON write + SQLite WAL + prev file). Pure QML Timer —
+  // no setTimeout, which does not exist in the QML JS sandbox.
   Timer {
-    interval: root.refreshMs
-    running: root.active
-    repeat: true
-    triggeredOnStart: true
+    id: debounceTimer
+    interval: 250
+    repeat: false
     onTriggered: root.refresh()
   }
 
-  // Focus a Hyprland window by address, on both dispatch syntaxes.
+  // --- initial refresh -----------------------------------------------------
+  // One shot after shell start, so the desk populates without waiting for a
+  // file change. A 750ms delay lets other plugins' initial bursts settle.
+  Timer {
+    id: initialTimer
+    interval: 750
+    repeat: false
+    running: true
+    onTriggered: root.refresh()
+  }
+
+  function refresh() {
+    if (!root.active || collector.running || bunProbe.running) return
+    if (root.bunChecked && root.bunAvailable) collector.running = true
+    else bunProbe.running = true
+  }
+
   function focusWindow(address) {
     var addr = String(address || "").replace(/^0x/, "")
     if (!/^[0-9A-Fa-f]{1,32}$/.test(addr)) return
