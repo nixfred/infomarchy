@@ -20,9 +20,11 @@ Item {
   property bool keyboardAvailable: true
   property int activityCellFilter: -1
   property string activityProviderFilter: ""
-  // GITHUB · LAST 7 DAYS has no list to filter, so a selected cell is a pin
+  // The forge heatmaps have no list to filter, so a selected cell is a pin
   // (its breakdown stays in the status line) and a selected kind recolours
   // the grid to that kind alone.
+  property int giteaCellFilter: -1
+  property string giteaKindFilter: ""
   property int githubCellFilter: -1
   property string githubKindFilter: ""
   property var inspectedSession: null
@@ -218,6 +220,8 @@ Item {
       view: width, gap: gap, pad: pad, fontScale: Style.fontScale,
       rightColumnWidth: rightColumnWidth, rightColumn: rightColumn.width, rightColumnX: rightColumn.x,
       leftColumn: leftColumn.width,
+      heatmaps: { columns: heatmapGrid.columns, width: heatmapGrid.width,
+        activity: activityCard.width, github: githubCard.width, gitea: giteaCard.width },
       localAi: {
         card: localAiCard.width, cardX: localAiCard.x, body: localAiCard.bodyWidth, column: localAiColumn.width,
         selectorRow: selectorRow.width, selectorRowX: selectorRow.x, loadTagRight: loadTag.x + loadTag.width, loadTag: loadTag.width,
@@ -321,7 +325,7 @@ Item {
   }
   function toggleActivityCell(index) { activityCellFilter = activityCellFilter === index ? -1 : index }
   function toggleActivityProvider(provider) { activityProviderFilter = activityProviderFilter === provider ? "" : provider }
-  function clearActivityFilter() { activityCellFilter = -1; activityProviderFilter = ""; githubCellFilter = -1; githubKindFilter = "" }
+  function clearActivityFilter() { activityCellFilter = -1; activityProviderFilter = ""; githubCellFilter = -1; githubKindFilter = ""; view.giteaCellFilter = -1; view.giteaKindFilter = "" }
   readonly property var github: ai.github || ({})
   readonly property var githubKinds: ["commit", "pr", "review", "issue", "comment", "other"]
   readonly property bool githubFilterActive: sectionEnabled("github") && (githubCellFilter >= 0 || githubKindFilter !== "")
@@ -377,6 +381,65 @@ Item {
       if (Number(days[day] || 0) > 0) parts.push(Qt.formatDate(new Date(days[day]), "ddd d MMM") + " " + (hour < 10 ? "0" : "") + hour + ":00")
     }
     if (githubKindFilter) parts.push(githubKindLabel(githubKindFilter))
+    return parts.join(" · ")
+  }
+  readonly property var gitea: view.ai.gitea || ({})
+  readonly property var giteaKinds: ["push", "pr", "review", "issue", "comment", "other"]
+  readonly property bool giteaFilterActive: view.sectionEnabled("gitea") && (view.giteaCellFilter >= 0 || view.giteaKindFilter !== "")
+  function toggleGiteaCell(index) { view.giteaCellFilter = view.giteaCellFilter === index ? -1 : index }
+  function toggleGiteaKind(kind) { view.giteaKindFilter = view.giteaKindFilter === kind ? "" : kind }
+  function giteaKindColor(kind) {
+    switch (String(kind)) {
+      case "push": return view.desk.green
+      case "pr": return view.desk.magenta
+      case "review": return view.desk.cyan
+      case "issue": return view.desk.yellow
+      case "comment": return view.desk.blue
+      default: return view.textDim
+    }
+  }
+  function giteaKindLabel(kind) {
+    switch (String(kind)) {
+      case "push": return "pushes"
+      case "pr": return "PRs"
+      case "review": return "reviews"
+      case "issue": return "issues"
+      case "comment": return "comments"
+      case "other": return "other"
+      default: return String(kind)
+    }
+  }
+  function giteaHint() {
+    var c = view.gitea.counts || {}, parts = []
+    for (var i = 0; i < view.giteaKinds.length; i++) {
+      var k = view.giteaKinds[i]
+      if (c[k] && (c[k].week > 0 || c[k].today > 0)) parts.push(view.giteaKindLabel(k) + " " + c[k].today + "/" + c[k].week)
+    }
+    if (!parts.length) return view.gitea.login ? "@" + view.gitea.login : ""
+    return "today/week · " + parts.join(" · ")
+  }
+  // Why the Gitea grid is empty or behind, in the words the user needs.
+  function giteaStatus() {
+    switch (String(view.gitea.state || "")) {
+      case "missing": return "Gitea not configured · run tea login add"
+      case "unauthenticated": return "Gitea not authenticated · check tea login"
+      case "configuration": return String(view.gitea.error || "check tea login")
+      case "disabled": return "Gitea fetching disabled"
+      case "pending": return "fetching Gitea activity…"
+      case "unavailable": return "Gitea unreachable · " + String(view.gitea.error || "fetch failed")
+      case "stale": return "stale · " + String(view.gitea.error || "fetch failed") + " · cached rows"
+      case "ok": return (view.gitea.login ? "@" + view.gitea.login + " · " : "") + (view.gitea.coverage === "partial" ? "filling older days · " : "") + "hover · click pins · red = now"
+      default: return ""
+    }
+  }
+  function giteaFilterLabel() {
+    var parts = []
+    if (view.giteaCellFilter >= 0) {
+      var days = view.gitea.days || []
+      var day = Math.floor(view.giteaCellFilter / 24), hour = view.giteaCellFilter % 24
+      if (Number(days[day] || 0) > 0) parts.push(Qt.formatDate(new Date(days[day]), "ddd d MMM") + " " + (hour < 10 ? "0" : "") + hour + ":00")
+    }
+    if (view.giteaKindFilter) parts.push(view.giteaKindLabel(view.giteaKindFilter))
     return parts.join(" · ")
   }
   function activityFilterLabel() {
@@ -1266,13 +1329,20 @@ Item {
           }
         }
 
-        // ---- heatmaps: AI prompts on the left, GitHub on the right ----
-        RowLayout {
+        // ---- heatmaps: AI prompts, GitHub and Gitea ----
+        GridLayout {
+          id: heatmapGrid
           Layout.fillWidth: true
-          visible: view.sectionEnabled("activity") || view.sectionEnabled("github")
-          spacing: view.gap
+          visible: view.sectionEnabled("activity") || view.sectionEnabled("github") || view.sectionEnabled("gitea")
+          readonly property int enabledCount: Number(view.sectionEnabled("activity")) + Number(view.sectionEnabled("github")) + Number(view.sectionEnabled("gitea"))
+          columns: Math.max(1, Math.min(enabledCount, Math.floor((width + columnSpacing) / (540 * Style.fontScale + columnSpacing))))
+          columnSpacing: view.gap
+          rowSpacing: view.gap
           Card {
+            id: activityCard
             Layout.fillWidth: true
+            // At medium widths keep the two forge cards beside each other.
+            Layout.columnSpan: heatmapGrid.enabledCount === 3 && heatmapGrid.columns === 2 ? 2 : 1
             Layout.preferredWidth: 1
             Layout.minimumWidth: 0
             visible: view.sectionEnabled("activity")
@@ -1299,6 +1369,7 @@ Item {
             }
           }
           Card {
+            id: githubCard
             Layout.fillWidth: true
             Layout.preferredWidth: 1
             Layout.minimumWidth: 0
@@ -1326,6 +1397,37 @@ Item {
               onCellClicked: function(index) { view.toggleGithubCell(index) }
               onKindClicked: function(kind) { view.toggleGithubKind(kind) }
               onClearClicked: { view.githubCellFilter = -1; view.githubKindFilter = "" }
+            }
+          }
+          Card {
+            id: giteaCard
+            Layout.fillWidth: true
+            Layout.preferredWidth: 1
+            Layout.minimumWidth: 0
+            visible: view.sectionEnabled("gitea")
+            title: "GITEA · LAST 7 DAYS"
+            hint: view.giteaHint()
+            HeatPanel {
+              cells: view.gitea.cells || []
+              startTs: (view.gitea.days || [])[0] || 0
+              days: view.gitea.days || []
+              kinds: view.giteaKinds
+              colorFor: function(kind) { return view.giteaKindColor(kind) }
+              labelFor: function(kind) { return view.giteaKindLabel(kind) }
+              unit: "events"
+              showRepos: true
+              kindFiltersCells: true
+              selectedCell: view.giteaCellFilter
+              selectedKind: view.giteaKindFilter
+              filterActive: view.giteaFilterActive
+              filterLabel: view.giteaFilterLabel()
+              idleStatus: view.giteaStatus()
+              hoverStatus: "click to pin"
+              pinnedBreakdown: true
+              emptyText: view.gitea.state === "ok" ? "no Gitea activity in the last 7 days" : view.giteaStatus()
+              onCellClicked: function(index) { view.toggleGiteaCell(index) }
+              onKindClicked: function(kind) { view.toggleGiteaKind(kind) }
+              onClearClicked: { view.giteaCellFilter = -1; view.giteaKindFilter = "" }
             }
           }
         }

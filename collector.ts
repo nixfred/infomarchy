@@ -15,6 +15,7 @@ import { isIP } from "net";
 import { Database } from "bun:sqlite";
 import { localDayIndex, localDayStarts } from "./history-time";
 import { githubFetchEnabled, githubRefreshDue, githubRepoFromRemote, githubSnapshot, parseGithubStoreText, refreshGithubActivity } from "./github-activity";
+import { giteaConfig, giteaRefreshDue, giteaSnapshot, parseGiteaStore, refreshGiteaActivity } from "./gitea-activity";
 import { attentionSignal, parseCommitSummary, parseDiffNumstat, parseGitStatus, projectHealth, repoCollisions, workspaceGroups, resourceDelta, limitForecast } from "./ai-ops";
 import { deriveNotificationEvents } from "./notification-events";
 
@@ -32,6 +33,7 @@ const PREV_FILE = join(STATE_DIR, `prev-${instanceId()}.json`);
 // Shared by every collector instance: the GitHub rows are the same for the
 // wallpaper and the overlay, and one 7-day store means one set of API calls.
 const GITHUB_FILE = join(STATE_DIR, "github-activity.json");
+const GITEA_FILE = join(STATE_DIR, "gitea-activity.json");
 const now = Date.now();
 const MIN_RATE_DT = 1;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
@@ -380,6 +382,19 @@ async function githubActivity() {
     try { writePrivateStateFile(STATE_DIR, basename(GITHUB_FILE), JSON.stringify(store)); } catch {}
   }
   return githubSnapshot(store, now, heatDays, activityCellIndex, ghAvailable);
+}
+
+// tea supplies the server and credentials; the same single-writer rule as
+// GitHub keeps the desktop and overlay on one private activity cache.
+async function giteaActivity() {
+  const configRoot = process.env.XDG_CONFIG_HOME || join(HOME, ".config");
+  const config = giteaConfig(read(join(configRoot, "tea/config.yml"), 256 * 1024));
+  const store = parseGiteaStore(read(GITEA_FILE), config.key);
+  if (instanceId() !== "overlay" && config.state === "ready" && giteaRefreshDue(store, now)) {
+    await refreshGiteaActivity(store, config, now);
+    try { writePrivateStateFile(STATE_DIR, basename(GITEA_FILE), JSON.stringify(store)); } catch {}
+  }
+  return giteaSnapshot(store, config, now, heatDays, activityCellIndex);
 }
 
 // ---------------------------------------------------------------- machine
@@ -2371,6 +2386,15 @@ function demoSnapshot(stamp = Date.now()) {
     }
   });
   const github = { state: "ok", login: "demo", fetchedAt: stamp - 90_000, coverage: "complete", coveredFrom: dayStarts[0], error: "", days: dayStarts, cells: githubCells, counts: githubCounts };
+  const gitea = {
+    ...github,
+    cells: githubCells.map(cell => {
+      const kinds = { ...(cell[1] as Record<string, number>) };
+      if (kinds.commit) { kinds.push = kinds.commit; delete kinds.commit; }
+      return [cell[0], kinds, cell[2]];
+    }),
+    counts: Object.fromEntries(Object.entries(githubCounts).map(([kind, count]) => [kind === "commit" ? "push" : kind, count])),
+  };
   const sessions = [
     {
       provider: "codex", pid: 42421, cwd: "~/Code/atlas", project: "atlas", startedAt: stamp - 38 * 60_000,
@@ -2455,7 +2479,7 @@ function demoSnapshot(stamp = Date.now()) {
         claude: { name: "Claude", ready: true, tierLabel: "Max", todayPrompts: 18, todayTotalTokens: 184_000, limits: [{ label: "SESSION", percent: 0.46, resetsAt: new Date(stamp + 2.1 * 3600_000).toISOString() }, { label: "WEEKLY", percent: 0.61, resetsAt: new Date(stamp + 3.4 * 86400_000).toISOString() }] },
         codex: { name: "Codex", ready: true, tierLabel: "Pro", todayPrompts: 27, todayTotalTokens: 311_000, limits: [{ label: "5-HOUR", percent: 0.38, resetsAt: new Date(stamp + 3.2 * 3600_000).toISOString() }, { label: "7-DAY", percent: 0.54, resetsAt: new Date(stamp + 4.2 * 86400_000).toISOString() }] },
       },
-      heatmap: { start: dayStarts[0], days: dayStarts, cells }, github, recent, recentTruncated: false,
+      heatmap: { start: dayStarts[0], days: dayStarts, cells }, github, gitea, recent, recentTruncated: false,
     },
   };
 }
@@ -2466,8 +2490,8 @@ async function runCollector() {
     return;
   }
   const pids = scanProcs();
-  const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama, externalIpS, github] = await Promise.all([
-    Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(), externalIp(), githubActivity(),
+  const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama, externalIpS, github, gitea] = await Promise.all([
+    Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(), externalIp(), githubActivity(), giteaActivity(),
   ]);
   const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory(), grokBot = grokBotHistory(), opencode = opencodeHistory(), pi = piHistory(), hermes = hermesHistory();
   recent.sort((a, b) => b.ts - a.ts);
@@ -2505,7 +2529,7 @@ async function runCollector() {
       counts, providers: { claude, codex, grok, grokBot, opencode, pi, hermes, ollama }, usage: agentsUsage(),
       usageDays: heatDays.map(localDayKey),
       heatmap: { start: start7, days: heatDays, cells: heat.map(c => [c.n, c.p]) },
-      github,
+      github, gitea,
       recent: dashboardRecent, recentTruncated,
     },
   };

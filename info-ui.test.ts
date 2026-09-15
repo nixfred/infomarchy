@@ -508,7 +508,8 @@ describe("github activity heatmap", () => {
   test("registers GITHUB as a removable module beside ACTIVITY and reaches it from the keyboard", () => {
     const ids = [...settings.matchAll(/\{ id: "([a-zA-Z]+)", label: "[^"]+" \}/g)].map(match => match[1]);
     expect(ids.indexOf("github")).toBe(ids.indexOf("activity") + 1);
-    expect(ids).toHaveLength(11);
+    expect(ids).toHaveLength(12);
+    expect(ids[11]).toBe("gitea");
     expect(ids[10]).toBe("media");
     expect(overlay).toContain("event.key >= Qt.Key_0 && event.key <= Qt.Key_9");
     expect(overlay).toContain("event.key === Qt.Key_0 ? 9 : event.key - Qt.Key_1");
@@ -517,14 +518,17 @@ describe("github activity heatmap", () => {
     expect(ids[9]).toBe("projects");
   });
 
-  test("splits the activity row into two half-width heatmap cards sharing one HeatPanel", () => {
+  test("shares one HeatPanel across equally sized activity, GitHub and Gitea cards", () => {
     expect(view).toContain("component HeatPanel: Item");
-    expect(view.match(/HeatPanel \{/g)).toHaveLength(2);
+    expect(view.match(/HeatPanel \{/g)).toHaveLength(3);
+    expect(view).toContain('title: "GITEA · LAST 7 DAYS"');
+    expect(view).toContain("cells: view.gitea.cells || []");
+    expect(view).toContain("onCellClicked: function(index) { view.toggleGiteaCell(index) }");
     expect(view).toContain('title: "ACTIVITY · LAST 7 DAYS"');
     expect(view).toContain('title: "GITHUB · LAST 7 DAYS"');
-    expect(view).toContain('visible: view.sectionEnabled("activity") || view.sectionEnabled("github")');
+    expect(view).toContain('visible: view.sectionEnabled("activity") || view.sectionEnabled("github") || view.sectionEnabled("gitea")');
     // Both cards ask for an equal share; neither may impose a minimum that pushes the other off screen.
-    expect(view.match(/Layout\.preferredWidth: 1\n\s+Layout\.minimumWidth: 0\n\s+visible: view\.sectionEnabled\("(activity|github)"\)/g)).toHaveLength(2);
+    expect(view.match(/Layout\.preferredWidth: 1\n\s+Layout\.minimumWidth: 0\n\s+visible: view\.sectionEnabled\("(activity|github|gitea)"\)/g)).toHaveLength(3);
     expect(view).toContain("cells: view.github.cells || []");
     expect(view).toContain("kindFiltersCells: true");
     expect(view).toContain("showRepos: true");

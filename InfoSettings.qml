@@ -20,7 +20,8 @@ Item {
     { id: "machine", label: "MACHINE" },
     { id: "changes", label: "CHANGES" },
     { id: "projects", label: "PROJECTS" },
-    { id: "media", label: "MEDIA" }
+    { id: "media", label: "MEDIA" },
+    { id: "gitea", label: "GITEA" }
   ]
   property var sections: ({})
   property var attentionMuted: ({})
