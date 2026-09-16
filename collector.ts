@@ -547,6 +547,7 @@ function hermesSessions(): Map<number, string> {
 // provider detection from argv — match the launcher name, not the runtime
 const PROVIDERS: [string, RegExp][] = [
   ["claude", /(^|\/)claude(\.js|\.mjs|\.cjs)?$/],
+  ["kimi", /(^|\/)kimi(\.js|\.mjs)?$/],
   ["codex", /(^|\/)codex(\.js|\.mjs)?$/],
   ["grok", /(^|\/)grok(\.js|\.mjs)?$/],
   ["grok-bot", /(^|\/)grok-bot(\s|$)/],
@@ -1663,6 +1664,54 @@ function codexHistory() {
   threads.sort((a, b) => b.updatedAt - a.updatedAt);
   return { present: true, prompts, threads: threads.slice(0, 8), threadCount: threads.length };
 }
+// Kimi Code keeps one wire.jsonl event log per session under
+// sessions/<wd-hash>/<session-id>/agents/main/. Its context.append_message
+// events carry an epoch-ms "time"; session_index.jsonl maps ids to workDirs.
+// user-history/*.jsonl has no timestamps, so it cannot feed the heatmap.
+function kimiHistory() {
+  const base = join(HOME, ".kimi-code");
+  if (!existsSync(base)) return { present: false };
+  const workDirBySession = new Map<string, string>();
+  for (const l of (read(join(base, "session_index.jsonl")) || "").split("\n").filter(Boolean).slice(-MAX_COLLECTION_ITEMS)) {
+    try {
+      const e = parseJsonBounded(l, 2048, 12);
+      const id = cleanSessionId(e?.sessionId), dir = uiString(e?.workDir, 512);
+      if (id && dir) workDirBySession.set(id, shortPath(dir));
+    } catch {}
+  }
+  let prompts = 0;
+  outer: for (const wd of ls(join(base, "sessions")).slice(0, MAX_COLLECTION_ITEMS)) {
+    const wdFull = join(base, "sessions", wd);
+    try { const st = lstatSync(wdFull); if (st.isSymbolicLink() || !st.isDirectory()) continue; } catch { continue; }
+    for (const sid of ls(wdFull).slice(0, MAX_COLLECTION_ITEMS)) {
+      const wire = join(wdFull, sid, "agents", "main", "wire.jsonl");
+      try { const st = lstatSync(wire); if (st.isSymbolicLink() || !st.isFile()) continue; } catch { continue; }
+      const session = cleanSessionId(sid);
+      const txt = readHistoryTail(wire) || "";
+      for (const l of txt.split("\n").filter(Boolean)) {
+        if (!l.includes('"context.append_message"') || !l.includes('"role":"user"')) continue;
+        try {
+          const e = parseJsonBounded(l, 8192, 12);
+          const ts = Number(e?.time);
+          if (!Number.isFinite(ts) || ts <= 0) continue;
+          prompts++;
+          bump(ts, "kimi"); cnt("kimi", ts);
+          if (!plausibleTimestamp(ts)) continue;
+          const parts = e?.message?.content;
+          const raw = Array.isArray(parts) ? parts.find((p: any) => p && p.type === "text")?.text : "";
+          const text = uiString(raw, 4096).trim();
+          // Reminders/cron envelopes arrive as synthetic user messages; slash
+          // commands are UI actions, not prompts.
+          if (!text || text.startsWith("<") || text.startsWith("/")) continue;
+          recent.push({ provider: "kimi", ts, project: workDirBySession.get(session) || "", text: safePrompt(text), session });
+        } catch {}
+      }
+      if (prompts >= MAX_COLLECTION_ITEMS) break outer;
+    }
+  }
+  return { present: true, prompts };
+}
+
 // Grok >= 1.0 gives every session its own directory under the encoded cwd
 // (sessions/<encoded-cwd>/<session-id>/), while prompts stay in the one
 // prompt_history.jsonl per cwd that older builds also wrote. Counting the
@@ -2469,7 +2518,7 @@ async function runCollector() {
   const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama, externalIpS, github] = await Promise.all([
     Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(), externalIp(), githubActivity(),
   ]);
-  const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory(), grokBot = grokBotHistory(), opencode = opencodeHistory(), pi = piHistory(), hermes = hermesHistory();
+  const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory(), grokBot = grokBotHistory(), opencode = opencodeHistory(), pi = piHistory(), hermes = hermesHistory(), kimi = kimiHistory();
   recent.sort((a, b) => b.ts - a.ts);
   for (const entry of recent) entry.activityCell = activityCellIndex(entry.ts, heatDays);
   inferSessionIdsFromRecent(sessions, recent);
@@ -2502,7 +2551,7 @@ async function runCollector() {
       attention: sessions.filter((s: any) => s.attention),
       events: notificationState.events,
       collisions: repoCollisions(sessions),
-      counts, providers: { claude, codex, grok, grokBot, opencode, pi, hermes, ollama }, usage: agentsUsage(),
+      counts, providers: { claude, codex, grok, grokBot, opencode, pi, hermes, kimi, ollama }, usage: agentsUsage(),
       usageDays: heatDays.map(localDayKey),
       heatmap: { start: start7, days: heatDays, cells: heat.map(c => [c.n, c.p]) },
       github,
