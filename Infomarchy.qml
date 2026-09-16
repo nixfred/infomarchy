@@ -270,6 +270,36 @@ Scope {
         window: panel
       }
 
+      // hymission's stage sidebar reserves a left band over the background
+      // layer; keep the dashboard clear of it. Polled — the reservation only
+      // changes with config or monitor changes, not per frame.
+      property var stageState: null
+      readonly property real stageReservation: {
+        var screens = stageState && stageState.screens ? stageState.screens : []
+        for (var i = 0; i < screens.length; i++)
+          if (screens[i].monitor === modelData.name)
+            return Math.max(0, Number(screens[i].reservation) || 0)
+        return 0
+      }
+      Process {
+        id: stageStateProc
+        command: ["sh", "-c", "hyprctl hymission-stage-state 2>/dev/null || true"]
+        stdout: StdioCollector {
+          waitForEnd: true
+          onStreamFinished: {
+            try { panel.stageState = JSON.parse(String(text || "").trim()) }
+            catch (e) { panel.stageState = null }
+          }
+        }
+      }
+      Timer {
+        interval: 1500
+        triggeredOnStart: true
+        running: true
+        repeat: true
+        onTriggered: if (!stageStateProc.running) stageStateProc.running = true
+      }
+
       // Dimming belongs to the dashboard. When SUPER+I hides it, restore the
       // wallpaper to full brightness instead of leaving an invisible shade.
       // It is carried by the wrapper so a still and a video dim alike.
@@ -350,7 +380,13 @@ Scope {
       }
 
       InfoView {
-        anchors.fill: parent
+        anchors {
+          top: parent.top
+          bottom: parent.bottom
+          right: parent.right
+          left: parent.left
+          leftMargin: panel.stageReservation
+        }
         desk: infoModel
         settings: dashboardSettings
         interactive: true
