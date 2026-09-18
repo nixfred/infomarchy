@@ -1,0 +1,4 @@
+LR-T: infomarchy, quiet-session-grouping, conflict-resolution, contributor-pr
+LR-D: infomarchy, omarchy-plugins
+LR-K: stale-pr-rebased-by-maintainer, changelog-keep-both-sides, qml-resolve-ceilings
+LR-E: bun test 273 pass on merged tree
