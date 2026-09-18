@@ -991,7 +991,13 @@ export function sessionStaleness(session: any, stamp = now): { idleSince: number
   const idleMs = Math.max(0, stamp - idleSince);
   const hosts: any[] = Array.isArray(session.hosts) ? session.hosts : [];
   const background = hosts.some(host => host && host.kind === "background");
-  const attachable = hosts.some(host => host && ((host.kind === "boomux" && host.shellId) || (host.kind === "background" && host.attachId)));
+  // "Reachable" must mean exactly what clicking the card does. InfoModel's
+  // focusHerdrPane jumps to a pane given ANY of workspace/tab/pane id, but
+  // herdr was missing from this list, so every herdr-hosted session counted as
+  // unattended and went stale at 6 hours — live ones included. On a desk where
+  // every agent runs in herdr that is the whole session list wearing STALE.
+  const herdrReachable = (host: any) => host.kind === "herdr" && !!(host.workspaceId || host.tabId || host.paneId);
+  const attachable = hosts.some(host => host && (herdrReachable(host) || (host.kind === "boomux" && host.shellId) || (host.kind === "background" && host.attachId)));
   const unattended = background || (!session.window && !attachable);
   return { idleSince, idleMs, unattended, stale: unattended && !session.busy && idleMs >= STALE_AFTER_MS };
 }

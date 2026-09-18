@@ -37,6 +37,45 @@ function decodeFrames(output: string): any {
   return JSON.parse(payload);
 }
 
+describe("sessionStaleness", () => {
+  const hours = (n: number) => Date.now() - n * 3600_000;
+
+  test("a herdr pane is reachable, so its session is never called stale", () => {
+    // Reported from a live desk: 14 cards, 12 wearing STALE, including
+    // sessions running right then. Every agent on that machine runs inside
+    // herdr, and herdr was absent from the reachable list, so the whole
+    // session list aged into STALE at 6 hours.
+    const herdr = { kind: "herdr", workspaceId: "w2", tabId: "w2:t3", paneId: "w2:p7" };
+    const old = sessionStaleness({ hosts: [herdr], topicAt: hours(45) });
+    expect(old.unattended).toBe(false);
+    expect(old.stale).toBe(false);
+  });
+
+  test("any one of workspace, tab or pane id is enough, matching what the click uses", () => {
+    // focusHerdrPane jumps with any single id, so reachability must agree.
+    for (const host of [{ kind: "herdr", workspaceId: "w1" }, { kind: "herdr", tabId: "w1:t1" }, { kind: "herdr", paneId: "w1:p1" }])
+      expect(sessionStaleness({ hosts: [host], topicAt: hours(45) }).stale).toBe(false);
+  });
+
+  test("a herdr host carrying no ids is still unreachable", () => {
+    // Nothing to jump to means nothing a human can get back to.
+    expect(sessionStaleness({ hosts: [{ kind: "herdr" }], topicAt: hours(45) }).stale).toBe(true);
+  });
+
+  test("a background session counts as unattended even when it can be attached to", () => {
+    // Deliberate and unchanged: nobody is sitting at a daemon-hosted session,
+    // so it ages into STALE whether or not `claude attach` could reach it.
+    // Herdr is the opposite case — a pane is a place a human actually sits.
+    expect(sessionStaleness({ hosts: [{ kind: "background" }], topicAt: hours(7) }).stale).toBe(true);
+    expect(sessionStaleness({ hosts: [{ kind: "background", attachId: "abc" }], topicAt: hours(7) }).stale).toBe(true);
+  });
+
+  test("busy or recent sessions are never stale", () => {
+    expect(sessionStaleness({ hosts: [], busy: true, topicAt: hours(45) }).stale).toBe(false);
+    expect(sessionStaleness({ hosts: [], topicAt: hours(1) }).stale).toBe(false);
+  });
+});
+
 describe("providerOf", () => {
   test("treats an interactive Codex CLI as a session", () => {
     expect(providerOf(["/usr/bin/codex", "--yolo"])).toBe("codex");
