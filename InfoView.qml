@@ -139,6 +139,23 @@ Item {
   // What the SESSIONS card actually renders: every loud session as its own
   // card, each provider's quiet ones grouped into one.
   readonly property var displaySessions: groupQuietSessions(sessions, sessionGroupState, sessionQuietMs, 2, Number(snap.ts || Date.now()))
+  // What the desk actually shows. A quiet session drops off unless its provider
+  // was explicitly grouped, in which case the group card is the thing you asked
+  // to keep. sessionIsQuiet already refuses to call a busy session quiet, or one
+  // waiting on your answer or blocked, so this can never hide something that
+  // needs you.
+  readonly property var visibleSessions: {
+    if (!settings.hideQuietSessions) return displaySessions
+    var now = Number(snap.ts || Date.now()), result = []
+    for (var i = 0; i < displaySessions.length; i++) {
+      var item = displaySessions[i]
+      if (item.grouped === true || !sessionIsQuiet(item, sessionQuietMs, now)) result.push(item)
+    }
+    return result
+  }
+  // Never let the desk quietly under-report the machine: whatever the rule
+  // drops is counted and named in the card hint.
+  readonly property int hiddenQuietCount: displaySessions.length - visibleSessions.length
   readonly property int groupedSessionCount: {
     var total = 0
     for (var i = 0; i < displaySessions.length; i++)
@@ -508,11 +525,11 @@ Item {
   // `index` against keyboardSessionIndex, so stepping through anything other
   // than the rendered list would put the highlight ring on the wrong card.
   function keyboardStep(delta) {
-    if (!displaySessions.length) { keyboardSessionIndex = -1; return }
-    keyboardSessionIndex = (keyboardSessionIndex + Number(delta) + displaySessions.length) % displaySessions.length
+    if (!visibleSessions.length) { keyboardSessionIndex = -1; return }
+    keyboardSessionIndex = (keyboardSessionIndex + Number(delta) + visibleSessions.length) % visibleSessions.length
   }
   function activateKeyboardSession() {
-    var session = displaySessions[keyboardSessionIndex]
+    var session = visibleSessions[keyboardSessionIndex]
     if (session && session.window && session.window.address) navigateTo(session.window.address)
   }
   // inspectedSession/selectedPrompt hold a copy of the delegate's modelData from
@@ -1179,6 +1196,8 @@ Item {
                   : view.sessions.length + " running")
                 + (view.groupedSessionCount ? " · " + view.groupedSessionCount + " quiet grouped"
                     : view.quietSessionCount ? " · " + view.quietSessionCount + " quiet" : "")
+                + (view.hiddenQuietCount ? " · " + view.hiddenQuietCount + " idle over "
+                    + view.settings.sessionQuietMinutes + "m hidden" : "")
                 + " · left focus · right inspect"
                 + (view.groupableProviders.length ? " · ▴▾ next to an agent name groups it" : "")
                 + (view.desk.error ? " · ⚠ " + view.desk.error : "")
@@ -1195,21 +1214,21 @@ Item {
             // ops cards are the reason the desk exists, so the session cards are
             // the ones that give way. Dense mode narrows them and drops the
             // lines a glance does not need — the inspector still has all of it.
-            readonly property bool dense: view.displaySessions.length > 8
+            readonly property bool dense: view.visibleSessions.length > 8
             // Columns are chosen to bound the number of ROWS, since rows are
             // what push the desk off the screen. Fewest columns that keep it to
             // about four, so the cards stay as wide as that allows.
             readonly property int targetColumns: dense
-              ? Math.max(6, Math.min(8, Math.ceil(view.displaySessions.length / 4)))
-              : Math.max(4, Math.min(6, view.displaySessions.length))
+              ? Math.max(6, Math.min(8, Math.ceil(view.visibleSessions.length / 4)))
+              : Math.max(4, Math.min(6, view.visibleSessions.length))
             // Measured, not guessed: this is multiplied by fontScale, and a
             // dense minimum of 138 came out at 184 on a 1.33 desk — wider than
             // the fitted width, so Flow fell back to six per row and the extra
             // columns bought nothing. 112 leaves eight columns reachable.
-            readonly property int minimumCardWidth: Math.round((dense ? 112 : view.displaySessions.length > 4 ? 150 : 210) * Style.fontScale)
+            readonly property int minimumCardWidth: Math.round((dense ? 112 : view.visibleSessions.length > 4 ? 150 : 210) * Style.fontScale)
             readonly property int fittedCardWidth: Math.floor((width - spacing * (targetColumns - 1)) / targetColumns)
             Repeater {
-              model: view.displaySessions
+              model: view.visibleSessions
               delegate: Rectangle {
                 id: sc
                 required property var modelData
@@ -1454,6 +1473,8 @@ Item {
               text: view.desk.bunChecked && !view.desk.bunAvailable ? view.desk.missingDependencyHint
                 : view.projectFilter && view.allSessions.length > 0
                   ? "no sessions in " + view.projectFilter.replace(/^.*\//, "") + " — " + view.allSessions.length + " running elsewhere · clear the PROJECT chip above to see them"
+                : view.hiddenQuietCount > 0
+                  ? "nothing active — " + view.hiddenQuietCount + " session" + (view.hiddenQuietCount === 1 ? "" : "s") + " idle over " + view.settings.sessionQuietMinutes + "m, still running and hidden"
                 : view.desk.ready ? "no agents running — go start something"
                 : view.desk.error ? "collector error · " + view.desk.error
                 : "collecting…"

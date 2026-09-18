@@ -297,12 +297,12 @@ describe("right column fits a 1080p desk", () => {
   test("a busy desk shrinks its session cards instead of burying everything below them", () => {
     // 25 sessions at six columns was five rows of eight-line cards — the whole
     // screen, with no ACTIVITY, RECENT TASKS or ops cards under it.
-    expect(view).toContain("readonly property bool dense: view.displaySessions.length > 8");
+    expect(view).toContain("readonly property bool dense: view.visibleSessions.length > 8");
 
     // Columns bound the number of ROWS, because rows are what push the desk off.
     const columns = view.match(/readonly property int targetColumns: dense[\s\S]*?\n              : [^\n]*/)?.[0];
     expect(columns).toBeTruthy();
-    expect(columns).toContain("Math.ceil(view.displaySessions.length / 4)");
+    expect(columns).toContain("Math.ceil(view.visibleSessions.length / 4)");
 
     const density = (n: number) => Math.max(6, Math.min(8, Math.ceil(n / 4)));
     // Measured on a real desk: left column 1327, card padding 13, gap 11.
@@ -402,6 +402,44 @@ describe("LOCAL AI rows stay inside the card body", () => {
     expect(view).toContain("function geometryReport(): string");
     const service = readFileSync(join(import.meta.dir, "Infomarchy.qml"), "utf8");
     expect(service).toContain("function geometry(): string { return root.deskView ? root.deskView.geometryReport() : \"{}\" }");
+  });
+});
+
+describe("an idle session drops off the desk and comes back on its own", () => {
+  // Reported from a live desk: 14 cards, only two agents actually in use, the
+  // rest sitting idle in herdr panes for two days. The desk is for what is
+  // happening now.
+  test("quiet sessions are filtered out of what the desk renders", () => {
+    expect(view).toContain("readonly property var visibleSessions");
+    expect(view).toContain("if (!settings.hideQuietSessions) return displaySessions");
+    // The render path, the keyboard walk and the density maths must all agree
+    // on the same list, or Enter focuses a card nobody can see.
+    expect(view).toContain("model: view.visibleSessions");
+    expect(view).toContain("var session = visibleSessions[keyboardSessionIndex]");
+    expect(view).toContain("readonly property bool dense: view.visibleSessions.length > 8");
+    expect(view).not.toContain("model: view.displaySessions");
+  });
+
+  test("a provider you explicitly grouped keeps its card", () => {
+    // Asking to group a fanned-out roster is asking to keep seeing it.
+    expect(view).toContain("item.grouped === true || !sessionIsQuiet(item, sessionQuietMs, now)");
+  });
+
+  test("the desk says how many it dropped, in the hint and when empty", () => {
+    expect(view).toContain("readonly property int hiddenQuietCount: displaySessions.length - visibleSessions.length");
+    expect(view).toContain('" idle over "');
+    expect(view).toContain("still running and hidden");
+  });
+
+  test("hiding is on by default, persisted, and reversible without a rebuild", () => {
+    expect(settings).toContain("property bool hideQuietSessions: true");
+    expect(settings).toContain("hideQuietSessions: hideQuietSessions,");
+    expect(settings).toContain("function setHideQuietSessions(enabled)");
+    // An older config file predates the key; absent must not read as off.
+    expect(settings).toContain("hideQuietSessions = !parsed || parsed.hideQuietSessions !== false");
+    const wallpaper = readFileSync(join(import.meta.dir, "Infomarchy.qml"), "utf8");
+    expect(wallpaper).toContain("function toggleHideQuiet()");
+    expect(wallpaper).toContain("function setQuietMinutes(v: string)");
   });
 });
 
@@ -889,18 +927,20 @@ describe("quiet sessions group into one card per provider", () => {
     expect(state.persists).toBe(2);
   });
 
-  test("the desk draws, measures and navigates the grouped list, not the raw one", () => {
-    // Drawing the group while sizing from the ungrouped count would leave the
-    // desk dense for cards it no longer draws — which is the whole problem.
-    expect(view).toContain("model: view.displaySessions");
-    expect(view).toContain("readonly property bool dense: view.displaySessions.length > 8");
-    expect(view).toContain("Math.ceil(view.displaySessions.length / 4)");
-    expect(view).toContain("Math.max(4, Math.min(6, view.displaySessions.length))");
-    expect(view).toContain("dense ? 112 : view.displaySessions.length > 4 ? 150 : 210");
+  test("the desk draws, measures and navigates the list it renders, not the raw one", () => {
+    // Drawing one list while sizing from another would leave the desk dense for
+    // cards it no longer draws — which is the whole problem. The rendered list
+    // is now displaySessions with quiet ones dropped, so every consumer moved
+    // to visibleSessions together.
+    expect(view).toContain("model: view.visibleSessions");
+    expect(view).toContain("readonly property bool dense: view.visibleSessions.length > 8");
+    expect(view).toContain("Math.ceil(view.visibleSessions.length / 4)");
+    expect(view).toContain("Math.max(4, Math.min(6, view.visibleSessions.length))");
+    expect(view).toContain("dense ? 112 : view.visibleSessions.length > 4 ? 150 : 210");
     // The delegate rings the card whose index matches, so J/K has to walk the
     // same list the Repeater does or the ring lands on the wrong card.
-    expect(view).toContain("keyboardSessionIndex = (keyboardSessionIndex + Number(delta) + displaySessions.length) % displaySessions.length");
-    expect(view).toContain("var session = displaySessions[keyboardSessionIndex]");
+    expect(view).toContain("keyboardSessionIndex = (keyboardSessionIndex + Number(delta) + visibleSessions.length) % visibleSessions.length");
+    expect(view).toContain("var session = visibleSessions[keyboardSessionIndex]");
     expect(view).not.toContain("model: view.sessions\n");
   });
 

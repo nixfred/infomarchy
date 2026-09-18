@@ -230,6 +230,13 @@ Scope {
     function setNotifications(v: string): void { dashboardSettings.setNotificationsEnabled(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
     function toggleNotifications(): void { dashboardSettings.toggleNotificationsEnabled() }
     function setQuietHours(v: string): void { dashboardSettings.setQuietHoursEnabled(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
+    // Idle sessions drop off the desk by default; this puts them back without
+    // a rebuild, and setQuietMinutes moves the line they fall behind.
+    function setHideQuiet(v: string): void { dashboardSettings.setHideQuietSessions(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
+    function toggleHideQuiet(): void { dashboardSettings.toggleHideQuietSessions() }
+    function getHideQuiet(): string { return dashboardSettings.hideQuietSessions ? "true" : "false" }
+    function setQuietMinutes(v: string): void { dashboardSettings.setSessionQuietMinutes(Number(v)) }
+    function getQuietMinutes(): string { return String(dashboardSettings.sessionQuietMinutes) }
     function toggleQuietHours(): void { dashboardSettings.toggleQuietHoursEnabled() }
     function setDemo(v: string): void {
       root.demoMode = ["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0

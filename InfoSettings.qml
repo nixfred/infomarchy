@@ -40,6 +40,17 @@ Item {
   // every idle session whatever its age; a session that is busy or wants an
   // answer is never quiet, so the group can never hide something that needs you.
   property int sessionQuietMinutes: 60
+  // What happens to a quiet session. Grouping was the first answer and it is
+  // still right for an app that fans one process into a dozen sessions, where
+  // you want the roster in view as one card. For an ordinary agent left idle in
+  // a pane it is not: the desk is for what is happening now, and a session that
+  // has done nothing for an hour is not. Those drop off instead, and come back
+  // by themselves the moment that pane has a running agent again, because the
+  // card list is rebuilt from live processes every tick. Nothing is killed and
+  // nothing is forgotten: the count stays in the card hint. A provider you
+  // explicitly asked to group keeps its group card, since asking to group it is
+  // asking to keep seeing it.
+  property bool hideQuietSessions: true
   // Sound for a video wallpaper. Off unless asked for: a wallpaper that
   // starts talking the moment it is set is a bug, not a feature.
   property bool videoAudio: false
@@ -87,6 +98,7 @@ Item {
       notificationsEnabled = !parsed || typeof parsed.notificationsEnabled !== "boolean" ? true : parsed.notificationsEnabled
       sessionGroups = parsed && parsed.sessionGroups && typeof parsed.sessionGroups === "object" ? parsed.sessionGroups : ({})
       sessionQuietMinutes = parsed && Number.isInteger(parsed.sessionQuietMinutes) ? Math.max(0, Math.min(10080, parsed.sessionQuietMinutes)) : 60
+      hideQuietSessions = !parsed || parsed.hideQuietSessions !== false
       videoAudio = !!(parsed && parsed.videoAudio === true)
       quietHoursEnabled = !!(parsed && parsed.quietHoursEnabled === true)
       quietStartHour = parsed && Number.isInteger(parsed.quietStartHour) ? Math.max(0, Math.min(23, parsed.quietStartHour)) : 22
@@ -108,6 +120,7 @@ Item {
       notificationsEnabled = true
       sessionGroups = ({})
       sessionQuietMinutes = 60
+      hideQuietSessions = true
       videoAudio = false
       quietHoursEnabled = false
       quietStartHour = 22
@@ -172,6 +185,7 @@ Item {
       notificationsEnabled: notificationsEnabled,
       sessionGroups: sessionGroups,
       sessionQuietMinutes: sessionQuietMinutes,
+      hideQuietSessions: hideQuietSessions,
       videoAudio: videoAudio,
       quietHoursEnabled: quietHoursEnabled,
       quietStartHour: quietStartHour,
@@ -246,6 +260,8 @@ Item {
     return true
   }
   function toggleSessionGroup(provider) { return setSessionGroup(provider, !sessionGroupEnabled(provider)) }
+  function setHideQuietSessions(enabled) { hideQuietSessions = !!enabled; persist() }
+  function toggleHideQuietSessions() { setHideQuietSessions(!hideQuietSessions) }
   function setSessionQuietMinutes(minutes) {
     var value = Number(minutes)
     if (!isFinite(value) || value < 0 || value > 10080) return false
