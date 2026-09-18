@@ -3,7 +3,7 @@ import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join, relative } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents, sessionStaleness, STALE_AFTER_MS, decodeBase32, grokBotLine, grokBotRow, grokBotAttention, attachGrokBotRoster, grokSessionUsage, usageModelBreakdown, windowMatchesProvider, hermesSessionByPid, validNetDevice, observationalGitCommand, observationalGitEnv, piUserText, piSessionIdFromName, cursorProjectPath, cursorUserText, cursorTimestamp, cursorTranscriptBusy, cursorIsWorker, cursorWorkspaceDir, cursorCurrentChat, sessionBusyState } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents, sessionStaleness, opencodeUsageFromRows, STALE_AFTER_MS, decodeBase32, grokBotLine, grokBotRow, grokBotAttention, attachGrokBotRoster, grokSessionUsage, usageModelBreakdown, windowMatchesProvider, hermesSessionByPid, validNetDevice, observationalGitCommand, observationalGitEnv, piUserText, piSessionIdFromName, cursorProjectPath, cursorUserText, cursorTimestamp, cursorTranscriptBusy, cursorIsWorker, cursorWorkspaceDir, cursorCurrentChat, sessionBusyState } from "./collector.ts";
 import { sessionEventId } from "./notification-events.ts";
 
 const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
@@ -36,6 +36,70 @@ function decodeFrames(output: string): any {
   expect(frames.at(-1)).toMatchObject({ v: 1, type: "end", chars: payload.length });
   return JSON.parse(payload);
 }
+
+describe("opencodeUsageFromRows", () => {
+  const day = 86400_000;
+  const at = (stamp: number, over: any = {}) => ({
+    provider: "kimi-code-plan-global", model: "k3", ts: stamp, session: "s1",
+    input: 100, output: 10, reasoning: 0, cacheRead: 5000, cacheWrite: 20, ...over,
+  });
+
+  test("groups by provider and model, so two providers serving one model stay apart", () => {
+    // OpenCode runs several providers at once; merging on model alone would
+    // put a subscription plan and a metered endpoint in the same row.
+    const stamp = Date.now();
+    const u = opencodeUsageFromRows([
+      at(stamp),
+      at(stamp, { provider: "opencode-go", model: "k3" }),
+    ], stamp);
+    expect(Object.keys(u.modelUsage).sort()).toEqual(["kimi-code-plan-global/k3", "opencode-go/k3"]);
+  });
+
+  test("cache reads are recorded but never counted as burn", () => {
+    // The cheap path would swamp the scale — the same rule the rest of the
+    // desk follows. 100 in + 10 out + 20 cache write = 130, not 5130.
+    const stamp = Date.now();
+    const u = opencodeUsageFromRows([at(stamp)], stamp);
+    expect(u.todayTotalTokens).toBe(130);
+    expect(u.todayTokensByModel["kimi-code-plan-global/k3"]).toBe(130);
+    expect(u.modelUsage["kimi-code-plan-global/k3"].cacheReadInputTokens).toBe(5000);
+  });
+
+  test("today is today, and older turns still count toward lifetime", () => {
+    const stamp = Date.now();
+    const u = opencodeUsageFromRows([at(stamp), at(stamp - 3 * day, { session: "s2" })], stamp);
+    expect(u.todayPrompts).toBe(1);
+    expect(u.totalPrompts).toBe(2);
+    expect(u.todaySessions).toBe(1);
+    expect(u.totalSessions).toBe(2);
+    expect(u.modelUsage["kimi-code-plan-global/k3"].inputTokens).toBe(200);
+  });
+
+  test("reasoning tokens are output, because that is what they are billed as", () => {
+    const stamp = Date.now();
+    const u = opencodeUsageFromRows([at(stamp, { reasoning: 40 })], stamp);
+    expect(u.modelUsage["kimi-code-plan-global/k3"].outputTokens).toBe(50);
+    expect(u.todayTotalTokens).toBe(170);
+  });
+
+  test("nothing to report reads as nothing, never as a provider that burned zero", () => {
+    // An empty result must not render a tab claiming 0 tokens used.
+    expect(opencodeUsageFromRows([])).toBeNull();
+    expect(opencodeUsageFromRows([{ provider: "", model: "", ts: 0 }] as any)).toBeNull();
+  });
+
+  test("a row missing its model or timestamp is skipped, not guessed", () => {
+    const stamp = Date.now();
+    const u = opencodeUsageFromRows([at(stamp), { provider: "x", model: "", ts: stamp }, at(stamp, { ts: 0 })], stamp);
+    expect(u.totalPrompts).toBe(1);
+  });
+
+  test("recentDays carries the date shape the trend chart reads", () => {
+    const stamp = Date.now();
+    const u = opencodeUsageFromRows([at(stamp)], stamp);
+    expect(alignDailyTokens(u.recentDays, [localDayKey(stamp)])).toEqual([130]);
+  });
+});
 
 describe("sessionStaleness", () => {
   const hours = (n: number) => Date.now() - n * 3600_000;

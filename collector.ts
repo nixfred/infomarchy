@@ -2520,6 +2520,94 @@ export function usageModelBreakdown(j: any): any[] {
     .sort((a, b) => (b.todayTokens - a.todayTokens) || (b.lifetimeTokens - a.lifetimeTokens) || (b.sessions - a.sessions) || a.id.localeCompare(b.id))
     .slice(0, 8);
 }
+// OpenCode is the only agent on this desk that fans out across providers: one
+// install answers from a Kimi coding plan, an opencode-go model, a local Ollama
+// and OpenAI in the same week. Omarchy ships no collector for it, so without
+// this the subscription bar simply has nothing to say about any of them.
+//
+// Every assistant message it writes carries providerID, modelID and a full
+// token block, so the numbers come from the same file the prompt history
+// already reads. No network call, and nothing here knows a model name: the key
+// is provider/model, so a plan that arrives tomorrow shows up on its own.
+//
+// Burn excludes cache reads, the same convention the rest of the desk uses:
+// they are the cheap path and would swamp the scale.
+export function opencodeUsageFromRows(rows: any[], stamp = now): any | null {
+  const count = (value: unknown) => { const n = Number(value); return Number.isFinite(n) && n >= 0 ? n : 0; };
+  if (!Array.isArray(rows) || !rows.length) return null;
+  const dayStart = new Date(stamp); dayStart.setHours(0, 0, 0, 0);
+  const todayFrom = dayStart.getTime();
+  const modelUsage: Record<string, any> = {}, modelSessions: Record<string, Set<string>> = {};
+  const todayTokensByModel: Record<string, number> = {}, byDay = new Map<string, number>();
+  const sessions = new Set<string>(), todaySessions = new Set<string>(), days = new Set<string>();
+  let todayPrompts = 0, totalPrompts = 0, todayTotalTokens = 0;
+  for (const row of rows) {
+    const provider = uiString(row?.provider, 48), model = uiString(row?.model, 48);
+    const ts = Number(row?.ts || 0);
+    if (!provider || !model || !Number.isFinite(ts) || ts <= 0) continue;
+    const key = `${provider}/${model}`;
+    const input = count(row?.input), output = count(row?.output);
+    const reasoning = count(row?.reasoning), cacheRead = count(row?.cacheRead), cacheWrite = count(row?.cacheWrite);
+    const burn = input + output + reasoning + cacheWrite;
+    const entry = modelUsage[key] || (modelUsage[key] = { inputTokens: 0, outputTokens: 0, cacheReadInputTokens: 0, cacheCreationInputTokens: 0 });
+    entry.inputTokens += input; entry.outputTokens += output + reasoning;
+    entry.cacheReadInputTokens += cacheRead; entry.cacheCreationInputTokens += cacheWrite;
+    const session = uiString(row?.session, 64);
+    if (session) { sessions.add(session); (modelSessions[key] || (modelSessions[key] = new Set())).add(session); }
+    totalPrompts++;
+    const day = localDayKey(ts);
+    days.add(day);
+    byDay.set(day, (byDay.get(day) || 0) + burn);
+    if (ts >= todayFrom) {
+      todayPrompts++; todayTotalTokens += burn;
+      todayTokensByModel[key] = (todayTokensByModel[key] || 0) + burn;
+      if (session) todaySessions.add(session);
+    }
+  }
+  if (!totalPrompts) return null;
+  const activeDates = [...days].sort();
+  return {
+    schemaVersion: 1, id: "opencode", name: "OpenCode", ready: true, scope: "local",
+    hasLocalStats: true, hasPromptStats: true, tierLabel: "", usageStatusText: "",
+    // OpenCode publishes no rate-limit window, so there is no honest meter to
+    // draw. The per-model breakdown is the truthful equivalent.
+    limits: [],
+    updatedAt: stamp,
+    todayPrompts, todaySessions: todaySessions.size, todayTotalTokens, todayTokensByModel,
+    totalPrompts, totalSessions: sessions.size, activeDays: activeDates.length, activeDates: activeDates.slice(-31),
+    modelUsage,
+    modelSessions: Object.fromEntries(Object.entries(modelSessions).map(([k, v]) => [k, v.size])),
+    recentDays: activeDates.slice(-31).map(date => ({ date, tokens: byDay.get(date) || 0 })),
+  };
+}
+function opencodeUsage(): any | null {
+  const dataRoot = process.env.XDG_DATA_HOME || join(HOME, ".local/share");
+  const path = join(dataRoot, "opencode/opencode.db");
+  // Same guard as the prompt reader: never follow a symlink into an arbitrary
+  // SQLite file, and never block on a FIFO.
+  try { if (!lstatSync(path).isFile()) return null; } catch { return null; }
+  let db: Database | null = null;
+  try {
+    db = new Database(path, { readonly: true });
+    const rows = db.query(`
+      SELECT json_extract(data, '$.providerID') AS provider,
+             json_extract(data, '$.modelID')    AS model,
+             time_created                       AS ts,
+             session_id                         AS session,
+             json_extract(data, '$.tokens.input')       AS input,
+             json_extract(data, '$.tokens.output')      AS output,
+             json_extract(data, '$.tokens.reasoning')   AS reasoning,
+             json_extract(data, '$.tokens.cache.read')  AS cacheRead,
+             json_extract(data, '$.tokens.cache.write') AS cacheWrite
+        FROM message
+       WHERE json_valid(data) AND json_extract(data, '$.role') = 'assistant'
+       ORDER BY time_created DESC
+       LIMIT 20000
+    `).all() as any[];
+    return opencodeUsageFromRows(rows);
+  } catch { return null; }
+  finally { try { db?.close(); } catch {} }
+}
 export function normalizeUsage(j: any, stamp = now): any {
   const count = (value: unknown) => { const n = Number(value); return Number.isFinite(n) && n >= 0 ? n : 0; };
   const modelUsage: Record<string, any> = {};
@@ -2627,6 +2715,8 @@ function agentsUsage() {
   // Only when Omarchy has not grown a collector of its own; a real cache is
   // always better than what can be inferred from the session directories.
   if (!out.grok) { const grok = grokUsage(); if (grok) out.grok = grok; }
+  // Same rule: a real Omarchy cache always wins over what we can infer.
+  if (!out.opencode) { const oc = opencodeUsage(); if (oc) out.opencode = normalizeUsage(oc); }
   return out;
 }
 
