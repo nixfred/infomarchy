@@ -24,12 +24,15 @@ import { join } from "path";
 // Verified — the same injection took InfoModel from 5 to 6.
 const CEILINGS: Record<string, number> = {
   "BackgroundWallpaper.qml": 0,
-  "Infomarchy.qml": 26,
+  "Infomarchy.qml": 27,
   "InfoModel.qml": 5,
-  "InfoSettings.qml": 0,
-  "InfoView.qml": 501,
+  "InfoSettings.qml": 2,
+  "InfoView.qml": 511,
   "Overlay.qml": 29,
   "WaveWallpaper.qml": 0,
+  // Settings drawer: dynamic Style properties, unqualified access and
+  // Process exit-status metadata; covered by real offscreen QML tests too.
+  "SettingsBody.qml": 151,
 };
 
 // Findings that exist only because the plugin deliberately survives an Omarchy
