@@ -110,6 +110,9 @@ describe("usage trend chart", () => {
     expect(view).toContain("readonly property var usageSeries");
     expect(view).toContain("id: trendCanvas");
     expect(view).toContain('text: view.usageMetric === "value" ? "≈ $ VALUE" : "TOKENS"');
+    expect(view).toContain("up.u.usageStatusText");
+    expect(view).toContain("color: Util.alpha(up.tone, 0.07)");
+    expect(view).toContain("border.color: Util.alpha(up.tone, 0.28)");
     expect(view).toContain("usageTrend.hovered");
     expect(view).toContain('"% cache reads"');
     expect(view).toContain('"unpriced"');
@@ -919,5 +922,18 @@ describe("the session inspector follows the session you opened", () => {
     expect(resolve({ pid: 42, provider: "grok-bot" }, [rows[0]])).toBe(rows[0]);
     expect(resolve({ pid: 7, provider: "claude" }, rows)).toBeNull();
     expect(resolve(null, rows)).toBeNull();
+  });
+});
+
+describe("hard refresh", () => {
+  test("HARD REFRESH is the first module-strip control and forces a collector pass", () => {
+    const strip = view.slice(view.indexOf("id: moduleStrip"), view.indexOf("id: leftColumn"));
+    expect(strip.indexOf("HARD REFRESH")).toBeGreaterThan(-1);
+    expect(strip.indexOf("HARD REFRESH")).toBeLessThan(strip.indexOf("Repeater {"));
+    expect(view).toContain("onClicked: view.desk.hardRefresh()");
+    expect(model).toContain("function hardRefresh()");
+    expect(model).toContain('cmd.push("--force-refresh")');
+    expect(service).toContain("function hardRefresh(): void { infoModel.hardRefresh() }");
+    expect(overlay).toContain("function hardRefresh() { infoModel.hardRefresh() }");
   });
 });
