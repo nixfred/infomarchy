@@ -45,8 +45,9 @@ entry in the module strip needing an explicit `true`.
 Merged f96507e. 329 tests pass on the merged tree. Scope accepted by Fred.
 
 Note on the handle: Augie's GitHub declares `augustinbralley` in both the profile
-field and social_accounts, but his own site says **@augman** twice. @augman is
-correct, confirmed by Fred, who knows him in person.
+field and social_accounts, but his own site says **@augman** twice and his
+commits in this very PR are authored `Augustin Bralley <augman@gmail.com>`.
+@augman is correct, confirmed by Fred, who knows him in person.
 
 ---
 
