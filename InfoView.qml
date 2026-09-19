@@ -219,6 +219,7 @@ Item {
   readonly property var collisions: ai.collisions || []
   readonly property var visibleCollisions: collisions.filter(function(item) { return projectMatches(item) })
   readonly property var usage: (ai && ai.usage) ? ai.usage : ({})
+  readonly property var fleet: (ai && Array.isArray(ai.fleet)) ? ai.fleet : ([])
   readonly property bool activityFilterActive: sectionEnabled("activity") && (activityCellFilter >= 0 || activityProviderFilter !== "")
   readonly property var visibleRecentTasks: {
     var rows = ai.recent || []
@@ -2030,7 +2031,7 @@ Item {
       // RIGHT COLUMN: usage + local AI + machine corner
       GridLayout {
         id: rightColumn
-        visible: view.sectionEnabled("usage") || view.sectionEnabled("localAi") || view.sectionEnabled("machine") || view.sectionEnabled("media") || view.sectionEnabled("containers")
+        visible: view.sectionEnabled("usage") || view.sectionEnabled("localAi") || view.sectionEnabled("machine") || view.sectionEnabled("media") || view.sectionEnabled("containers") || view.sectionEnabled("fleet")
         Layout.fillHeight: true
         // A fixed column: content-driven widths let the column drift narrower
         // whenever card text became shrinkable, and rows then overran the border.
@@ -2425,6 +2426,52 @@ Item {
               Tag { visible: !!(provRow.ps.opencode && provRow.ps.opencode.present); text: "opencode " + (provRow.ps.opencode ? provRow.ps.opencode.sessions : 0) + " sess"; tone: view.desk.providerColor("opencode") }
               Tag { visible: !!(provRow.ps.pi && provRow.ps.pi.present); text: "pi " + (provRow.ps.pi ? provRow.ps.pi.sessions : 0) + " sess"; tone: view.desk.providerColor("pi") }
               Tag { visible: !!(provRow.ps.cursor && provRow.ps.cursor.present); text: "cursor " + (provRow.ps.cursor ? provRow.ps.cursor.sessions : 0) + " chats" + (provRow.ps.cursor && provRow.ps.cursor.busy ? " · " + provRow.ps.cursor.busy + " working" : ""); tone: view.desk.providerColor("cursor") }
+            }
+          }
+        }
+
+        // ---- fleet: other hosts' AI agents, seen over SSH (fleet-remote.ts) ----
+        // Invisible until INFOMARCHY_FLEET_HOSTS names at least one host — an
+        // opt-in feature nobody configured should not sit on the desk as an
+        // empty card, same reasoning as "no Grok tag until you run Grok".
+        Card {
+          Layout.row: view.settings.rightIndex("fleet")
+          Layout.column: 0
+          Layout.fillWidth: true
+          visible: view.sectionEnabled("fleet") && view.fleet.length > 0
+          moveId: "fleet"
+          draggable: true
+          title: "FLEET"
+          hint: view.fleet.filter(function(h) { return h.ok }).length + "/" + view.fleet.length + " up"
+          ColumnLayout {
+            width: parent.width
+            spacing: Style.spacing.sm
+            Repeater {
+              model: view.fleet
+              delegate: RowLayout {
+                id: fleetRow
+                required property var modelData
+                Layout.fillWidth: true
+                spacing: Style.spacing.sm
+                Rectangle { width: 8; height: 8; radius: 4; color: fleetRow.modelData.ok ? view.desk.green : view.desk.red }
+                PlainText { text: fleetRow.modelData.label || fleetRow.modelData.host; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight }
+                Flow {
+                  Layout.fillWidth: false
+                  spacing: Style.spacing.xs
+                  visible: fleetRow.modelData.ok && (fleetRow.modelData.providers || []).length > 0
+                  Repeater {
+                    model: fleetRow.modelData.providers || []
+                    delegate: Tag {
+                      required property var modelData
+                      text: view.desk.providerLabel(modelData.provider) + (modelData.count > 1 ? " ×" + modelData.count : "")
+                      tone: view.desk.providerColor(modelData.provider)
+                    }
+                  }
+                }
+                PlainText { visible: fleetRow.modelData.ok && (fleetRow.modelData.providers || []).length === 0; text: "idle"; color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption }
+                PlainText { visible: !fleetRow.modelData.ok; text: "unreachable"; color: view.desk.red; font.family: view.mono; font.pixelSize: Style.font.caption }
+                PlainText { text: view.desk.ago(fleetRow.modelData.checkedAt); color: view.textFaint; font.family: view.mono; font.pixelSize: Style.font.caption; horizontalAlignment: Text.AlignRight }
+              }
             }
           }
         }

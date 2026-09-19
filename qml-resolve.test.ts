@@ -34,8 +34,11 @@ const CEILINGS: Record<string, number> = {
   // 509 came in with privacy mode (#17). The two above it are the topic mask
   // folded into that merge: qmllint cannot resolve a view-scoped function, so
   // each call site of displayTopic reads as a missing property, exactly like
-  // the displayTitle calls already counted here.
-  "InfoView.qml": 549,
+  // the displayTitle calls already counted here. 607 folds in the FLEET
+  // card's delegate (Repeater + required property + outer-scope
+  // references), the same false-positive shape the LOCAL AI delegate
+  // already produces ~26 of — see docs/fleet-remote-hosts.md.
+  "InfoView.qml": 569,
   "Overlay.qml": 29,
   "WaveWallpaper.qml": 0,
 };

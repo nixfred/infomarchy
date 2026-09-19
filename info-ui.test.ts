@@ -391,8 +391,8 @@ describe("right column fits a 1080p desk", () => {
 describe("containers card", () => {
   test("registers a reorderable lower-right module with per-row on/off toggles", () => {
     expect(settings).toContain('{ id: "containers", label: "CONTAINERS" }');
-    expect(settings).toContain('property var rightOrder: ["usage", "localAi", "machine", "media", "containers"]');
-    expect(settings).toContain('var allowed = ["usage", "localAi", "machine", "media", "containers"]');
+    expect(settings).toContain('property var rightOrder: ["usage", "localAi", "fleet", "machine", "media", "containers"]');
+    expect(settings).toContain('var allowed = ["usage", "localAi", "fleet", "machine", "media", "containers"]');
     expect(view).toContain('title: "CONTAINERS"');
     expect(view).toContain('moveId: "containers"');
     expect(view).toContain("component PowerToggle: Item");
@@ -647,20 +647,22 @@ describe("github activity heatmap", () => {
   test("registers GITHUB as a removable module beside ACTIVITY and reaches it from the keyboard", () => {
     const ids = [...settings.matchAll(/\{ id: "([a-zA-Z]+)", label: "[^"]+" \}/g)].map(match => match[1]);
     expect(ids.indexOf("github")).toBe(ids.indexOf("activity") + 1);
-    // 14 with CONTAINERS (#19). This count is pinned on purpose: a module
+    // 15 with CONTAINERS (#19) and FLEET (#35). Pinned on purpose: a module
     // added without a decision shows up here.
-    expect(ids).toHaveLength(14);
+    expect(ids).toHaveLength(15);
+    expect(ids[10]).toBe("media");
     expect(ids[11]).toBe("gitea");
     expect(ids[12]).toBe("apps");
-    expect(ids[10]).toBe("media");
 
     expect(overlay).toContain("event.key >= Qt.Key_0 && event.key <= Qt.Key_9");
     expect(overlay).toContain("event.key === Qt.Key_0 ? 9 : event.key - Qt.Key_1");
     // Key n toggles definitions[n-1]; 0 is the tenth. Documented as 4 = GITHUB, 0 = PROJECTS.
     expect(ids[3]).toBe("github");
     expect(ids[9]).toBe("projects");
-    // APPS took 12 before CONTAINERS landed, so CONTAINERS is 13.
+    // Appended in landing order: APPS 12, CONTAINERS 13, FLEET 14 — all
+    // beyond the keyboard's ten digit slots, so no existing shortcut moved.
     expect(ids[13]).toBe("containers");
+    expect(ids[14]).toBe("fleet");
   });
 
   test("shares one HeatPanel across equally sized activity, GitHub and Gitea cards", () => {
@@ -706,7 +708,7 @@ test("persisted Ollama origins reject credentials and request paths", () => {
 describe("media controls card", () => {
   test("registers a reorderable lower-right MPRIS card with prev/play/next and a title line", () => {
     expect(settings).toContain('{ id: "media", label: "MEDIA" }');
-    expect(settings).toContain('property var rightOrder: ["usage", "localAi", "machine", "media", "containers"]');
+    expect(settings).toContain('property var rightOrder: ["usage", "localAi", "fleet", "machine", "media", "containers"]');
     expect(view).toContain('title: "MEDIA CONTROLS"');
     expect(view).toContain('moveId: "media"');
     expect(view).toContain("import Quickshell.Services.Mpris");

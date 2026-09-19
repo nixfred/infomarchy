@@ -23,7 +23,12 @@ Item {
     { id: "media", label: "MEDIA" },
     { id: "gitea", label: "GITEA" },
     { id: "apps", label: "APPS" },
-    { id: "containers", label: "CONTAINERS" }
+    { id: "containers", label: "CONTAINERS" },
+    // Appended, not inserted: definitions[0..9] map to keyboard digits 1-9/0
+    // (see Overlay.qml), so a mid-list insertion would silently reassign an
+    // existing shortcut. FLEET lands beyond the keyboard's reach, same as
+    // MEDIA and GITEA already do.
+    { id: "fleet", label: "FLEET" }
   ]
   property var sections: ({})
   property var attentionMuted: ({})
@@ -72,11 +77,11 @@ Item {
   property int privacyUnlockCount: 0
   readonly property int privacyUnlockNeeded: 3
   readonly property int privacyUnlockMs: 2000
-  property var rightOrder: ["usage", "localAi", "machine", "media", "containers"]
+  property var rightOrder: ["usage", "localAi", "fleet", "machine", "media", "containers"]
   property var opsOrder: ["changes", "needs", "projects"]
 
   function normalizedRightOrder(value) {
-    var allowed = ["usage", "localAi", "machine", "media", "containers"], result = []
+    var allowed = ["usage", "localAi", "fleet", "machine", "media", "containers"], result = []
     if (Array.isArray(value)) for (var i = 0; i < value.length; i++) if (allowed.indexOf(value[i]) >= 0 && result.indexOf(value[i]) < 0) result.push(value[i])
     for (var j = 0; j < allowed.length; j++) if (result.indexOf(allowed[j]) < 0) result.push(allowed[j])
     return result

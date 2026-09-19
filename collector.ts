@@ -19,6 +19,8 @@ import { giteaConfig, giteaRefreshDue, giteaSnapshot, parseGiteaStore, refreshGi
 import { attentionSignal, parseCommitSummary, parseDiffNumstat, parseGitStatus, projectHealth, repoCollisions, workspaceGroups, resourceDelta, limitForecast } from "./ai-ops";
 import { deriveNotificationEvents } from "./notification-events";
 import { containerEngine, containerListArgv, parseContainerList } from "./container-control";
+import { fleetEnabled, fleetHostsFromEnv, fleetRefreshDue, fleetSnapshot, parseFleetStoreText, refreshFleet } from "./fleet-remote";
+import { hermesUsageRefreshDue, hermesUsageSummary, parseHermesUsageStoreText, refreshHermesUsage } from "./hermes-usage";
 
 const HOME = process.env.HOME || "/root";
 const XDG_STATE = process.env.XDG_STATE_HOME || join(HOME, ".local/state");
@@ -35,6 +37,10 @@ const PREV_FILE = join(STATE_DIR, `prev-${instanceId()}.json`);
 // wallpaper and the overlay, and one 7-day store means one set of API calls.
 const GITHUB_FILE = join(STATE_DIR, "github-activity.json");
 const GITEA_FILE = join(STATE_DIR, "gitea-activity.json");
+// Same one-writer sharing as GITHUB_FILE, so background + overlay never SSH
+// out independently and double the probes.
+const FLEET_FILE = join(STATE_DIR, "fleet.json");
+const HERMES_USAGE_FILE = join(STATE_DIR, "hermes-usage.json");
 const now = Date.now();
 const MIN_RATE_DT = 1;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
@@ -396,6 +402,75 @@ async function giteaActivity() {
     try { writePrivateStateFile(STATE_DIR, basename(GITEA_FILE), JSON.stringify(store)); } catch {}
   }
   return giteaSnapshot(store, config, now, heatDays, activityCellIndex);
+}
+
+// Fleet: other machines' AI agents, seen over SSH (see fleet-remote.ts).
+// Same cache-then-refresh shape as githubActivity() above, since this
+// process is re-invoked fresh every tick and has no other place to keep a
+// refresh clock. Unconfigured (no INFOMARCHY_FLEET_HOSTS) costs one env read
+// and nothing else — no probe, no state file, no card.
+const FLEET_WRITER = instanceId() !== "overlay";
+async function fleetActivity() {
+  const hosts = fleetHostsFromEnv();
+  if (!hosts.length || !fleetEnabled()) return [];
+  const store = parseFleetStoreText(read(FLEET_FILE));
+  if (FLEET_WRITER && fleetRefreshDue(store, now)) {
+    const refreshed = await refreshFleet(store, now, hosts, run, providerOf);
+    try { writePrivateStateFile(STATE_DIR, basename(FLEET_FILE), JSON.stringify(refreshed)); } catch {}
+    return fleetSnapshot(refreshed);
+  }
+  return fleetSnapshot(store);
+}
+
+// Hermes/OpenRouter model usage, read from the same configured hosts (see
+// hermes-usage.ts for why this reads Hermes's own billing ledger instead of
+// calling OpenRouter directly). Same one-writer-shares-with-overlay and
+// disk-persisted-throttle shape as fleetActivity() above.
+const HERMES_USAGE_WRITER = instanceId() !== "overlay";
+async function hermesUsageActivity() {
+  const hosts = fleetHostsFromEnv();
+  if (!hosts.length || !fleetEnabled()) return null;
+  const store = parseHermesUsageStoreText(read(HERMES_USAGE_FILE));
+  let current = store;
+  if (HERMES_USAGE_WRITER && hermesUsageRefreshDue(store, now)) {
+    current = await refreshHermesUsage(store, now, hosts, run);
+    try { writePrivateStateFile(STATE_DIR, basename(HERMES_USAGE_FILE), JSON.stringify(current)); } catch {}
+  }
+  const summary = hermesUsageSummary(current, heatDays.map(localDayKey));
+  if (!summary) return null;
+  // MONTHLY comes straight from OpenRouter's key-usage API (via Hermes's
+  // cache), the only source with a real account-wide budget — there is
+  // nothing analogous to derive from the local ledger, so this limit bar
+  // exists only when that read succeeded.
+  const limits = summary.monthlyLimit
+    ? [{ label: "MONTHLY", title: "Monthly", percent: summary.monthlyLimit.percent }]
+    : [];
+  const usage = normalizeUsage({
+    name: "Hermes", ready: true, tierLabel: "",
+    todayPrompts: summary.todayPrompts, totalPrompts: summary.totalPrompts,
+    todaySessions: summary.todaySessions, totalSessions: summary.totalSessions,
+    todayTotalTokens: summary.todayTotalTokens,
+    modelUsage: summary.modelUsage, todayTokensByModel: summary.todayTokensByModel, modelSessions: summary.modelSessions,
+    recentDays: summary.recentDays, limits,
+    // Verified live this figure can diverge sharply from reality: the local
+    // ledger only goes back to whenever Hermes's session tracking last
+    // started, not true lifetime OpenRouter spend, so "ledger" is a
+    // fallback — say so — and "openrouter" (the account's own key-usage
+    // API) is the trustworthy case.
+    usageStatusText: summary.costSource === "openrouter"
+      ? "cost from OpenRouter's own key-usage API (Hermes-cached) — tokens from Hermes's local session ledger"
+      : "estimated from Hermes's local session ledger only — not lifetime OpenRouter spend, and not a verified invoice",
+  });
+  // pricing.json is a pinned LiteLLM snapshot with no entries for most
+  // OpenRouter model ids (deepseek/deepseek-v4.1-flash among them), so the
+  // normalizeUsage() pass above reports this unpriced regardless of source.
+  // summary.costLifetimeUsd/costTodayUsd already picked the best available
+  // number (OpenRouter's own account figure when present, else the
+  // ledger's per-row sum) — see hermes-usage.ts's module header.
+  const totals = usage.value.totals;
+  const priced = totals.inputTokens + totals.outputTokens + totals.cacheReadInputTokens + totals.cacheCreationInputTokens > 0 || summary.costSource === "openrouter";
+  usage.value = { lifetime: summary.costLifetimeUsd, today: summary.costTodayUsd, pricedShare: priced ? 1 : 0, unpriced: [], totals };
+  return usage;
 }
 
 // ---------------------------------------------------------------- machine
@@ -2890,7 +2965,7 @@ function demoSnapshot(stamp = Date.now()) {
         claude: { name: "Claude", ready: true, tierLabel: "Max", todayPrompts: 18, todayTotalTokens: 184_000, limits: [{ label: "SESSION", percent: 0.46, resetsAt: new Date(stamp + 2.1 * 3600_000).toISOString() }, { label: "WEEKLY", percent: 0.61, resetsAt: new Date(stamp + 3.4 * 86400_000).toISOString() }] },
         codex: { name: "Codex", ready: true, tierLabel: "Pro", todayPrompts: 27, todayTotalTokens: 311_000, limits: [{ label: "5-HOUR", percent: 0.38, resetsAt: new Date(stamp + 3.2 * 3600_000).toISOString() }, { label: "7-DAY", percent: 0.54, resetsAt: new Date(stamp + 4.2 * 86400_000).toISOString() }] },
       },
-      heatmap: { start: dayStarts[0], days: dayStarts, cells }, github, gitea, recent, recentTruncated: false,
+      heatmap: { start: dayStarts[0], days: dayStarts, cells }, github, gitea, fleet: [], recent, recentTruncated: false,
     },
   };
 }
@@ -2901,10 +2976,14 @@ async function runCollector() {
     return;
   }
   const pids = scanProcs();
-  const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama, externalIpS, github, gitea, containers] = await Promise.all([
-    Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(), externalIp(), githubActivity(), giteaActivity(), containerState(),
+  const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama, externalIpS, github, gitea, containers, fleet, hermesUsage] = await Promise.all([
+    Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(), externalIp(), githubActivity(), giteaActivity(), containerState(), fleetActivity(), hermesUsageActivity(),
   ]);
   const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory(), grokBot = grokBotHistory(), opencode = opencodeHistory(), pi = piHistory(), hermes = hermesHistory(), kimi = kimiHistory(), cursor = cursorHistory();
+  // Same priority as grok's own fallback below: a real cache (Omarchy's own
+  // agents plugin) always wins over what we can read ourselves.
+  const usage = agentsUsage();
+  if (!usage.hermes && hermesUsage) usage.hermes = hermesUsage;
   recent.sort((a, b) => b.ts - a.ts);
   for (const entry of recent) entry.activityCell = activityCellIndex(entry.ts, heatDays);
   inferSessionIdsFromRecent(sessions, recent);
@@ -2938,10 +3017,11 @@ async function runCollector() {
       attention: sessions.filter((s: any) => s.attention),
       events: notificationState.events,
       collisions: repoCollisions(sessions),
-      counts, providers: { claude, codex, grok, grokBot, opencode, pi, hermes, kimi, cursor, ollama }, usage: agentsUsage(),
+      counts, providers: { claude, codex, grok, grokBot, opencode, pi, hermes, kimi, cursor, ollama }, usage,
       usageDays: heatDays.map(localDayKey),
       heatmap: { start: start7, days: heatDays, cells: heat.map(c => [c.n, c.p]) },
       github, gitea,
+      fleet,
       recent: dashboardRecent, recentTruncated,
     },
   };

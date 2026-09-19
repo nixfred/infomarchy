@@ -101,6 +101,14 @@ Model changes go through a bounded stdin-framed helper. It validates the model n
 </tr>
 </table>
 
+### 🟢 FLEET — other machines' AI agents
+
+One row per host named in `INFOMARCHY_FLEET_HOSTS` (a comma-separated list of ssh aliases — the same aliases you'd already use typing `ssh <alias>` yourself; user, identity file and proxy jump stay in `~/.ssh/config`, never in this variable). Each host gets a status dot, provider chips for whatever it's running, and a relative "checked Ns ago" time. Invisible until you configure at least one host — the same "no tag until you run it" rule every other provider already follows.
+
+Detection is one bounded, read-only `ps` call over `ssh -o BatchMode=yes` per host per refresh (30 s), matched against the identical `providerOf()` regex table local detection already uses — a remote Hermes, Claude, Codex, or anything else `PROVIDERS` recognises is identified exactly the way a local process is, just seen over a different channel. An unreachable host reads **unreachable**, never fabricated. `INFOMARCHY_SKIP_FLEET=1` disables it from the collector's environment.
+
+When a host is running Hermes, USAGE & LIMITS gains a Hermes row too — no second API key to manage, since everything comes from files Hermes already keeps on that host. Token counts and the per-model breakdown come from Hermes's own local billing ledger (`~/.hermes/state.db`, read with `sqlite3 -readonly`); the dollar figures and a **MONTHLY** limit bar come from Hermes's cached snapshot of OpenRouter's own key-usage API (`~/.hermes/workspace/openrouter_key_usage.json`) when present. That split matters: the local ledger is only as old as Hermes's current session-tracking window, not real lifetime spend — verified live, where it undercounted true lifetime cost by roughly 30× — so the ledger's own per-row estimate is a fallback only, used when the key-usage file isn't there. The card's status line says which source produced the number you're looking at. Token counts and the per-model breakdown are model-agnostic — nothing is keyed to Deepseek or any other specific model, so switching Hermes's model shows up correctly on its own. The dollar figure currently assumes that model is still billed through OpenRouter, though: it's an account-level total, not scoped per model, so a model billed through a different provider entirely would need its own fix to be counted (see `docs/fleet-remote-hosts.md`).
+
 ### 🟡 Activity · last 7 days — *when you actually work*
 
 <img src="docs/heatmap.png" alt="7-day hourly activity heatmap">
@@ -246,7 +254,7 @@ omarchy restart shell
 
 ## Requirements
 
-Omarchy Quattro with third-party shell plugin support, `bun` (**not** part of the Omarchy base install — `sudo pacman -S bun`), `iw`, `iproute2`, and `ping`. Optional: `nvidia-smi` (GPU row hides without it), authenticated GitHub CLI `gh` (for the latest CI result and the GITHUB heatmap), a `tea` login or Gitea environment credentials (for the GITEA heatmap), the `omarchy.agents` bar widget (for the usage card), Ollama (for the local-AI card), and Herdr/Boomux/tmux when those hosts are actually used. Infomarchy does not start or configure a multiplexer. Hyprland 0.56+ (Lua dispatch) and older (`focuswindow`) are both handled.
+Omarchy Quattro with third-party shell plugin support, `bun` (**not** part of the Omarchy base install — `sudo pacman -S bun`), `iw`, `iproute2`, and `ping`. Optional: `nvidia-smi` (GPU row hides without it), authenticated GitHub CLI `gh` (for the latest CI result and the GITHUB heatmap), a `tea` login or Gitea environment credentials (for the GITEA heatmap), the `omarchy.agents` bar widget (for the usage card), Ollama (for the local-AI card), Herdr/Boomux/tmux when those hosts are actually used, and `ssh`/`sqlite3` when `INFOMARCHY_FLEET_HOSTS` names a remote host. Infomarchy does not start or configure a multiplexer. Hyprland 0.56+ (Lua dispatch) and older (`focuswindow`) are both handled.
 
 ## It follows your theme
 
@@ -277,6 +285,8 @@ The screenshots above are the **Last Call** theme. A theme gallery is on the roa
 - **`collector.ts`** builds one snapshot. It reads `argv` for every pid (cheap), then lazily opens only agent processes and their ancestors, so a 1 000-process box costs ~0.2 s warm. Local files are opened once with no-follow/nonblocking semantics, must be regular files, and are read under byte/time limits. Rate baselines use private, atomic state files under `$XDG_STATE_HOME/infomarchy/prev-<instance>.json`. It never parses the multi-hundred-MB Claude/Codex session transcripts — only the small history/index files and OpenCode's local SQLite history.
 - **`gitea-activity.ts`** reads the selected tea login and keeps a bounded private cache of the authenticated user’s Gitea activity for the same heatmap.
 - **`github-activity.ts`** keeps the 7-day GitHub row store: incremental `search/commits` and events fetches through `gh`, keyed by sha and event id, pruned to the window, turned into the same 7×24 cells as the prompt heatmap.
+- **`fleet-remote.ts`** probes `INFOMARCHY_FLEET_HOSTS` over `ssh -o BatchMode=yes`, one bounded read-only `ps` call per host, matched against `providerOf()` (passed in by reference, not duplicated) for the FLEET card.
+- **`hermes-usage.ts`** reads Hermes's local billing ledger (`~/.hermes/state.db`) over the same ssh hosts with one bounded `sqlite3 -readonly -json` call, for the USAGE & LIMITS Hermes row.
 - **`resume-session.ts`** maps each supported provider to its installed CLI resume syntax and launches it through `xdg-terminal-exec`. Provider, ID, and project are separate process arguments; prompt text is never executed.
 - **`ollama-control.ts`** accepts one bounded JSON frame over stdin, validates the requested model against Ollama's inventory, and performs only explicit load/unload operations.
 - **`notification-events.ts`** derives bounded, stable attention and lifecycle events. The background service sends them through Omarchy's notification interface after persistent deduplication; the overlay never sends a duplicate copy.
@@ -285,7 +295,7 @@ The screenshots above are the **Last Call** theme. A theme gallery is on the roa
 
 ### Portable by design
 
-No usernames, hostnames or absolute paths are hardcoded anywhere. The collector honours `HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME` and `OLLAMA_HOST`; every source is optional and degrades to "not present" rather than failing. If you don't use Grok or OpenCode, its tag just never appears.
+No usernames, hostnames or absolute paths are hardcoded anywhere. The collector honours `HOME`, `XDG_STATE_HOME`, `XDG_DATA_HOME`, `CLAUDE_CONFIG_DIR`, `CODEX_HOME`, `OLLAMA_HOST` and `INFOMARCHY_FLEET_HOSTS`; every source is optional and degrades to "not present" rather than failing. If you don't use Grok or OpenCode, its tag just never appears.
 
 ## Tuning
 
@@ -314,6 +324,8 @@ omarchy-shell infomarchy setDemo false                                # return t
 | space left for the bar | `topInset` in `InfoView.qml` | 40 px × font scale |
 | provider colours | `providerColor()` in `InfoModel.qml` | theme ANSI roles |
 | add a provider | one regex in `PROVIDERS` in `collector.ts` | — |
+| fleet hosts | `INFOMARCHY_FLEET_HOSTS` env var, comma-separated ssh aliases | unset (disabled) |
+| fleet/Hermes-usage refresh interval | `FLEET_REFRESH_MS` / `HERMES_USAGE_REFRESH_MS` in `fleet-remote.ts` / `hermes-usage.ts` | 30 000 / 60 000 ms |
 
 ## Data handling
 
@@ -324,6 +336,7 @@ Use `omarchy-shell infomarchy togglePrivacy` or bind it to SUPER+SHIFT+I for str
 
 Observational Git commands disable filesystem monitors, hooks, external diffs, text conversion, and credential helpers, and ignore global/system Git configuration. GitHub CI polling resolves a github.com origin to `owner/repo` and calls `gh --repo` outside the agent working directory; `INFOMARCHY_SKIP_GITHUB=1` skips both CI and activity fetching. Herdr focus requires the matching socket. Recent-task redaction also recognizes GitHub fine-grained, xAI, GitLab, Hugging Face, Stripe, and npm token prefixes, including Grok Bot text before markdown flattening. Resume uses the same project-directory guard as Open Project.
 LOCAL AI can persist a server origin with `omarchy-shell infomarchy setOllamaHost http://127.0.0.1:11434`; `getOllamaHost` reads it and an empty value restores environment/default behavior. Both the model inventory and explicit load/unload actions use the selected origin. URLs containing credentials, paths, queries, or fragments are rejected. Topic refinement retains its loopback-only default unless `INFOMARCHY_ALLOW_REMOTE_OLLAMA=1` is explicitly set.
+FLEET dials nothing unless `INFOMARCHY_FLEET_HOSTS` names a host, and reads only that host — never a scan, never a discovery step. Each host gets one `ssh -o BatchMode=yes -o ConnectTimeout=4 <host> <fixed commands>` call per refresh; an unknown host key or a password prompt fails the probe instead of hanging or falling back to interactive auth, and the remote commands are fixed strings, never built from `INFOMARCHY_FLEET_HOSTS` beyond the host argument itself, so there is nothing in that variable for an entry to inject into. Presence detection runs `ps -eo pid=,args=`, bounded on both ends. Hermes usage reads two files in the same SSH call — `~/.hermes/state.db` with `sqlite3 -readonly`, and `~/.hermes/workspace/openrouter_key_usage.json` with a bounded `cat` — both read-only, both bounded. No OpenRouter or other third-party API is called *by Infomarchy* directly, and no API key is stored anywhere for this feature; the key-usage file is itself just Hermes's own cache of a call Hermes already made. `INFOMARCHY_SKIP_FLEET=1` disables both probes.
 Still and animated image wallpapers share one image surface. Supported animated GIF/WebP files play their own frames; still files remain still. The overlay pauses playback and rendering while closed. Existing video wallpaper handling is unchanged.
 ### Media controls
 
@@ -350,7 +363,6 @@ An optional CONTAINERS card joins the right column, with Docker (`/usr/bin/docke
 
 - [ ] Per-card show/hide in the plugin settings schema (no QML editing)
 - [ ] Task board from Claude Code `TaskCreate` / Codex goals, with completed-task history
-- [ ] Fleet row: other hosts' AI load over SSH/Tailscale
 - [ ] Memory / vector-store growth sparkline (qdrant, LMF, …)
 - [ ] Theme gallery in this README — send yours
 
