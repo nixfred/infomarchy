@@ -17,7 +17,7 @@ if (!process.argv.includes("--run")) {
   const unitFile = join(paths(env).units, unit);
   assert(!existsSync(unitFile));
   const probe = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("probe") });
-  const port = probe.port!; await probe.stop(true);
+  let port = probe.port!; await probe.stop(true);
   const serverFile = join(appFolder, "serve.ts");
   writeFileSync(serverFile, 'const server = Bun.serve({hostname:"127.0.0.1",port:Number(process.env.PORT),fetch(){console.log("GET / HTTP/1.1 200");return new Response("fixture")}}); console.log("ready",server.port);');
   async function cli(args: string[], expected = true): Promise<any> {
@@ -36,6 +36,18 @@ if (!process.argv.includes("--run")) {
     const restarted = (await cli(["restart", id])).status; assert(restarted.ready && restarted.pid !== started.pid);
     const beforeLog = (await cli(["logs", id])).log; assert(beforeLog.includes("GET / HTTP/1.1 200"));
     await cli(["stop", id]);
+    const newFolder = join(root, "edited app % $"); mkdirSync(newFolder);
+    const newFile = join(newFolder, "serve.ts"); writeFileSync(newFile, readFileSync(serverFile));
+    const available = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: () => new Response("probe") });
+    const newPort = available.port!; await available.stop(true);
+    const edited = await cli(["update", id, "--registration", JSON.stringify({ name: "Edited app", path: newFolder,
+      port: newPort, command: [process.execPath, newFile], healthPath: "/ready" })]);
+    assert(edited.message.includes("Updated"));
+    const saved = (await cli(["registry"])).services.find((app: any) => app.id === id);
+    assert.equal(saved.path, newFolder); assert.equal(saved.port, newPort); assert.equal(saved.healthPath, "/ready");
+    assert.equal((await cli(["status", id])).services[0].state, "stopped");
+    run(["systemd-analyze", "--user", "verify", unitFile]);
+    port = newPort;
     foreign = Bun.serve({ hostname: "127.0.0.1", port, fetch: () => new Response("foreign fixture") });
     const conflict = await cli(["ensure", id], false); assert(conflict.error.includes("occupied"));
     assert.equal(await (await fetch(`http://127.0.0.1:${port}`)).text(), "foreign fixture");
@@ -49,7 +61,7 @@ if (!process.argv.includes("--run")) {
     }
     assert(recovered.ready && recovered.pid !== active.pid, "systemd did not recover the fixture");
     assert((await cli(["logs", id])).log.includes(beforeLog));
-    console.log(JSON.stringify({ ok: true, checks: ["register stays stopped", "four concurrent ensures reuse one PID", "restart", "HTTP request logs retained", "foreign listener preserved", "automatic crash recovery", "paths with spaces/percent/dollar", "stop and cleanup"], fixture: id }));
+    console.log(JSON.stringify({ ok: true, checks: ["register stays stopped", "four concurrent ensures reuse one PID", "restart", "HTTP request logs retained", "foreign listener preserved", "automatic crash recovery", "edit stopped service folder and port", "paths with spaces/percent/dollar", "stop and cleanup"], fixture: id }));
   } finally {
     await foreign?.stop(true);
     if (existsSync(unitFile)) {

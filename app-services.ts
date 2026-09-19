@@ -209,6 +209,42 @@ export class AppServices {
       return app;
     });
   }
+  async update(id: string, payload: any): Promise<App> {
+    return withLock("@registry", this.p, () => withLock(id, this.p, async () => {
+      const rows = registry(this.p), index = rows.findIndex(app => app.id === id);
+      if (index < 0) throw new AppError(`Unknown app: ${id}`);
+      const current = rows[index];
+      if (!payload || typeof payload !== "object" || Array.isArray(payload) ||
+          (payload.id !== undefined && payload.id !== id) ||
+          (payload.unit !== undefined && payload.unit !== current.unit))
+        throw new AppError("An app's ID and service unit cannot be changed");
+      const info = this.io.unitInfo(current);
+      if (info.LoadState === "not-found" || info.WorkingDirectory !== current.path)
+        throw new AppError("Service does not match this registration. Run infomarchy-apps install first.");
+      if (!["inactive", "failed"].includes(info.ActiveState))
+        throw new AppError(`Stop ${current.name} before editing its configuration.`);
+      const command = typeof payload.command === "string" ? parseCommand(payload.command) : payload.command;
+      const next = { ...current } as App;
+      for (const key of ["name", "path", "port", "healthPath"] as const)
+        if (payload[key] !== undefined) (next as any)[key] = payload[key];
+      if (command !== undefined) next.command = command;
+      const updatedRows = [...rows]; updatedRows[index] = next;
+      const updated = validateApps(updatedRows, this.p)[index];
+      const file = join(this.p.units, current.unit), original = readSmallFile(file);
+      if (!original.startsWith(MARKER)) throw new AppError(`Refusing to replace unmanaged unit: ${current.unit}`);
+      try {
+        this.install([updated]);
+        saveRegistry(updatedRows, this.p);
+      } catch (error) {
+        if (readSmallFile(file) !== original) {
+          atomicWrite(file, original);
+          this.io.run(["systemctl", "--user", "daemon-reload"]);
+        }
+        throw error;
+      }
+      return updated;
+    }));
+  }
   async installRegistered(setup = false): Promise<void> {
     await withLock("@registry", this.p, async () => {
       const rows = registry(this.p);
@@ -300,11 +336,16 @@ export async function main(args = process.argv.slice(2)): Promise<void> {
   let result: any;
   try {
     if ([undefined, "--help", "help"].includes(action)) {
-      console.log("infomarchy-apps setup | register --registration JSON | registry | status [id] | ensure|start|stop|restart|open|logs <id> | autostart <id> on|off | install\nOptions: --json, --shared (explicitly use the registered checkout)"); return;
+      console.log("infomarchy-apps setup | register --registration JSON | update <id> --registration JSON | registry | status [id] | ensure|start|stop|restart|open|logs <id> | autostart <id> on|off | install\nOptions: --json, --shared (explicitly use the registered checkout)"); return;
     }
     if (action === "register") {
       if (id !== "--registration" || !setting || plain.length !== 3) throw new AppError("Use register --registration JSON");
       const app = await manager.register(JSON.parse(setting)); result = { ok: true, message: `Registered ${app.name}. Start it when ready; its command must honor port ${app.port}.` };
+    } else if (action === "update") {
+      if (!id || setting !== "--registration" || !plain[3] || plain.length !== 4)
+        throw new AppError("Use update <id> --registration JSON");
+      const app = await manager.update(id, JSON.parse(plain[3]));
+      result = { ok: true, message: `Updated ${app.name}. Start it when ready; its command must honor port ${app.port}.` };
     } else if (["setup", "install"].includes(action)) {
       if (plain.length !== 1) throw new AppError(`Use ${action} without an app ID`);
       await manager.installRegistered(action === "setup"); result = { ok: true, message: "Installed app services. Existing processes and login startup settings are unchanged." };

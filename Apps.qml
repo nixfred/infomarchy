@@ -13,7 +13,7 @@ Item {
   property bool interactive: true
   property bool privacyMode: false
   readonly property bool masked: root.privacyMode || root.desk.demoMode
-  onMaskedChanged: { root.apps = []; root.logText = ""; root.selectedLog = ""; root.registering = false; root.feedback = ""; root.error = ""; root.refresh() }
+  onMaskedChanged: { root.apps = []; root.logText = ""; root.selectedLog = ""; root.cancelForm(); root.feedback = ""; root.error = ""; root.refresh() }
   property var apps: []
   property string error: ""
   property string feedback: ""
@@ -21,6 +21,7 @@ Item {
   property string logText: ""
   property string busyId: ""
   property bool registering: false
+  property string editingId: ""
   readonly property var cli: ["bun", decodeURIComponent(Qt.resolvedUrl("app-services.ts").toString().replace(/^file:\/\//, ""))]
   readonly property color foreground: root.desk.themeForeground
   readonly property real gapSmall: Style.spacing.sm
@@ -46,15 +47,32 @@ Item {
   function tone(state) {
     return state === "running" ? root.desk.green : state === "conflict" || state === "failed" || state === "unhealthy" || state === "unavailable" ? root.desk.red : root.desk.yellow
   }
-  function registerApp() {
+  function clearForm() {
+    appName.value = ""; appFolder.value = ""; appCommand.value = ""; appPort.value = ""; appHealth.value = ""
+  }
+  function cancelForm() { root.registering = false; root.editingId = ""; root.clearForm() }
+  function addApp() {
     if (action.running || !root.interactive || root.masked) return
-    root.error = ""
-    root.feedback = ""
+    root.cancelForm(); root.error = ""; root.feedback = ""; root.registering = true
+  }
+  function editApp(app) {
+    if (action.running || !root.interactive || root.masked) return
+    root.error = ""; root.feedback = ""
+    if (app.active) { root.error = "Stop " + app.name + " before editing its configuration."; return }
+    root.cancelForm(); root.editingId = app.id; root.registering = true
+    action.operation = "registry"; action.appId = app.id
+    action.command = root.cli.concat(["registry", "--json"])
+    action.running = true
+  }
+  function saveApp() {
+    if (action.running || !root.interactive || root.masked) return
+    root.error = ""; root.feedback = ""
     var name = appName.value.trim()
-    var id = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
+    var id = root.editingId || name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "")
     var registration = { id: id, name: name, path: appFolder.value.trim(), command: appCommand.value.trim(), port: Number(appPort.value), healthPath: appHealth.value.trim() || "/" }
-    action.operation = "register"
-    action.command = root.cli.concat(["register", "--registration", JSON.stringify(registration), "--json"])
+    action.operation = root.editingId ? "update" : "register"
+    action.appId = id
+    action.command = root.cli.concat(root.editingId ? ["update", id, "--registration", JSON.stringify(registration), "--json"] : ["register", "--registration", JSON.stringify(registration), "--json"])
     action.running = true
   }
   Component.onCompleted: refresh()
@@ -90,7 +108,16 @@ Item {
           var data = JSON.parse(text)
           if (!data.ok) root.error = data.error || "App action failed"
           else if (action.operation === "logs") { root.selectedLog = action.appId; root.logText = data.log || "No logs yet." }
-          else { root.feedback = data.message || "Done"; if (action.operation === "register") root.registering = false }
+          else if (action.operation === "registry") {
+            var app = data.services.find(function(item) { return item.id === action.appId })
+            if (!app) root.error = "App registration was not found."
+            else {
+              appName.value = app.name; appFolder.value = app.path
+              appCommand.value = app.command.map(function(word) { return JSON.stringify(word) }).join(" ")
+              appPort.value = String(app.port); appHealth.value = app.healthPath || "/"
+            }
+          }
+          else { root.feedback = data.message || "Done"; if (action.operation === "register" || action.operation === "update") root.cancelForm() }
         } catch (e) { root.error = "Infomarchy Apps returned an invalid response" }
       }
     }
@@ -145,12 +172,13 @@ Item {
     RowLayout {
       Layout.fillWidth: true
       Label { Layout.fillWidth: true; text: root.masked ? "App details are hidden in privacy/demo mode" : root.apps.length + " registered apps · " + root.apps.filter(function(app) { return app.ready }).length + " ready"; opacity: 0.7 }
-      Button { label: root.registering ? "CANCEL" : "ADD APP"; visible: root.interactive && !root.masked; enabled: !action.running; onClicked: root.registering = !root.registering }
+      Button { label: root.registering ? "CANCEL" : "ADD APP"; visible: root.interactive && !root.masked; enabled: !action.running; onClicked: root.registering ? root.cancelForm() : root.addApp() }
     }
     ColumnLayout {
       visible: root.registering && !root.masked
       Layout.fillWidth: true
       spacing: root.gapSmall
+      Label { Layout.fillWidth: true; visible: root.editingId !== ""; text: "Editing " + root.editingId + " · ID stays the same"; opacity: 0.75 }
       RowLayout {
         Layout.fillWidth: true
         Field { id: appName; Layout.fillWidth: true; placeholder: "App name" }
@@ -161,9 +189,9 @@ Item {
         Field { id: appCommand; Layout.fillWidth: true; placeholder: "Command, e.g. mise exec -- npm run dev" }
         Field { id: appPort; Layout.preferredWidth: 90 * Style.fontScale; placeholder: "Port" }
         Field { id: appHealth; Layout.preferredWidth: 100 * Style.fontScale; placeholder: "Health: /" }
-        Button { label: "REGISTER"; enabled: !action.running && appName.value.trim() !== "" && appFolder.value.trim() !== "" && appCommand.value.trim() !== "" && Number(appPort.value) >= 1024 && Number(appPort.value) <= 65535; onClicked: root.registerApp() }
+        Button { label: root.editingId ? "SAVE CHANGES" : "REGISTER"; enabled: !action.running && appName.value.trim() !== "" && appFolder.value.trim() !== "" && appCommand.value.trim() !== "" && Number(appPort.value) >= 1024 && Number(appPort.value) <= 65535; onClicked: root.saveApp() }
       }
-      Label { Layout.fillWidth: true; text: "Saved on this machine. Repos stay unchanged. The command must use this port and fail if occupied. Registration does not start the app."; wrapMode: Text.Wrap; elide: Text.ElideNone; opacity: 0.7 }
+      Label { Layout.fillWidth: true; text: root.editingId ? "Changes take effect on the next start. The command must use the chosen port and fail if occupied." : "Saved on this machine. Repos stay unchanged. The command must use this port and fail if occupied. Registration does not start the app."; wrapMode: Text.Wrap; elide: Text.ElideNone; opacity: 0.7 }
     }
     Flickable {
       Layout.fillWidth: true
@@ -181,7 +209,7 @@ Item {
         delegate: Rectangle {
           id: tile
           required property var modelData
-          width: tiles.width >= 700 ? (tiles.width - tiles.spacing) / 2 : tiles.width
+          width: tiles.width >= 1100 ? (tiles.width - tiles.spacing * 3) / 4 : tiles.width >= 780 ? (tiles.width - tiles.spacing * 2) / 3 : tiles.width >= 520 ? (tiles.width - tiles.spacing) / 2 : tiles.width
           height: row.implicitHeight + root.gapLarge * 2
           color: Util.alpha(root.foreground, 0.035)
           radius: root.gapSmall
@@ -214,6 +242,7 @@ Item {
               Button { label: tile.modelData.active ? "STOP" : "START"; enabled: tile.modelData.active || tile.modelData.state !== "conflict"; onClicked: root.act(tile.modelData.active ? "stop" : "ensure", tile.modelData) }
               Button { label: "RESTART"; enabled: tile.modelData.active && tile.modelData.state !== "conflict"; onClicked: root.act("restart", tile.modelData) }
               Button { label: "LOGS"; onClicked: root.act("logs", tile.modelData) }
+              Button { label: "EDIT"; onClicked: root.editApp(tile.modelData) }
             }
           }
         }

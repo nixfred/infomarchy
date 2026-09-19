@@ -24,6 +24,8 @@ describe("development app registry", () => {
   test("command strings support quoting without evaluating shell text", () => {
     expect(parseCommand('env LABEL="hello world" npm run dev -- --port 4400')).toEqual(["env", "LABEL=hello world", "npm", "run", "dev", "--", "--port", "4400"]);
     expect(parseCommand("echo 'literal $HOME' \"\" a\\ b")).toEqual(["echo", "literal $HOME", "", "a b"]);
+    const saved = ["/usr/bin/mise", "exec", "LABEL=hello world", "it's", "$HOME", "path\\name"];
+    expect(parseCommand(saved.map(word => JSON.stringify(word)).join(" "))).toEqual(saved);
     for (const text of ['npm dev; touch /tmp/x', 'npm dev && echo ok', 'echo $(id)', 'echo `id`', 'PORT=4400 npm dev', '"unclosed']) expect(() => parseCommand(text)).toThrow();
   });
   test("rejects duplicate IDs, ports, units and resolved folders", () => {
@@ -45,6 +47,47 @@ describe("development app registry", () => {
     expect(existsSync(join(app.path, "package.json"))).toBe(false);
     const saved = readFileSync(p.registry, "utf8");
     await expect(manager.register(app)).rejects.toThrow("Duplicate"); expect(readFileSync(p.registry, "utf8")).toBe(saved);
+  });
+  test("editing a stopped app updates its saved unit without changing its identity", async () => {
+    const { manager, p, app, io, dir } = fixture();
+    await manager.register(app);
+    io.unitInfo = () => ({ LoadState: "loaded", ActiveState: "inactive", WorkingDirectory: app.path });
+    const moved = join(dir, "moved"); mkdirSync(moved);
+    const updated = await manager.update("app", { id: "app", name: "Renamed App", path: moved,
+      port: 4451, command: 'env LABEL="my app" npm run dev', healthPath: "/ready" });
+    expect(updated).toMatchObject({ id: "app", name: "Renamed App", path: moved, port: 4451, healthPath: "/ready" });
+    expect(updated.command).toEqual(["env", "LABEL=my app", "npm", "run", "dev"]);
+    expect(registry(p)).toEqual([updated]);
+    const unit = readFileSync(join(p.units, app.unit), "utf8");
+    expect(unit).toContain(`WorkingDirectory=${moved}`);
+    expect(unit).toContain("PORT=4451");
+    expect(unit).toContain("ExecStart=");
+    expect(existsSync(join(dir, "package.json"))).toBe(false);
+  });
+  test("editing rejects running apps, identity changes and duplicate ports without changing files", async () => {
+    const { manager, p, app, io, dir } = fixture();
+    await manager.register(app);
+    const secondPath = join(dir, "second"); mkdirSync(secondPath);
+    await manager.register({ id: "second", name: "Second", path: secondPath, port: 4451, command: ["npm", "run", "dev"] });
+    const beforeRegistry = readFileSync(p.registry, "utf8"), beforeUnit = readFileSync(join(p.units, app.unit), "utf8");
+    await expect(manager.update("app", { name: "Changed" })).rejects.toThrow("Stop");
+    io.unitInfo = () => ({ LoadState: "loaded", ActiveState: "inactive", WorkingDirectory: app.path });
+    await expect(manager.update("app", { id: "different" })).rejects.toThrow("ID");
+    await expect(manager.update("app", { port: 4451 })).rejects.toThrow("Duplicate");
+    expect(readFileSync(p.registry, "utf8")).toBe(beforeRegistry);
+    expect(readFileSync(join(p.units, app.unit), "utf8")).toBe(beforeUnit);
+  });
+  test("a failed service reload restores the previous unit and registry", async () => {
+    const { manager, p, app, io } = fixture();
+    await manager.register(app);
+    io.unitInfo = () => ({ LoadState: "loaded", ActiveState: "inactive", WorkingDirectory: app.path });
+    const beforeRegistry = readFileSync(p.registry, "utf8"), beforeUnit = readFileSync(join(p.units, app.unit), "utf8");
+    let reloads = 0;
+    io.run = () => { if (++reloads === 1) throw new AppError("reload failed"); return { code: 0, stdout: "", stderr: "" }; };
+    await expect(manager.update("app", { name: "Changed" })).rejects.toThrow("reload failed");
+    expect(reloads).toBe(2);
+    expect(readFileSync(p.registry, "utf8")).toBe(beforeRegistry);
+    expect(readFileSync(join(p.units, app.unit), "utf8")).toBe(beforeUnit);
   });
   test("failed installation cannot publish a registration or overwrite an unmanaged unit", async () => {
     const { manager, p, app, calls } = fixture(); mkdirSync(p.units, { recursive: true });

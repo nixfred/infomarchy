@@ -2,10 +2,11 @@
 
 The optional **APPS** module puts local development services on the desk. Enable
 it in the module strip, then use **Add App** to save a checkout, its existing
-command, a fixed port and an optional HTTP health path. Registration neither
+command, a fixed port and an optional HTTP health path. Four app cards fit per row
+on a wide desk; narrower desks use fewer columns. Registration neither
 starts the app nor enables login startup. No application files are changed.
 
-Use **Open**, **Start/Stop**, **Restart** and **Logs** on each card. The card shows
+Use **Open**, **Start/Stop**, **Restart**, **Logs** and **Edit** on each card. The card shows
 HTTP readiness, the served checkout, Git branch and changed-file count. Privacy
 and demo modes hide app details/logs and disable actions. Hiding the desk or
 closing an agent task does not stop a service.
@@ -37,10 +38,20 @@ infomarchy-apps register --registration '{"id":"my-app","name":"My App","path":"
 infomarchy-apps ensure my-app --json
 infomarchy-apps status my-app
 infomarchy-apps logs my-app
+infomarchy-apps stop my-app
+infomarchy-apps update my-app --registration '{"name":"My New Name","port":4401,"command":["npm","run","dev","--","--port","4401"]}'
+infomarchy-apps ensure my-app --json
 infomarchy-apps restart my-app
 infomarchy-apps stop my-app
 infomarchy-apps autostart my-app on   # optional login startup; use off to disable
 ```
+
+Stop an app before editing its name, folder, command, port or health path. In
+**Edit**, the existing values fill the Add App form; **Save Changes** updates
+its local registry entry and systemd unit. Its ID and unit stay the same, and
+saving does not start it. The CLI `update` command accepts only the fields to
+change. A failed update leaves the previous configuration in place. If you
+change the port, also update the app command or app config to honor that port.
 
 The app must honor its assigned port and refuse fallback ports (for example,
 Vite's `strictPort`). Registration does not rewrite `npm run dev` or add a wrapper
