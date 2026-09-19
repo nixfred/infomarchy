@@ -1,0 +1,74 @@
+# CHANGE.log
+
+Running record of what shipped and who sent it, newest first, with a verified,
+linkable X profile per contributor. Public thanks without the @ means the person
+never sees it, and a wrong @ tags a stranger, so every handle here was verified
+rather than guessed. Where nothing verified, this file says so outright instead
+of leaving a blank.
+
+Verification order used per person: `gh api users/<login> --jq .twitter_username`,
+`gh api users/<login>/social_accounts`, then their own site or blog. A live
+personal site beats a GitHub profile field when the two disagree, because the
+field is written once at signup and never revisited.
+
+Started 2026-09-18 at the #36 merge. Entries before that are listed under
+Backfill pending; the release history itself is in CHANGELOG.md.
+
+---
+
+## 2026-09-18
+
+### Optional APPS module: local dev servers as systemd user services (#36)
+
+**Augie Bralley** · GitHub [@auggernaut](https://github.com/auggernaut) · X [@augman](https://x.com/augman) · www.auggernaut.com
+
+Registers a checkout with the start command it already has and a fixed port,
+installs it as a systemd **user** service, and puts readiness, checkout, branch,
+changed-file count, logs and Open/Start/Stop/Restart/Edit on the desk. Ships an
+`infomarchy-apps` CLI so any terminal or agent gets the same `ensure` operation:
+reuse the running service, or start it and wait for HTTP readiness.
+
+The problem it solves: a dev server started in a terminal outlives that terminal,
+the next task cannot find it, so it starts a second one on another port. Handing
+the process to systemd means the desk only asks for actions and reads status, so
+hiding the desk or closing an agent task cannot stop an app.
+
+First thing in the plugin that writes outside its own config (unit files in
+`~/.config/systemd/user`, a symlink in `~/.local/bin`), which is why the refusals
+matter: it will not replace a unit lacking its own `# Managed by Infomarchy Apps`
+marker, will not replace a `~/.local/bin` entry that is not its own symlink, and
+reports a busy port with the owning PID and directory rather than killing,
+adopting, or silently swapping it. Ownership is proven through the service cgroup
+rather than inferred from the port. The module starts **disabled** and is the one
+entry in the module strip needing an explicit `true`.
+
+Merged f96507e. 329 tests pass on the merged tree. Scope accepted by Fred.
+
+Note on the handle: Augie's GitHub declares `augustinbralley` in both the profile
+field and social_accounts, but his own site says **@augman** twice. @augman is
+correct, confirmed by Fred, who knows him in person.
+
+---
+
+## Backfill pending
+
+Contributors already credited in CHANGELOG.md, recorded here so the handle work
+is not lost. Verified 2026-09-18.
+
+| Contributor | GitHub | X | PRs |
+|---|---|---|---|
+| TechLuddite | [@TechLuddite](https://github.com/TechLuddite) | [@gh_TechLuddite](https://x.com/gh_TechLuddite) | #15, #16, #17, #19, #20, #25 |
+| Wulf Kaal | [@wulfkaal](https://github.com/wulfkaal) | [@WulfKaal](https://x.com/WulfKaal) | #12, #13 |
+| Eric Stegemann | [@TRIBUSeric](https://github.com/TRIBUSeric) | [@EricStegemann](https://x.com/EricStegemann) | #26 |
+| Augie Bralley | [@auggernaut](https://github.com/auggernaut) | [@augman](https://x.com/augman) | #29, #36 |
+| jttraino | [@jttraino](https://github.com/jttraino) | none found (checked 2026-09-18) | #33, #34 |
+| Tech0001 | [@Tech0001](https://github.com/Tech0001) | none found (checked 2026-09-18) | #28 |
+| Reverb | [@reverb256](https://github.com/reverb256) | none found (checked 2026-09-18) | #11 |
+| Adam | [@alinuxfan](https://github.com/alinuxfan) | none found (checked 2026-09-18) | #23, #24 |
+
+**Do not tag [@TechLuddite](https://x.com/TechLuddite) on X.** That account is a
+different person (a dormant 2009 account named "technology luddite"). The
+contributor points at `gh_TechLuddite` himself.
+
+"none found" means the lookup ran and returned nothing, not that it was skipped.
+Ask those four directly before tagging any of them; do not guess from the login.
