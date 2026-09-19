@@ -472,8 +472,8 @@ describe("prev.json instance files", () => {
     writeFileSync(join(fixture, "keep"), "");
 
     async function collect(id: string) {
-      const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts"), "--id", id], {
-        env: { HOME: fixture, USER: "tester", XDG_STATE_HOME: state, PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1" },
+      const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts"), "--id", id], {
+        env: { HOME: fixture, USER: "tester", XDG_STATE_HOME: state, PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1", INFOMARCHY_SKIP_CONTAINERS: "1" },
         stdout: "pipe",
         stderr: "pipe",
       });
@@ -512,8 +512,8 @@ describe("history collection", () => {
       JSON.stringify({ timestamp, session_id: "session-b", prompt: "use ntn_abcdefghijklmnopqrstuvwxyz", is_bash: false }),
     ].join("\n"));
 
-    const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
-      env: { HOME: historyFixture, USER: "tester", XDG_STATE_HOME: join(historyFixture, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1" },
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts")], {
+      env: { HOME: historyFixture, USER: "tester", XDG_STATE_HOME: join(historyFixture, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1", INFOMARCHY_SKIP_CONTAINERS: "1" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -548,8 +548,8 @@ describe("history collection", () => {
 
     const home = join(testRoot, "grok-home-empty");
     mkdirSync(home, { recursive: true });
-    const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
-      env: { HOME: home, USER: "tester", GROK_HOME: root, XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1" },
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts")], {
+      env: { HOME: home, USER: "tester", GROK_HOME: root, XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1", INFOMARCHY_SKIP_CONTAINERS: "1" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -642,8 +642,8 @@ describe("history collection", () => {
       schemaVersion: 1, value: { entries: [{ kind: "message", role: "user", content: "my private conversation" }] },
     }));
 
-    const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
-      env: { HOME: root, USER: "tester", XDG_STATE_HOME: join(root, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1" },
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts")], {
+      env: { HOME: root, USER: "tester", XDG_STATE_HOME: join(root, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1", INFOMARCHY_SKIP_CONTAINERS: "1" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -673,8 +673,8 @@ describe("history collection", () => {
     db.query("INSERT INTO part VALUES (?, ?, ?, ?, ?)").run("part_1", "msg_1", "ses_test12345", Date.now(), JSON.stringify({ type: "text", text: "inspect with password: very-secret-value" }));
     db.close();
 
-    const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts")], {
-      env: { HOME: root, USER: "tester", XDG_DATA_HOME: data, XDG_STATE_HOME: join(root, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1" },
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts")], {
+      env: { HOME: root, USER: "tester", XDG_DATA_HOME: data, XDG_STATE_HOME: join(root, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1", INFOMARCHY_SKIP_CONTAINERS: "1" },
       stdout: "pipe",
       stderr: "pipe",
     });
@@ -949,9 +949,9 @@ describe("second-reviewer findings (2026-09-04)", () => {
     for (let i = 0; i < 1100; i++) lines.push(JSON.stringify({ timestamp: base - i * 1000, display: "prompt " + i + " " + "words ".repeat(40), project: "/proj/" + (i % 7), sessionId: "aaaaaaaa-bbbb-cccc-dddd-" + String(100000000000 + i) }));
     writeFileSync(join(home, ".claude", "history.jsonl"), lines.join("\n") + "\n");
     try {
-      const proc = Bun.spawn(["bun", join(import.meta.dir, "collector.ts"), "--id", "bigsnap"], {
+      const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts"), "--id", "bigsnap"], {
         stdout: "pipe", stderr: "ignore",
-        env: { HOME: home, USER: "tester", XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1", OLLAMA_HOST: "http://127.0.0.1:9" },
+        env: { HOME: home, USER: "tester", XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1", INFOMARCHY_SKIP_CONTAINERS: "1", OLLAMA_HOST: "http://127.0.0.1:9" },
       });
       const output = await new Response(proc.stdout).text();
       await proc.exited;
@@ -1671,5 +1671,23 @@ describe("Cursor", () => {
     expect(safePrompt("rotate crsr_23c5c84eabae6848bfff5d17542c9c59 please")).toBe("rotate crsr_[redacted] please");
     expect(safePrompt("cursor-agent --api-key crsr_23c5c84eabae6848bfff5d17542c9c59 worker"))
       .toContain("--api-key [redacted]");
+  });
+});
+
+describe("container snapshot", () => {
+  test("demo data includes a containers card payload without host paths", async () => {
+    const home = join(testRoot, "demo-home");
+    mkdirSync(join(home, "state"), { recursive: true });
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts"), "--demo"], {
+      env: { HOME: home, USER: "tester", XDG_STATE_HOME: join(home, "state"), PATH: process.env.PATH || "", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_GITHUB: "1", INFOMARCHY_SKIP_CONTAINERS: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = await new Response(proc.stdout).text();
+    expect(await proc.exited).toBe(0);
+    const snap = decodeFrames(output);
+    expect(snap.containers).toMatchObject({ present: true, engine: "docker", up: 3, total: 4 });
+    expect(snap.containers.items.map((item: any) => item.label)).toEqual(["search", "proxy", "db", "worker"]);
+    expect(JSON.stringify(snap.containers)).not.toContain("/home/");
   });
 });

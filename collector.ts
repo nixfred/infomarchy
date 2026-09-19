@@ -18,6 +18,7 @@ import { githubFetchEnabled, githubRefreshDue, githubRepoFromRemote, githubSnaps
 import { giteaConfig, giteaRefreshDue, giteaSnapshot, parseGiteaStore, refreshGiteaActivity } from "./gitea-activity";
 import { attentionSignal, parseCommitSummary, parseDiffNumstat, parseGitStatus, projectHealth, repoCollisions, workspaceGroups, resourceDelta, limitForecast } from "./ai-ops";
 import { deriveNotificationEvents } from "./notification-events";
+import { containerEngine, containerListArgv, parseContainerList } from "./container-control";
 
 const HOME = process.env.HOME || "/root";
 const XDG_STATE = process.env.XDG_STATE_HOME || join(HOME, ".local/state");
@@ -2375,6 +2376,20 @@ async function ollamaState() {
     modelCount: models.length,
   };
 }
+async function containerState() {
+  if (process.env.INFOMARCHY_SKIP_CONTAINERS === "1")
+    return { present: false, engine: null, items: [], up: 0, total: 0 };
+  const engine = containerEngine();
+  if (!engine) return { present: false, engine: null, items: [], up: 0, total: 0 };
+  const items = parseContainerList(await run(containerListArgv(engine), 1500));
+  return {
+    present: true,
+    engine,
+    items,
+    up: items.filter(item => item.running).length,
+    total: items.length,
+  };
+}
 const MAX_USAGE_FILES = 16;
 const MAX_USAGE_FILE_BYTES = 512 * 1024;
 
@@ -2849,6 +2864,15 @@ function demoSnapshot(stamp = Date.now()) {
       gpu: { name: "NVIDIA RTX 4070", util: 31, memUsed: 3_006_477_312, memTotal: 12_884_901_888, temp: 49 },
       temp: 52, uptime: 186_300, externalIp: "203.0.113.42",
     },
+    containers: {
+      present: true, engine: "docker", up: 3, total: 4,
+      items: [
+        { id: "a1b2c3d4e5f6", name: "lab-search-1", label: "search", service: "search", project: "lab", image: "searxng:latest", state: "running", running: true, health: "healthy" },
+        { id: "b2c3d4e5f6a1", name: "lab-proxy-1", label: "proxy", service: "proxy", project: "lab", image: "traefik:v3", state: "running", running: true, health: "healthy" },
+        { id: "c3d4e5f6a1b2", name: "lab-db-1", label: "db", service: "db", project: "lab", image: "postgres:16", state: "running", running: true, health: "healthy" },
+        { id: "d4e5f6a1b2c3", name: "lab-worker-1", label: "worker", service: "worker", project: "lab", image: "lab-worker", state: "exited", running: false, health: "" },
+      ],
+    },
     ai: {
       sessions, projects: projectHealth(sessions), workspaces: workspaceGroups(sessions), attention: [sessions[1]], collisions: [],
       counts: { claude: { today: 18, week: 96, total: 640 }, codex: { today: 27, week: 144, total: 1102 }, opencode: { today: 11, week: 51, total: 214 } },
@@ -2877,8 +2901,8 @@ async function runCollector() {
     return;
   }
   const pids = scanProcs();
-  const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama, externalIpS, github, gitea] = await Promise.all([
-    Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(), externalIp(), githubActivity(), giteaActivity(),
+  const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama, externalIpS, github, gitea, containers] = await Promise.all([
+    Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(), externalIp(), githubActivity(), giteaActivity(), containerState(),
   ]);
   const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory(), grokBot = grokBotHistory(), opencode = opencodeHistory(), pi = piHistory(), hermes = hermesHistory(), kimi = kimiHistory(), cursor = cursorHistory();
   recent.sort((a, b) => b.ts - a.ts);
@@ -2906,6 +2930,7 @@ async function runCollector() {
       cpu: { pct: cpuS.pct, load: cpuS.load, cores: cpuS.cores }, mem: memS, disks: diskS, net: netS, ping: pingS,
       battery: battery(), gpu: gpuS, temp: temp(), uptime: uptime(), externalIp: externalIpS.address,
     },
+    containers,
     ai: {
       sessions,
       projects: projectHealth(sessions),

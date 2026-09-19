@@ -22,7 +22,8 @@ Item {
     { id: "projects", label: "PROJECTS" },
     { id: "media", label: "MEDIA" },
     { id: "gitea", label: "GITEA" },
-    { id: "apps", label: "APPS" }
+    { id: "apps", label: "APPS" },
+    { id: "containers", label: "CONTAINERS" }
   ]
   property var sections: ({})
   property var attentionMuted: ({})
@@ -71,11 +72,11 @@ Item {
   property int privacyUnlockCount: 0
   readonly property int privacyUnlockNeeded: 3
   readonly property int privacyUnlockMs: 2000
-  property var rightOrder: ["usage", "localAi", "machine", "media"]
+  property var rightOrder: ["usage", "localAi", "machine", "media", "containers"]
   property var opsOrder: ["changes", "needs", "projects"]
 
   function normalizedRightOrder(value) {
-    var allowed = ["usage", "localAi", "machine", "media"], result = []
+    var allowed = ["usage", "localAi", "machine", "media", "containers"], result = []
     if (Array.isArray(value)) for (var i = 0; i < value.length; i++) if (allowed.indexOf(value[i]) >= 0 && result.indexOf(value[i]) < 0) result.push(value[i])
     for (var j = 0; j < allowed.length; j++) if (result.indexOf(allowed[j]) < 0) result.push(allowed[j])
     return result

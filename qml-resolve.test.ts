@@ -23,17 +23,19 @@ import { join } from "path";
 // reference moves the count, which is exactly what a bad merge introduces.
 // Verified — the same injection took InfoModel from 5 to 6.
 // Privacy adds unqualified bindings for the status chip and overlay hotkey.
+// Container additions: one Process exit-status metadata warning, plus
+// dynamic Style properties and unqualified card/delegate accesses.
 const CEILINGS: Record<string, number> = {
   "Apps.qml": 6,
   "BackgroundWallpaper.qml": 0,
   "Infomarchy.qml": 26,
-  "InfoModel.qml": 5,
+  "InfoModel.qml": 6,
   "InfoSettings.qml": 0,
   // 509 came in with privacy mode (#17). The two above it are the topic mask
   // folded into that merge: qmllint cannot resolve a view-scoped function, so
   // each call site of displayTopic reads as a missing property, exactly like
   // the displayTitle calls already counted here.
-  "InfoView.qml": 511,
+  "InfoView.qml": 549,
   "Overlay.qml": 29,
   "WaveWallpaper.qml": 0,
 };
