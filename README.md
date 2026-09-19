@@ -166,6 +166,14 @@ The wallpaper is interactive wherever no window covers it (double-click or right
 
 The module strip doubles as a keyboard command strip in the overlay: **1–9** toggle modules, **J/K** (or arrows) select a live session, **Enter** focuses it, **A** clears activity filters, and **Esc** closes. The selected session gets a bright outline.
 
+## Local development apps (optional)
+
+Enable **APPS** in the module strip to register existing development commands and
+control their systemd user services: stable ports, HTTP readiness, checkout and
+branch, Open, Start/Stop, Restart and logs. App package scripts stay unchanged.
+The helper uses the existing Bun runtime; no extra daemon or agent configuration
+is required. See [Development apps](docs/apps.md) for setup and CLI usage.
+
 ## Install
 
 ```bash

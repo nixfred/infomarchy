@@ -24,6 +24,7 @@ import { join } from "path";
 // Verified — the same injection took InfoModel from 5 to 6.
 // Privacy adds unqualified bindings for the status chip and overlay hotkey.
 const CEILINGS: Record<string, number> = {
+  "Apps.qml": 6,
   "BackgroundWallpaper.qml": 0,
   "Infomarchy.qml": 26,
   "InfoModel.qml": 5,

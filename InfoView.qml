@@ -1167,6 +1167,20 @@ Item {
         }
       }
 
+      // App processes belong to systemd and survive either dashboard surface.
+      Card {
+        Layout.fillWidth: true
+        visible: view.sectionEnabled("apps")
+        title: "APPS"
+        hint: "Local development · fixed ports · shared across tasks"
+        Apps {
+          privacyMode: view.privacyMode
+          width: parent.width
+          desk: view.desk
+          interactive: view.interactive
+        }
+      }
+
       RowLayout {
         Layout.fillWidth: true
         Layout.fillHeight: true
