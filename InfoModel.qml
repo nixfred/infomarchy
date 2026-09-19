@@ -272,51 +272,27 @@ Item {
     }
   }
 
-  // --- file watching -------------------------------------------------------
-  // Watch data sources that change on demand. The collector fires when a
-  // watched file changes, not on a fixed timer — zero CPU when idle.
-  // The 250ms debounce coalesces bursts (e.g. agent writes JSON then WAL).
-  // FileView watches single files only — never directories, which causes
-  // "Not a file" errors in a tight loop.
-  FileView {
-    path: "/home/j_kro/.hermes/state.db"
-    watchChanges: true
-    printErrors: false
-    onFileChanged: debounceTimer.restart()
-  }
-  FileView {
-    path: "/home/j_kro/.local/state/infomarchy/dashboard.json"
-    watchChanges: true
-    printErrors: false
-    onFileChanged: debounceTimer.restart()
-  }
-  FileView {
-    path: "/home/j_kro/.hermes/state.db-wal"
-    watchChanges: true
-    printErrors: false
-    onFileChanged: debounceTimer.restart()
-  }
-
-  // --- debounce timer ------------------------------------------------------
-  // Coalesces rapid file changes so a single agent update does not spawn
-  // 5 collector runs (JSON write + SQLite WAL + prev file). Pure QML Timer —
-  // no setTimeout, which does not exist in the QML JS sandbox.
+  // --- refresh ---------------------------------------------------------------
+  // A repeating poll, restored. It had been replaced by FileView watches that
+  // named one contributor's own home directory literally (three absolute paths
+  // under another user's home), so on every other machine no watch ever fired
+  // and the only refresh left was a single one-shot 750 ms after start. The
+  // desk populated once and then froze until you toggled it — which is exactly
+  // what made it look alive, because toggling re-armed the one-shot.
+  //
+  // refreshMs was left set by Infomarchy.qml (4 s visible, 16 s hidden) and by
+  // Overlay.qml (3 s) with nothing reading it, so the documented cadence did
+  // not exist either. triggeredOnStart covers the first tick, so no separate
+  // initial timer is needed.
+  //
+  // Event-driven refresh is a good idea and is welcome back, but it has to
+  // build its paths from HOME and keep a timer as the floor, so the desk stays
+  // live when nothing it watches happens to change.
   Timer {
-    id: debounceTimer
-    interval: 250
-    repeat: false
-    onTriggered: root.refresh()
-  }
-
-  // --- initial refresh -----------------------------------------------------
-  // One shot after shell start, so the desk populates without waiting for a
-  // file change. A 750ms delay lets other plugins' initial bursts settle.
-  // Only fires when the dashboard is visible (root.active === true).
-  Timer {
-    id: initialTimer
-    interval: 750
-    repeat: false
+    interval: root.refreshMs
     running: root.active
+    repeat: true
+    triggeredOnStart: true
     onTriggered: root.refresh()
   }
 

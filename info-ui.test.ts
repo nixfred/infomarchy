@@ -424,6 +424,39 @@ describe("LOCAL AI rows stay inside the card body", () => {
   });
 });
 
+describe("the desk keeps refreshing", () => {
+  const model = readFileSync(join(import.meta.dir, "InfoModel.qml"), "utf8");
+
+  test("a repeating timer drives refresh, at the interval the hosts set", () => {
+    // This shipped broken: the poll was replaced by FileView watches and the
+    // only refresh left was one shot 750 ms after start. The desk populated
+    // once and froze until you toggled it, which re-armed the one-shot and
+    // made it look alive. Nothing tested that the desk refreshes at all.
+    const timer = model.match(/Timer \{[^}]*interval: root\.refreshMs[^}]*\}/)?.[0];
+    expect(timer, "InfoModel must poll on refreshMs").toBeTruthy();
+    expect(timer).toContain("repeat: true");
+    expect(timer).toContain("running: root.active");
+    // Covers the first tick, so no separate initial timer is needed.
+    expect(timer).toContain("triggeredOnStart: true");
+  });
+
+  test("refreshMs is actually read by something", () => {
+    // Both hosts set it (4s/16s on the desk, 3s in the overlay). A property
+    // set by two callers and read by none is a cadence that does not exist.
+    expect(model).toContain("interval: root.refreshMs");
+  });
+
+  test("no QML file hardcodes an absolute path into somebody's home", () => {
+    // The watches named a contributor's own home directory, so they could
+    // never fire anywhere else. Paths come from HOME or Quickshell.env.
+    for (const name of ["InfoModel.qml", "InfoView.qml", "InfoSettings.qml", "Infomarchy.qml", "Overlay.qml"]) {
+      const source = readFileSync(join(import.meta.dir, name), "utf8");
+      const hits = source.split("\n").filter(line => /path:\s*"\/home\//.test(line) || /"\/home\/[a-z_]/.test(line));
+      expect(hits, `${name} hardcodes a home path: ${hits.join(" | ")}`).toEqual([]);
+    }
+  });
+});
+
 describe("an idle session drops off the desk and comes back on its own", () => {
   // Reported from a live desk: 14 cards, only two agents actually in use, the
   // rest sitting idle in herdr panes for two days. The desk is for what is

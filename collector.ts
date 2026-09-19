@@ -1901,7 +1901,9 @@ function grokHistory() {
   const activeRaw = readJson(join(base, "active_sessions.json"));
   const active = Array.isArray(activeRaw) ? activeRaw : [];
   const sessionIds = new Set<string>();
-  for (const dir of ls(join(base, "sessions"))) {
+  // Capped like every other provider walk: an uncapped listing does an lstat,
+  // a .cwd read and a history tail per directory, every tick.
+  for (const dir of ls(join(base, "sessions")).slice(0, MAX_COLLECTION_ITEMS)) {
     const full = join(base, "sessions", dir);
     try { const state = lstatSync(full); if (state.isSymbolicLink() || !state.isDirectory()) continue; } catch { continue; }
     // A group name over 255 bytes is a slug plus a hash; grok records the real
@@ -2747,7 +2749,9 @@ export function grokSessionUsage(base: string): { sessions: number; todaySession
   const models = new Set<string>();
   const modelSessions: Record<string, number> = {};
   let sessions = 0, todaySessions = 0, scanned = 0;
-  for (const dir of ls(join(base, "sessions"))) {
+  // Capped like every other provider walk: an uncapped listing does an lstat,
+  // a .cwd read and a history tail per directory, every tick.
+  for (const dir of ls(join(base, "sessions")).slice(0, MAX_COLLECTION_ITEMS)) {
     const group = join(base, "sessions", dir);
     try { const state = lstatSync(group); if (state.isSymbolicLink() || !state.isDirectory()) continue; } catch { continue; }
     for (const entry of ls(group)) {
