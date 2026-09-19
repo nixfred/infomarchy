@@ -21,7 +21,8 @@ Item {
     { id: "changes", label: "CHANGES" },
     { id: "projects", label: "PROJECTS" },
     { id: "media", label: "MEDIA" },
-    { id: "gitea", label: "GITEA" }
+    { id: "gitea", label: "GITEA" },
+    { id: "apps", label: "APPS" }
   ]
   property var sections: ({})
   property var attentionMuted: ({})
@@ -198,7 +199,7 @@ Item {
       opsOrder: normalizedOpsOrder(opsOrder)
     }, null, 2) + "\n")
   }
-  function sectionEnabled(id) { return sections[id] !== false }
+  function sectionEnabled(id) { return id === "apps" ? sections[id] === true : sections[id] !== false }
   function adjacentEnabledIndex(order, from, direction, sectionState) {
     var step = Number(direction) < 0 ? -1 : Number(direction) > 0 ? 1 : 0
     if (!step || from < 0 || from >= order.length) return from

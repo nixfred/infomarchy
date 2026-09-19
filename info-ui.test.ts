@@ -628,8 +628,9 @@ describe("github activity heatmap", () => {
   test("registers GITHUB as a removable module beside ACTIVITY and reaches it from the keyboard", () => {
     const ids = [...settings.matchAll(/\{ id: "([a-zA-Z]+)", label: "[^"]+" \}/g)].map(match => match[1]);
     expect(ids.indexOf("github")).toBe(ids.indexOf("activity") + 1);
-    expect(ids).toHaveLength(12);
+    expect(ids).toHaveLength(13);
     expect(ids[11]).toBe("gitea");
+    expect(ids[12]).toBe("apps");
     expect(ids[10]).toBe("media");
     expect(overlay).toContain("event.key >= Qt.Key_0 && event.key <= Qt.Key_9");
     expect(overlay).toContain("event.key === Qt.Key_0 ? 9 : event.key - Qt.Key_1");
@@ -1039,5 +1040,16 @@ describe("the session inspector follows the session you opened", () => {
     expect(resolve({ pid: 42, provider: "grok-bot" }, [rows[0]])).toBe(rows[0]);
     expect(resolve({ pid: 7, provider: "claude" }, rows)).toBeNull();
     expect(resolve(null, rows)).toBeNull();
+  });
+});
+
+
+describe("optional development apps", () => {
+  test("starts disabled and follows its explicit module setting", () => {
+    const source = settings.match(/function sectionEnabled\([^\n]+/)?.[0];
+    const enabled = Function("sections", `return (${source})`);
+    expect(enabled({})("apps")).toBe(false);
+    expect(enabled({ apps: true })("apps")).toBe(true);
+    expect(enabled({})("sessions")).toBe(true);
   });
 });
