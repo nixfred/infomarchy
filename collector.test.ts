@@ -1210,6 +1210,25 @@ describe("machine parsers refuse garbage", () => {
     expect(parseDfRows("Mounted on Size Used Avail\n/ x y z\n/ 1 2")).toEqual([]);
     expect(parseDfRows("")).toEqual([]);
   });
+  test("df mount paths may contain spaces and numeric path components", () => {
+    const output = "Mounted on          1B-blocks         Used       Avail\n"
+      + "/                       1000          400         600\n"
+      + "/run/media/Example/Data Drive  2000    500        1500\n"
+      + "/mnt/archive  2026       3000          600        2400\n";
+    expect(parseDfRows(output)).toEqual([
+      { mount: "/", size: 1000, used: 400, avail: 600, pct: 40 },
+      { mount: "/run/media/Example/Data Drive", size: 2000, used: 500, avail: 1500, pct: 25 },
+      { mount: "/mnt/archive  2026", size: 3000, used: 600, avail: 2400, pct: 20 },
+    ]);
+  });
+  test("df distinguishes spaced mounts with a common prefix and still deduplicates pools", () => {
+    expect(parseDfRows("Mounted on Size Used Avail\n"
+      + "/mnt/data one 100 40 60\n/mnt/data two 200 60 140\n"
+      + "/mnt/data one 100 40 60\n/home 100 40 60\n")).toEqual([
+      { mount: "/mnt/data one", size: 100, used: 40, avail: 60, pct: 40 },
+      { mount: "/mnt/data two", size: 200, used: 60, avail: 140, pct: 30 },
+    ]);
+  });
   test("observational git argv pins fsmonitor, hooks, and credential helper", () => {
     const cmd = observationalGitCommand("/tmp/repo", ["status", "--porcelain=v2", "--branch"]);
     expect(cmd[0]).toBe("git");

@@ -541,16 +541,21 @@ function mem() {
     swapTotal: m.SwapTotal || 0, swapUsed: (m.SwapTotal || 0) - (m.SwapFree || 0) };
 }
 export function parseDfRows(out: string): any[] {
-  const rows = String(out || "").trim().split("\n").slice(1).map(l => l.trim().split(/\s+/));
+  const rows = String(out || "").trim().split("\n").slice(1);
   const seen = new Set<string>(); const res: any[] = [];
-  for (const r of rows) {
-    if (r.length < 4 || seen.has(r[0]) || !r[0].startsWith("/")) continue; seen.add(r[0]);
-    const size = Number(r[1]), used = Number(r[2]), avail = Number(r[3]);
+  for (const row of rows) {
+    // GNU df pads the final three numeric columns, but does not quote spaces
+    // inside the mount path. Splitting every word loses mounted home volumes.
+    const match = /^(\/.*?)\s+(\d+)\s+(\d+)\s+(\d+)$/.exec(row.trim());
+    if (!match || seen.has(match[1])) continue;
+    const [, mount, sizeText, usedText, availText] = match;
+    const size = Number(sizeText), used = Number(usedText), avail = Number(availText);
     // A non-numeric column used to produce NaN → null → an empty meter for "/".
     if (![size, used, avail].every(n => Number.isFinite(n) && n >= 0) || size <= 0) continue;
+    seen.add(mount);
     // btrfs subvolumes (/ and /home on one pool) report identical numbers — show once
     if (res.some(x => x.size === size && x.used === used)) continue;
-    res.push({ mount: uiString(r[0], 128), size, used, avail, pct: 100 * used / size });
+    res.push({ mount: uiString(mount, 128), size, used, avail, pct: 100 * used / size });
   }
   return res;
 }
