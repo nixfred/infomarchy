@@ -1258,7 +1258,7 @@ describe("machine parsers refuse garbage", () => {
       { mount: "/a", size: 100, used: 20, avail: 80, pct: 20 },
     ]);
   });
-  test("a 10000-character whitespace df row parses or is skipped in under 5 ms", () => {
+  test("a 10000-character whitespace df row is skipped in under 5 ms", () => {
     const suffix = "X 100 40 60";
     const huge = "/" + " ".repeat(10000 - 1 - suffix.length) + suffix;
     const bounded = "/" + " ".repeat(4096 - 1 - suffix.length) + suffix;
@@ -1272,45 +1272,38 @@ describe("machine parsers refuse garbage", () => {
     const withinCap = parseDfRows(header + bounded);
     expect(performance.now() - start).toBeLessThan(5);
     expect(withinCap).toEqual([shown]);
-    expect(oversized.length === 0 || (oversized.length === 1 && oversized[0].mount === shown.mount)).toBe(true);
-    if (oversized.length === 1) expect(oversized).toEqual([shown]);
+    expect(oversized).toEqual([]);
   });
-  test("live df text matches the rows the previous parser accepted", () => {
-    // Captured from `df -B1 --output=target,size,used,avail` on 2026-10-04.
-    // The one home-child mount was renamed to `/home/user/google` before commit.
-    // Rows with the same size and used as an earlier mount are absent: pool
-    // suppression. Both parsers agreed on this text, including the unsanitized capture.
+  test("df text in the live column layout matches the rows the previous parser accepted", () => {
+    // Synthetic `df -B1 --output=target,size,used,avail` text with round sizes.
+    // Rows with the same size and used as an earlier mount are absent from the
+    // expected rows: pool suppression. Both parsers return the same rows here.
     const output = [
-      "Mounted on                                    1B-blocks          Used        Avail",
-      "/dev                                        16283635712             0  16283635712",
-      "/run                                        16519606272       3174400  16516431872",
-      "/sys/firmware/efi/efivars                        196608        151281        40207",
-      "/                                         1022042832896  506542579712 513133944832",
-      "/dev/shm                                    16519606272       8855552  16510750720",
-      "/run/credentials/systemd-journald.service       1048576             0      1048576",
-      "/run/credentials/systemd-resolved.service       1048576             0      1048576",
-      "/tmp                                        16519610368     202129408  16317480960",
-      "/var/cache/pacman/pkg                     1022042832896  506542579712 513133944832",
-      "/var/log                                  1022042832896  506542579712 513133944832",
-      "/home                                     1022042832896  506542579712 513133944832",
-      "/boot                                        2143281152    1086025728   1057255424",
-      "/run/user/1000                               3303919616      93872128   3210047488",
-      "/run/credentials/libvirtd.service               1048576          4096      1044480",
-      "/run/credentials/infisical-agent.service        1048576          4096      1044480",
-      "/home/user/google                           2201170739200 1542830821376 658339917824",
+      "Mounted on                             1B-blocks          Used         Avail",
+      "/dev                                  8000000000             0    8000000000",
+      "/run                                  8000000000       8000000    7992000000",
+      "/                                  1000000000000  500000000000  500000000000",
+      "/dev/shm                              8000000000      80000000    7920000000",
+      "/run/credentials/example-a.service       1000000             0       1000000",
+      "/run/credentials/example-b.service       1000000          4000        996000",
+      "/tmp                                  8000000000     200000000    7800000000",
+      "/var/log                           1000000000000  500000000000  500000000000",
+      "/home                              1000000000000  500000000000  500000000000",
+      "/boot                                 2000000000    1000000000    1000000000",
+      "/run/user/1000                        4000000000     100000000    3900000000",
+      "/home/user/Cloud Drive             2000000000000 1500000000000  500000000000",
     ].join("\n");
     expect(parseDfRows(output)).toEqual([
-      { mount: "/dev", size: 16283635712, used: 0, avail: 16283635712, pct: 0 },
-      { mount: "/run", size: 16519606272, used: 3174400, avail: 16516431872, pct: 0.019215954349835 },
-      { mount: "/sys/firmware/efi/efivars", size: 196608, used: 151281, avail: 40207, pct: 76.94549560546875 },
-      { mount: "/", size: 1022042832896, used: 506542579712, avail: 513133944832, pct: 49.56177602426808 },
-      { mount: "/dev/shm", size: 16519606272, used: 8855552, avail: 16510750720, pct: 0.0536063139410881 },
-      { mount: "/run/credentials/systemd-journald.service", size: 1048576, used: 0, avail: 1048576, pct: 0 },
-      { mount: "/tmp", size: 16519610368, used: 202129408, avail: 16317480960, pct: 1.2235724904961633 },
-      { mount: "/boot", size: 2143281152, used: 1086025728, avail: 1057255424, pct: 50.67117428745065 },
-      { mount: "/run/user/1000", size: 3303919616, used: 93872128, avail: 3210047488, pct: 2.841235226952931 },
-      { mount: "/run/credentials/libvirtd.service", size: 1048576, used: 4096, avail: 1044480, pct: 0.390625 },
-      { mount: "/home/user/google", size: 2201170739200, used: 1542830821376, avail: 658339917824, pct: 70.09137428097608 },
+      { mount: "/dev", size: 8000000000, used: 0, avail: 8000000000, pct: 0 },
+      { mount: "/run", size: 8000000000, used: 8000000, avail: 7992000000, pct: 0.1 },
+      { mount: "/", size: 1000000000000, used: 500000000000, avail: 500000000000, pct: 50 },
+      { mount: "/dev/shm", size: 8000000000, used: 80000000, avail: 7920000000, pct: 1 },
+      { mount: "/run/credentials/example-a.service", size: 1000000, used: 0, avail: 1000000, pct: 0 },
+      { mount: "/run/credentials/example-b.service", size: 1000000, used: 4000, avail: 996000, pct: 0.4 },
+      { mount: "/tmp", size: 8000000000, used: 200000000, avail: 7800000000, pct: 2.5 },
+      { mount: "/boot", size: 2000000000, used: 1000000000, avail: 1000000000, pct: 50 },
+      { mount: "/run/user/1000", size: 4000000000, used: 100000000, avail: 3900000000, pct: 2.5 },
+      { mount: "/home/user/Cloud Drive", size: 2000000000000, used: 1500000000000, avail: 500000000000, pct: 75 },
     ]);
   });
   test("observational git argv pins fsmonitor, hooks, and credential helper", () => {
