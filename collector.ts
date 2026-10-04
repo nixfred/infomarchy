@@ -540,17 +540,65 @@ function mem() {
   return { total, used: total - avail, pct: total ? 100 * (total - avail) / total : null,
     swapTotal: m.SwapTotal || 0, swapUsed: (m.SwapTotal || 0) - (m.SwapFree || 0) };
 }
+// GNU df rows are short. A lazy path wildcard plus `\s+` rescans a long
+// whitespace run in quadratic time, and the display cap runs only after a
+// successful parse, so an oversized row is refused before any field walk.
+const DF_ROW_MAX_CHARS = 4096;
+
+function isDfWhitespace(code: number): boolean {
+  // Same set as JavaScript `\s` / String.trim, so column padding matches the
+  // previous parser on real `df` text.
+  return code === 9 || code === 10 || code === 11 || code === 12 || code === 13
+    || code === 32 || code === 0xa0 || code === 0x1680
+    || (code >= 0x2000 && code <= 0x200a) || code === 0x2028 || code === 0x2029
+    || code === 0x202f || code === 0x205f || code === 0x3000 || code === 0xfeff;
+}
+
+function dfDigits(text: string): boolean {
+  if (!text) return false;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 48 || code > 57) return false;
+  }
+  return true;
+}
+
+// Peel size, used and avail off the right. The remainder is the mount and
+// must start with "/". One pass, leftward: trailing padding is the separator,
+// so a path cannot keep trailing spaces. Extra numeric words stay in the path.
+function peelDfRow(line: string): { mount: string; size: number; used: number; avail: number } | null {
+  let end = line.length;
+  const fields: string[] = [];
+  for (let n = 0; n < 3; n++) {
+    let i = end;
+    while (i > 0 && !isDfWhitespace(line.charCodeAt(i - 1))) i--;
+    if (!dfDigits(line.slice(i, end))) return null;
+    fields.push(line.slice(i, end));
+    while (i > 0 && isDfWhitespace(line.charCodeAt(i - 1))) i--;
+    if (i === 0) return null;
+    end = i;
+  }
+  const mount = line.slice(0, end);
+  if (mount.charCodeAt(0) !== 47) return null;
+  return { mount, size: Number(fields[2]), used: Number(fields[1]), avail: Number(fields[0]) };
+}
+
 export function parseDfRows(out: string): any[] {
   const rows = String(out || "").trim().split("\n").slice(1);
   const seen = new Set<string>(); const res: any[] = [];
   for (const row of rows) {
+    if (row.length > DF_ROW_MAX_CHARS) continue;
     // GNU df pads the final three numeric columns, but does not quote spaces
     // inside the mount path. Splitting every word loses mounted home volumes.
-    const match = /^(\/.*?)\s+(\d+)\s+(\d+)\s+(\d+)$/.exec(row.trim());
-    if (!match || seen.has(match[1])) continue;
-    const [, mount, sizeText, usedText, availText] = match;
-    const size = Number(sizeText), used = Number(usedText), avail = Number(availText);
+    const parsed = peelDfRow(row.trim());
+    if (!parsed || seen.has(parsed.mount)) continue;
+    const { mount, size, used, avail } = parsed;
     // A non-numeric column used to produce NaN → null → an empty meter for "/".
+    // `seen` is recorded only after this check, so a zero-size row does not
+    // block a later valid row for the same mount (that mount is recovered).
+    // Ordering: the first valid row for a full path wins, and same-size /
+    // same-used suppression keeps the earlier valid mount. A recovered row
+    // therefore cannot replace a different mount that was already kept.
     if (![size, used, avail].every(n => Number.isFinite(n) && n >= 0) || size <= 0) continue;
     seen.add(mount);
     // btrfs subvolumes (/ and /home on one pool) report identical numbers — show once

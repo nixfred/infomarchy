@@ -22,12 +22,14 @@ Backfill pending; the release history itself is in CHANGELOG.md.
 
 **Greyforge Labs** · GitHub [@GreyforgeLabs](https://github.com/GreyforgeLabs) · X [@GreyforgeLabs](https://x.com/GreyforgeLabs)
 
-`parseDfRows()` split each `df` row on whitespace, so a removable drive mounted
-at a path with a space (`/run/media/<user>/Data Drive`) never showed on the disk
-card. The row is now matched as a path plus three trailing numeric columns. The
-header skip, the full-path dedupe and the btrfs duplicate-pool suppression are
-unchanged, and two regression tests cover internal double spaces, a path ending
-in digits and spaced mounts sharing a prefix.
+`parseDfRows()` split each `df` row on whitespace, so a mount path containing
+a space never reached the disk card. Collection still queries only `/` and the
+home directory; a removable drive mounted somewhere else is not listed. Among
+the filesystems already queried, the row is now matched as a path plus three
+trailing numeric columns. The header is still skipped. The first valid row for
+a full path is kept, a rejected row does not block a later valid row for that
+mount, and that later row does not replace a different mount already kept.
+Same-size, same-used pools still show once.
 
 Reviewed here before merge: the old and new functions run over live
 `df -B1 --output=target,size,used,avail` text return identical rows for every
