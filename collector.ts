@@ -824,7 +824,32 @@ export function cursorIsWorker(cmd: string[], environ = ""): boolean {
   return true;
 }
 const INTERPRETERS = /(^|\/)(node|nodejs|bun|deno|python[0-9.]*|uv|npx|bunx|sh|bash|zsh|fish|env)$/;
+const HERMES_SERVICE_COMMANDS = /^(gateway|proxy|cron|send|webhook|slack|whatsapp|whatsapp-cloud|peer|sync|logs|dashboard|serve|desktop|mcp|peers)$/;
+// Hermes's installer writes a `hermes` shim that execs
+// `python3 -I -c '<bootstrap>' [args]`, so no argv token names the program
+// and the launcher-name match below never fires. Recognise the bootstrap by
+// the entry point it ends in and return the user's arguments after it.
+export function hermesBootstrapArgs(cmd: string[]): string[] | null {
+  if (!/(^|\/)python[0-9.]*$/.test(cmd[0] || "")) return null;
+  const c = cmd.indexOf("-c");
+  if (c < 1 || c > 3) return null;
+  if (!/from hermes_cli\.main import main/.test(cmd[c + 1] || "")) return null;
+  return cmd.slice(c + 2);
+}
+// A Hermes process whose own lease file says it hosts a live session is a
+// session, whatever its subcommand: Hermes Desktop's conversations run inside
+// a `hermes serve` backend started over SSH, which providerOf rightly treats
+// as a service. The argv check guards against a stale lease on a reused pid.
+export function hermesLeaseProvider(cmd: string[], pid: number, leases: Map<number, string>): string | null {
+  if (!leases.has(pid)) return null;
+  return hermesBootstrapArgs(cmd) || cmd.some(a => /hermes_cli|(^|\/)hermes$/.test(a)) ? "hermes" : null;
+}
 export function providerOf(cmd: string[]): string | null {
+  const hermesArgs = hermesBootstrapArgs(cmd);
+  if (hermesArgs) {
+    const sub = hermesArgs.find(a => !a.startsWith("-")) || "";
+    return HERMES_SERVICE_COMMANDS.test(sub) ? null : "hermes";
+  }
   // Only argv[0] identifies a program. argv[1..2] count solely when argv[0]
   // is an interpreter/launcher, otherwise `cat /tmp/claude` or
   // `vim notes/codex` becomes a phantom agent with repo scans and alerts.
@@ -846,7 +871,7 @@ export function providerOf(cmd: string[]): string | null {
       if (name === "hermes") {
         const mod = cmd[0] && /(^|\/)(python[0-9.]*)$/.test(cmd[0]) && cmd[1] === "-m";
         if (mod && /(^|\/)hermes_cli\.main$/.test(cmd[2] || "") && cmd[3]
-            && /^(gateway|proxy|cron|send|webhook|slack|whatsapp|whatsapp-cloud|peer|cron|sync|logs|dashboard|serve|desktop|mcp|peers)$/.test(cmd[3])) return null;
+            && HERMES_SERVICE_COMMANDS.test(cmd[3])) return null;
       }
       // Grok Bot is Electron: the zygote/renderer/gpu/utility helpers all carry
       // the same argv[0] as the browser process, and the local-exec daemon runs
@@ -1745,7 +1770,8 @@ async function liveSessions(pids: number[]) {
   const herdrClients = herdrState(winByPid);
   const boomuxClients = boomuxState(winByPid);
   for (const pid of pids) {
-    const prov = providerOf(cmdByPid.get(pid) || []); if (!prov) continue;
+    const cmd = cmdByPid.get(pid) || [];
+    const prov = providerOf(cmd) || hermesLeaseProvider(cmd, pid, hermesByPid); if (!prov) continue;
     const p = info(pid); if (!p) continue;
     // skip children of an already-reported agent process (subagents, helpers)
     let anc = info(p.ppid), child = false;

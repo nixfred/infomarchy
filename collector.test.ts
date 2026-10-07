@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSyn
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join, relative } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents, sessionStaleness, opencodeUsageFromRows, STALE_AFTER_MS, decodeBase32, grokBotLine, grokBotRow, grokBotAttention, attachGrokBotRoster, grokSessionUsage, usageModelBreakdown, windowMatchesProvider, hermesSessionByPid, validNetDevice, observationalGitCommand, observationalGitEnv, piUserText, piSessionIdFromName, grokTurnFromUpdate, foldGrokTurnsChunk, emptyGrokFileEntry, newestGrokFiles, grokEntryFromPrev, grokUsageFilesForPrev, cursorProjectPath, cursorUserText, cursorTimestamp, cursorTranscriptBusy, cursorIsWorker, cursorWorkspaceDir, cursorCurrentChat, sessionBusyState } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents, sessionStaleness, opencodeUsageFromRows, STALE_AFTER_MS, decodeBase32, grokBotLine, grokBotRow, grokBotAttention, attachGrokBotRoster, grokSessionUsage, usageModelBreakdown, windowMatchesProvider, hermesSessionByPid, validNetDevice, observationalGitCommand, observationalGitEnv, piUserText, piSessionIdFromName, grokTurnFromUpdate, foldGrokTurnsChunk, emptyGrokFileEntry, newestGrokFiles, grokEntryFromPrev, grokUsageFilesForPrev, cursorProjectPath, cursorUserText, cursorTimestamp, cursorTranscriptBusy, cursorIsWorker, cursorWorkspaceDir, cursorCurrentChat, sessionBusyState, hermesBootstrapArgs, hermesLeaseProvider } from "./collector.ts";
 import { sessionEventId } from "./notification-events.ts";
 
 const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
@@ -142,6 +142,28 @@ describe("sessionStaleness", () => {
 });
 
 describe("providerOf", () => {
+  const hermesBoot = "import os, re, sys\nsys.path.insert(0, '/h/.hermes/hermes-agent')\nfrom hermes_cli.main import main\nsys.exit(main())";
+  const py = "/h/.hermes/tools/python-3.14/bin/python3";
+  test("treats the installer's `python3 -I -c <bootstrap>` Hermes shim as a session", () => {
+    expect(providerOf([py, "-I", "-c", hermesBoot])).toBe("hermes");
+    expect(providerOf([py, "-I", "-c", hermesBoot, "--yolo"])).toBe("hermes");
+    expect(hermesBootstrapArgs([py, "-I", "-c", hermesBoot, "chat"])).toEqual(["chat"]);
+  });
+
+  test("ignores Hermes bootstrap services (gateway, serve)", () => {
+    expect(providerOf([py, "-I", "-c", hermesBoot, "gateway", "run"])).toBeNull();
+    expect(providerOf([py, "-I", "-c", hermesBoot, "serve", "--isolated"])).toBeNull();
+    expect(providerOf([py, "-c", "print('hermes')"])).toBeNull();
+  });
+
+  test("a Hermes process holding a live lease is a session even as `serve`", () => {
+    const leases = new Map([[42, "20261007_112455_b2f63f"]]);
+    expect(hermesLeaseProvider([py, "-I", "-c", hermesBoot, "serve"], 42, leases)).toBe("hermes");
+    expect(hermesLeaseProvider([py, "-I", "-c", hermesBoot, "serve"], 43, leases)).toBeNull();
+    // A reused pid running something else must not inherit the stale lease.
+    expect(hermesLeaseProvider(["/usr/bin/vim", "notes"], 42, leases)).toBeNull();
+  });
+
   test("treats an interactive Codex CLI as a session", () => {
     expect(providerOf(["/usr/bin/codex", "--yolo"])).toBe("codex");
   });
