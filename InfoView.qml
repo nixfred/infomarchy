@@ -505,6 +505,25 @@ Item {
     if (!duration || !isFinite(remaining) || remaining < 0 || remaining > duration) return -1
     return 1 - remaining / duration
   }
+  // How far a limit is from even pace, in whole points: positive is AHEAD of
+  // pace (spending faster than the window allows), negative is behind. null
+  // when there is no pace to compare against.
+  function usagePaceDelta(limit) {
+    var pace = usagePace(limit)
+    if (pace < 0) return null
+    return Math.round((Number((limit || ({})).percent || 0) - pace) * 100)
+  }
+  // The label for a limit row. The percent and the pace delta live at the LEFT,
+  // next to the name, because the right end of the card is where a covering
+  // window, a crop or a narrow monitor cuts it off, and a bar with its number
+  // cut away just looks full. Everything needed to read the row survives
+  // losing the right half of it.
+  function usageLimitLabel(limit) {
+    var l = limit || ({}), delta = usagePaceDelta(l)
+    var text = String(l.label || l.title || "") + "  " + Math.round((l.percent || 0) * 100) + "%"
+    if (delta !== null) text += "  " + (delta > 0 ? "+" : "") + delta
+    return text
+  }
   // ---- grouping quiet sessions ------------------------------------------------
   // Grok Bot runs a whole roster inside one Electron process and the collector
   // expands it into one card per bot, so a nine-bot roster costs nine cards and
@@ -2201,7 +2220,7 @@ Item {
           draggable: true
           title: "USAGE & LIMITS"
           hint: {
-            var keys = Object.keys(view.usage); return keys.length ? "omarchy agents · grok/opencode local · | = even pace" : "enable the Agents bar widget"
+            var keys = Object.keys(view.usage); return keys.length ? "omarchy agents · grok/opencode local · | = even pace · +n ahead, -n behind" : "enable the Agents bar widget"
           }
           ColumnLayout {
             width: parent.width
@@ -2406,8 +2425,8 @@ Item {
                       required property var modelData
                       readonly property var projection: view.usageProjection(modelData)
                       Layout.fillWidth: true
-                      label: modelData.label || modelData.title || ""
-                      value: (view.usageForecastMode ? (projection === null ? "learning" : "→ " + Math.round(projection * 100) + "% at reset") : Math.round((modelData.percent || 0) * 100) + "%") + (modelData.resetsAt ? "  ↻ " + view.desk.until(Date.parse(modelData.resetsAt)) : "")
+                      label: view.usageLimitLabel(modelData)
+                      value: (view.usageForecastMode ? (projection === null ? "learning" : "→ " + Math.round(projection * 100) + "% at reset") : "") + (modelData.resetsAt ? (view.usageForecastMode ? "  " : "") + "↻ " + view.desk.until(Date.parse(modelData.resetsAt)) : "")
                       fraction: modelData.percent || 0
                       pace: view.usagePace(modelData)
                       tone: (modelData.percent || 0) > 0.85 ? view.desk.red : (modelData.percent || 0) > 0.6 ? view.desk.yellow : up.tone

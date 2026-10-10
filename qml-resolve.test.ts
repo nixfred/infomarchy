@@ -77,7 +77,9 @@ const CEILINGS: Record<string, number> = {
   // reads view.desk, all outer-scope reads that qmllint reports as
   // [unqualified]. Diffed against the previous file: no missing-property or
   // unresolved-name finding, only that same pattern.
-  "InfoView.qml": 622,
+  // +2: usagePaceDelta() and usageLimitLabel() read the limit and the pace
+  // helper through the outer scope, [unqualified] only (diffed, no other kind).
+  "InfoView.qml": 624,
   "Overlay.qml": 29,
   "WaveWallpaper.qml": 0,
   // Settings drawer (#25): dynamic Style properties qmllint sees as QObject,

@@ -30,6 +30,19 @@ const usagePace = (limit: any, snap: any) => new Function("usageWindowMs", "snap
 const HOUR = 3600_000;
 const NOW = Date.parse("2026-10-10T03:50:00Z");
 
+const usagePaceSrc = pickFunction("usagePace");
+const usagePaceDeltaSrc = pickFunction("usagePaceDelta");
+const usageLimitLabelSrc = pickFunction("usageLimitLabel");
+// The three helpers call each other as bare names, as they do inside the QML
+// object, so they are assembled the same way here.
+const label = (limit: any, snap: any) =>
+  new Function("usageWindowMs", "snap", `
+    ${usagePaceSrc}
+    ${usagePaceDeltaSrc}
+    ${usageLimitLabelSrc}
+    return usageLimitLabel(${JSON.stringify(limit)});
+  `)(usageWindowMs, snap);
+
 describe("where even pace sits on a limit bar", () => {
   test("the real Weekly reading: 30h of a 168h week left puts even pace at 82%", () => {
     // 2026-10-09 23:47 EDT: Weekly 86%, resets Sunday 06:00 EDT. Burn Bar drew
@@ -237,4 +250,39 @@ describe("the real Meter draws the even-pace tick", () => {
     ]) expect(output, output).toContain(`PASS   : qmltestrunner::PaceTick::${name}()`);
     expect(result.exitCode, output).toBe(0);
   }, 60_000);
+});
+
+describe("the row keeps its numbers where a cropped or covered card still shows them", () => {
+  const weekly = { label: "Weekly (7-day)", percent: 0.86, resetsAt: new Date(NOW + 30 * HOUR).toISOString() };
+
+  test("the real Weekly row reads 86% and 4 points ahead of pace, in the label", () => {
+    // The card was screenshotted with its right end covered. The bar looked
+    // full because the number, the end of the fill and the tick all sit at the
+    // right. Name, percent and delta now sit together at the LEFT.
+    expect(label(weekly, { ts: NOW })).toBe("Weekly (7-day)  86%  +4");
+  });
+
+  test("behind pace is negative, and an unknown pace adds no delta", () => {
+    expect(label({ label: "Fable Weekly", percent: 0.34, resetsAt: new Date(NOW + 30 * HOUR).toISOString() }, { ts: NOW })).toBe("Fable Weekly  34%  -48");
+    expect(label({ label: "Monthly credits", percent: 0.5, resetsAt: new Date(NOW + HOUR).toISOString() }, { ts: NOW })).toBe("Monthly credits  50%");
+    expect(label({ label: "Weekly (7-day)", percent: 0.5 }, { ts: NOW })).toBe("Weekly (7-day)  50%");
+  });
+
+  test("exactly on pace shows a plain 0, not a sign", () => {
+    expect(label({ label: "Session (5-hour)", percent: 0.8, resetsAt: new Date(NOW + HOUR).toISOString() }, { ts: NOW })).toBe("Session (5-hour)  80%  0");
+  });
+
+  test("the row renders the label from the helper, and the right side no longer repeats the percent", () => {
+    expect(view).toContain("label: view.usageLimitLabel(modelData)");
+    // The right-hand value keeps the reset (and the forecast view), but the
+    // percent that used to lead it is gone, so it is not said twice.
+    const row = view.slice(view.indexOf("label: view.usageLimitLabel(modelData)"), view.indexOf("fraction: modelData.percent || 0", view.indexOf("label: view.usageLimitLabel(modelData)")));
+    expect(row).toContain('"% at reset"');
+    expect(row).toContain('"↻ "');
+    expect(row).not.toContain("Math.round((modelData.percent || 0) * 100)");
+  });
+
+  test("the legend explains both marks", () => {
+    expect(view).toContain("| = even pace · +n ahead, -n behind");
+  });
 });
