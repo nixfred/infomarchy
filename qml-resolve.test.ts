@@ -73,7 +73,11 @@ const CEILINGS: Record<string, number> = {
   // +4: sessionReachable(), sortedSessions and the two group counts read the
   // session list and view.settings through the outer scope, the same
   // unqualified false positive the rest of this count is made of.
-  "InfoView.qml": 617,
+  // +5: usagePace() reads the snapshot clock and the Meter's even-pace tick
+  // reads view.desk, all outer-scope reads that qmllint reports as
+  // [unqualified]. Diffed against the previous file: no missing-property or
+  // unresolved-name finding, only that same pattern.
+  "InfoView.qml": 622,
   "Overlay.qml": 29,
   "WaveWallpaper.qml": 0,
   // Settings drawer (#25): dynamic Style properties qmllint sees as QObject,

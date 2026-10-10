@@ -492,6 +492,19 @@ Item {
     if (!duration || !isFinite(remaining) || remaining < 0 || elapsed < duration * 0.03) return null
     return Math.max(0, Number(limit.percent || 0) * duration / elapsed)
   }
+  // Where EVEN PACE sits on a limit bar: the fraction of the window that has
+  // already elapsed. A bar at 86% means nothing alone; 86% with 82% of the
+  // week gone is "slightly ahead", and 86% with 20% gone is a different
+  // problem. Measured from the snapshot's own clock so it moves with the data.
+  // -1 means no marker: unknown window length, no reset time, a reset already
+  // in the past, or a reset further out than the window (a stale reading).
+  function usagePace(limit) {
+    var duration = usageWindowMs((limit || ({})).label || (limit || ({})).title)
+    var now = Number((snap && snap.ts) || Date.now())
+    var remaining = Date.parse((limit || ({})).resetsAt || "") - now
+    if (!duration || !isFinite(remaining) || remaining < 0 || remaining > duration) return -1
+    return 1 - remaining / duration
+  }
   // ---- grouping quiet sessions ------------------------------------------------
   // Grok Bot runs a whole roster inside one Electron process and the collector
   // expands it into one card per bot, so a nine-bot roster costs nine cards and
@@ -1101,6 +1114,8 @@ Item {
     property string label: ""
     property string value: ""
     property real fraction: 0
+    // Where even pace would be, 0..1, or -1 for no marker (see usagePace).
+    property real pace: -1
     property color tone: Color.accent
     implicitHeight: mrow.implicitHeight + bar.height + Style.spacing.xs
     width: parent ? parent.width : 200
@@ -1121,6 +1136,21 @@ Item {
         width: parent.width * Math.max(0, Math.min(1, fraction))
         height: parent.height; radius: parent.radius; color: tone
         Behavior on width { NumberAnimation { duration: 400; easing.type: Easing.OutCubic } }
+      }
+      // The even-pace marker. Drawn over the fill, so it reads against both a
+      // bar that is behind pace (tick beyond the fill) and one that is ahead
+      // of it (tick inside the fill). It stands a pixel or two proud of the
+      // track so it is visible on a full bar, where there is no track to see.
+      Rectangle {
+        objectName: "paceTick"
+        visible: pace >= 0 && pace <= 1
+        width: 2
+        height: parent.height + 4
+        y: -2
+        x: Math.round(parent.width * Math.max(0, Math.min(1, pace))) - width / 2
+        radius: 1
+        color: Util.alpha(view.desk.themeForeground, 0.95)
+        z: 2
       }
     }
   }
@@ -2171,7 +2201,7 @@ Item {
           draggable: true
           title: "USAGE & LIMITS"
           hint: {
-            var keys = Object.keys(view.usage); return keys.length ? "omarchy agents · grok/opencode local" : "enable the Agents bar widget"
+            var keys = Object.keys(view.usage); return keys.length ? "omarchy agents · grok/opencode local · | = even pace" : "enable the Agents bar widget"
           }
           ColumnLayout {
             width: parent.width
@@ -2379,6 +2409,7 @@ Item {
                       label: modelData.label || modelData.title || ""
                       value: (view.usageForecastMode ? (projection === null ? "learning" : "→ " + Math.round(projection * 100) + "% at reset") : Math.round((modelData.percent || 0) * 100) + "%") + (modelData.resetsAt ? "  ↻ " + view.desk.until(Date.parse(modelData.resetsAt)) : "")
                       fraction: modelData.percent || 0
+                      pace: view.usagePace(modelData)
                       tone: (modelData.percent || 0) > 0.85 ? view.desk.red : (modelData.percent || 0) > 0.6 ? view.desk.yellow : up.tone
                     }
                   }
