@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 
 // One data model per view: runs collector.ts on a timer, parses the snapshot,
 // and exposes theme colors (ANSI roles from the active Omarchy theme) so the
@@ -69,14 +70,14 @@ Item {
   // Omarchy's Color singleton gives fg/bg/accent/urgent/muted. The ANSI roles
   // (green/yellow/red/blue…) live in the theme's colors.toml; read them here
   // with fallbacks so any theme works even if it omits a key.
-  property color green: Color.accent
-  property color yellow: Color.foreground
-  property color red: Color.urgent
-  property color blue: Color.accent
-  property color magenta: Color.accent
-  property color cyan: Color.accent
-  property color themeBackground: Color.background
-  property color themeForeground: Color.foreground
+  property color green: Commons.Color.accent
+  property color yellow: Commons.Color.foreground
+  property color red: Commons.Color.urgent
+  property color blue: Commons.Color.accent
+  property color magenta: Commons.Color.accent
+  property color cyan: Commons.Color.accent
+  property color themeBackground: Commons.Color.background
+  property color themeForeground: Commons.Color.foreground
 
   function parseColors(text) {
     var map = {}
@@ -89,14 +90,14 @@ Item {
       for (var k = 0; k < keys.length; k++) if (map[keys[k]]) return map[keys[k]]
       return fallback
     }
-    green = pick(["green", "color2"], Color.accent)
-    yellow = pick(["yellow", "color3"], Color.foreground)
-    red = pick(["red", "color1"], Color.urgent)
-    blue = pick(["blue", "color4"], Color.accent)
-    magenta = pick(["magenta", "color5"], Color.accent)
-    cyan = pick(["cyan", "color6"], Color.accent)
-    themeBackground = pick(["background"], Color.background)
-    themeForeground = pick(["foreground"], Color.foreground)
+    green = pick(["green", "color2"], Commons.Color.accent)
+    yellow = pick(["yellow", "color3"], Commons.Color.foreground)
+    red = pick(["red", "color1"], Commons.Color.urgent)
+    blue = pick(["blue", "color4"], Commons.Color.accent)
+    magenta = pick(["magenta", "color5"], Commons.Color.accent)
+    cyan = pick(["cyan", "color6"], Commons.Color.accent)
+    themeBackground = pick(["background"], Commons.Color.background)
+    themeForeground = pick(["foreground"], Commons.Color.foreground)
   }
 
   FileView {
@@ -117,7 +118,7 @@ Item {
   }
   FileView {
     id: colorsFile
-    path: Color.currentThemePath + "/colors.toml"
+    path: Commons.Color.currentThemePath + "/colors.toml"
     watchChanges: true
     printErrors: false
     onLoaded: root.parseColors(text())
@@ -126,7 +127,7 @@ Item {
   // The theme dir is a symlink swap; watching the file alone can miss it.
   // Color.* changes when the shell learns about a new theme → re-read.
   Connections {
-    target: Color
+    target: Commons.Color
     function onAccentChanged() { colorsFile.reload() }
     function onBackgroundChanged() { colorsFile.reload() }
     function onForegroundChanged() { colorsFile.reload() }
@@ -150,7 +151,7 @@ Item {
       case "aider": return root.yellow
       case "remote": return root.cyan
       case "copilot": return root.magenta
-      default: return Color.accent
+      default: return Commons.Color.accent
     }
   }
   // Only the two addresses this plugin ships. Nothing user- or snapshot-derived

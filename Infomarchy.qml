@@ -4,6 +4,7 @@ import Quickshell.Hyprland
 import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "bar-insets.js" as BarInsets
 
@@ -30,7 +31,7 @@ Scope {
     } : null,
     barFallbackInset)
 
-  // Match omarchy-theme-bg-set and Color.currentThemePath: $HOME/.local/state,
+  // Match omarchy-theme-bg-set and Commons.Color.currentThemePath: $HOME/.local/state,
   // not XDG_STATE_HOME, which can point somewhere the CLI never writes.
   readonly property string home: Quickshell.env("HOME")
   readonly property string stateHome: home + "/.local/state"
@@ -193,8 +194,8 @@ Scope {
   }
 
   function applyThemePayload(colorsB64, shellB64) {
-    try { Color.loadColors(Util.decodeBase64(colorsB64)) } catch (e) {}
-    try { Color.loadShell(Util.decodeBase64(shellB64)) } catch (e2) {}
+    try { Commons.Color.loadColors(Util.decodeBase64(colorsB64)) } catch (e) {}
+    try { Commons.Color.loadShell(Util.decodeBase64(shellB64)) } catch (e2) {}
     Style.scheduleRefresh()
   }
 

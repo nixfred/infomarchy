@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Services.Mpris
 import qs.Commons
+import qs.Commons as Commons
 
 // The dashboard itself. Hosted by Infomarchy.qml (background layer) and Overlay.qml
 // (summoned fullscreen). Everything is sized from Style.* and colored from the
@@ -1135,7 +1136,7 @@ Item {
     property real fraction: 0
     // Where even pace would be, 0..1, or -1 for no marker (see usagePace).
     property real pace: -1
-    property color tone: Color.accent
+    property color tone: Commons.Color.accent
     implicitHeight: mrow.implicitHeight + bar.height + Style.spacing.xs
     width: parent ? parent.width : 200
     RowLayout {
@@ -1176,7 +1177,7 @@ Item {
 
   component Tag: Rectangle {
     property string text: ""
-    property color tone: Color.accent
+    property color tone: Commons.Color.accent
     color: Util.alpha(tone, 0.18)
     border.color: Util.alpha(tone, 0.5)
     border.width: 1

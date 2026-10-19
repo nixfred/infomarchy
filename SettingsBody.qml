@@ -4,6 +4,7 @@ import QtQuick.Layouts
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 
 // Web Mode / desk settings, hosted by the overlay drawer.
 ColumnLayout {
@@ -12,13 +13,13 @@ ColumnLayout {
   property var desk: null
   spacing: Style.spacing.md
 
-  readonly property color fg: desk && desk.themeForeground ? desk.themeForeground : Color.foreground
+  readonly property color fg: desk && desk.themeForeground ? desk.themeForeground : Commons.Color.foreground
   readonly property color dim: Qt.rgba(fg.r, fg.g, fg.b, 0.62)
   readonly property color faint: Qt.rgba(fg.r, fg.g, fg.b, 0.38)
-  readonly property color green: desk && desk.green ? desk.green : Color.accent
-  readonly property color yellow: desk && desk.yellow ? desk.yellow : Color.foreground
-  readonly property color cyan: desk && desk.cyan ? desk.cyan : Color.accent
-  readonly property color red: desk && desk.red ? desk.red : Color.urgent
+  readonly property color green: desk && desk.green ? desk.green : Commons.Color.accent
+  readonly property color yellow: desk && desk.yellow ? desk.yellow : Commons.Color.foreground
+  readonly property color cyan: desk && desk.cyan ? desk.cyan : Commons.Color.accent
+  readonly property color red: desk && desk.red ? desk.red : Commons.Color.urgent
   readonly property string mono: Style.resolvedFontFamily
   readonly property string webServerPath: settings.webServerPath
   property var tokens: []
