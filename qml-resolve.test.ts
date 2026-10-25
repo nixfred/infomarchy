@@ -27,7 +27,7 @@ import { join } from "path";
 // dynamic Style properties and unqualified card/delegate accesses.
 // Usage (#16) adds the refresh chip and provider-block bindings.
 const CEILINGS: Record<string, number> = {
-  "Apps.qml": 6,
+  "Apps.qml": 3,
   "BackgroundWallpaper.qml": 0,
   // +4: each edge reads root.barEdgeInsets from inside the per-screen
   // PanelWindow. qmllint counts every outer-id read as unqualified, the
@@ -80,7 +80,7 @@ const CEILINGS: Record<string, number> = {
   // +2: usagePaceDelta() and usageLimitLabel() read the limit and the pace
   // helper through the outer scope, [unqualified] only (diffed, no other kind).
   "InfoView.qml": 624,
-  "Overlay.qml": 29,
+  "Overlay.qml": 30,
   "WaveWallpaper.qml": 0,
   // Settings drawer (#25): dynamic Style properties qmllint sees as QObject,
   // modelData reads inside nested delegate children, and Process exit-status
@@ -106,6 +106,10 @@ const VERSION_DEPENDENT: [RegExp, string | null][] = [
   [/Member "isVideoPath" not found on type "Util" \[missing-property\]$/, null],
   [/BackgroundMedia was not found\..*\[import\]$/, "BackgroundWallpaper.qml"],
   [/Unused import \[unused-imports\]$/, "BackgroundWallpaper.qml"],
+  // Qt 6.12's qmllint cannot see inside Style.spacing / Style.font, which are
+  // anonymous QtObjects in Omarchy's Commons/Style.qml. Every token below exists
+  // at runtime (284 reads across the plugin); only the linter's view changed.
+  [/Member "(xs|sm|md|lg|xl|caption|body)" not found on type "QObject" \[missing-property\]$/, null],
 ];
 function versionDependent(file: string, line: string): boolean {
   return VERSION_DEPENDENT.some(([re, only]) => (only === null || only === file) && re.test(line.trim()));

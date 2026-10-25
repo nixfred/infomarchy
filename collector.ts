@@ -2056,8 +2056,13 @@ function codexHistory() {
       if (e && Number.isFinite(updatedAt)) threads.push({ id: cleanSessionId(e.id), name: uiString(e.thread_name, 120), updatedAt });
     } catch {}
   }
-  threads.sort((a, b) => b.updatedAt - a.updatedAt);
-  return { present: true, prompts, threads: threads.slice(0, 8), threadCount: threads.length };
+  // session_index.jsonl is append-only: a renamed thread gets a second line
+  // with the same id, so keep only its newest line or the count runs high and a
+  // thread shows twice on the card.
+  const newest = new Map<string, any>();
+  for (const thread of threads) { const kept = newest.get(thread.id); if (!kept || thread.updatedAt > kept.updatedAt) newest.set(thread.id, thread); }
+  const unique = [...newest.values()].sort((a, b) => b.updatedAt - a.updatedAt);
+  return { present: true, prompts, threads: unique.slice(0, 8), threadCount: unique.length };
 }
 // Kimi Code keeps one wire.jsonl event log per session under
 // sessions/<wd-hash>/<session-id>/agents/main/. Its context.append_message

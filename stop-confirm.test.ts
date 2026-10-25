@@ -39,7 +39,9 @@ describe("ending a session takes two clicks, proven with real ones", () => {
     expect(output, output).toContain("PASS   : qmltestrunner::EndProcessNeedsTwoClicks::test_a_snapshot_tick_does_not_fire_it()");
     expect(output, output).toContain("PASS   : qmltestrunner::EndProcessNeedsTwoClicks::test_arming_expires_on_its_own()");
     expect(result.exitCode, output).toBe(0);
-  });
+    // The fixture waits out the real 4 s disarm, so it needs ~4.3 s offscreen and
+    // ~10 s when Qt has to open a Wayland connection first: past bun's 5 s default.
+  }, 60_000);
 });
 
 describe("the inspector's own controls clear the panel's rounded corners", () => {
