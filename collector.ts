@@ -2684,7 +2684,11 @@ async function containerState() {
     total: items.length,
   };
 }
-const MAX_USAGE_FILES = 16;
+// Omarchy 4.5 writes one record per collector (22 of them, alphabetical), so a
+// cap of 16 dropped everything after "muse" even when that agent was in use.
+// The aggregate snapshot is bounded by its node budget, not by this cap: all 23
+// 4.5 records measured 4.6k of 50k nodes.
+const MAX_USAGE_FILES = 48;
 const MAX_USAGE_FILE_BYTES = 512 * 1024;
 
 // ---------------------------------------------------------------- API value estimate
@@ -3524,9 +3528,12 @@ async function refreshClaudeAuthIfNeeded() {
       if (!writePrivateStateFile(STATE_DIR, CLAUDE_AUTH_REFRESH_FILE, JSON.stringify({ attemptedAt: now }) + "\n")) return;
       await run([claude, "-p", "ping", "--max-turns", "0", "--output-format", "json"], 12_000);
     }
-    const collector = join(process.env.OMARCHY_PATH || "/usr/share/omarchy", "bin/omarchy-agent-usage-claude");
+    const omarchyPath = process.env.OMARCHY_PATH || "/usr/share/omarchy";
+    const collector = join(omarchyPath, "bin/omarchy-agent-usage-claude");
     if (!existsSync(collector)) return;
-    const text = await run([collector, "--limits-only"], 8_000);
+    // Omarchy 4.5 collectors load their shared module from $OMARCHY_PATH and die
+    // with a KeyError when it is unset, which would leave the limits stale.
+    const text = await run([collector, "--limits-only"], 8_000, undefined, { ...process.env, OMARCHY_PATH: omarchyPath } as Record<string, string>);
     const parsed = parseJsonBounded(text, 4000, 12);
     if (parsed && typeof parsed === "object" && parsed.id === "claude") claudeUsageFresh = parsed;
   } catch {}
