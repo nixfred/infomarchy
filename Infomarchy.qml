@@ -288,6 +288,8 @@ Scope {
     function setDashboardVisible(v: string): void { dashboardSettings.setDashboardVisible(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
     function toggleDashboard(): void { dashboardSettings.toggleDashboardVisible() }
     function getDashboardVisible(): string { return dashboardSettings.dashboardVisible ? "true" : "false" }
+    function setWallpaperPassthrough(v: string): void { dashboardSettings.setWallpaperPassthrough(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
+    function getWallpaperPassthrough(): string { return dashboardSettings.wallpaperPassthrough ? "true" : "false" }
     function setOllamaHost(v: string): void { dashboardSettings.setOllamaHost(v) }
     function getOllamaHost(): string { return String(dashboardSettings.ollamaHost || "") }
     function setPrivacy(v: string): void { dashboardSettings.setPrivacyMode(["1", "true", "on", "yes"].indexOf(String(v).toLowerCase()) >= 0) }
@@ -346,11 +348,13 @@ Scope {
       screen: modelData
       // Hyprland leaves a mapped layer at its old global origin when a monitor
       // moves (undock). Pulse unmapped so the compositor re-places us.
-      visible: !remapGuard.remapping
+      // Passthrough unmaps while the desk is hidden so this surface does not
+      // eat clicks meant for the wallpaper plugin underneath.
+      visible: !remapGuard.remapping && !(dashboardSettings.ready && dashboardSettings.wallpaperPassthrough && !dashboardSettings.dashboardVisible)
       anchors { top: true; bottom: true; left: true; right: true }
-      color: infoModel.themeBackground
+      color: dashboardSettings.wallpaperPassthrough ? "transparent" : infoModel.themeBackground
       WlrLayershell.namespace: "omarchy-background"
-      WlrLayershell.layer: WlrLayer.Background
+      WlrLayershell.layer: dashboardSettings.wallpaperPassthrough ? WlrLayer.Bottom : WlrLayer.Background
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
       exclusionMode: ExclusionMode.Ignore
       // A parked background layer has been seen to drop its buffer; keep rendering.
@@ -421,7 +425,7 @@ Scope {
         // Each surface is given a source only for its own kind of file.
         WaveWallpaper {
           anchors.fill: parent
-          visible: !root.videoBackground
+          visible: !root.videoBackground && !dashboardSettings.wallpaperPassthrough
           source: root.videoBackground ? "" : root.imageUrl(root.background)
           fillMode: Image.PreserveAspectCrop
           asynchronous: true
@@ -432,7 +436,7 @@ Scope {
         Loader {
           id: videoWallpaper
           anchors.fill: parent
-          active: root.videoBackground
+          active: root.videoBackground && !dashboardSettings.wallpaperPassthrough
           source: "BackgroundWallpaper.qml"
           onStatusChanged: {
             if (status === Loader.Error)
@@ -468,6 +472,14 @@ Scope {
           value: dashboardSettings.videoAudio && panel.firstScreen && !panel.fullscreenHere
           when: videoWallpaper.item !== null
         }
+      }
+
+      // Passthrough has no image to dim. Tint the wallpaper plugin showing through.
+      Rectangle {
+        anchors.fill: parent
+        visible: dashboardSettings.ready && dashboardSettings.wallpaperPassthrough && dashboardSettings.dashboardVisible
+        color: infoModel.themeBackground
+        opacity: Math.max(0, Math.min(1, 1 - root.wallpaperOpacity))
       }
 
       // Empty-desk gestures: left double-click = wallpaper switcher (stock
