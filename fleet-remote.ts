@@ -62,7 +62,13 @@ export function fleetEnabled(env: NodeJS.Dict<string> | NodeJS.ProcessEnv = proc
 // use the host itself as the label; "label=host" sets a display name.
 // Never a user@host or a path; see the module header for why.
 export function fleetHostsFromEnv(env: NodeJS.Dict<string> | NodeJS.ProcessEnv = process.env): FleetHostConfig[] {
-  const raw = String(env.INFOMARCHY_FLEET_HOSTS || "");
+  return parseHostList(String(env.INFOMARCHY_FLEET_HOSTS || ""));
+}
+
+// Shared by every feature that names remote hosts the same way (FLEET, HERMES
+// HOSTS): one grammar, one validation, so a host list means the same thing
+// wherever it is typed.
+export function parseHostList(raw: string): FleetHostConfig[] {
   if (!raw.trim()) return [];
   const seen = new Set<string>();
   const hosts: FleetHostConfig[] = [];

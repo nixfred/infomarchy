@@ -20,6 +20,7 @@ import { attentionSignal, parseCommitSummary, parseDiffNumstat, parseGitStatus, 
 import { deriveNotificationEvents } from "./notification-events";
 import { containerEngine, containerListArgv, parseContainerList } from "./container-control";
 import { fleetEnabled, fleetHostsFromEnv, fleetRefreshDue, fleetSnapshot, parseFleetStoreText, refreshFleet } from "./fleet-remote";
+import { demoHermesHosts, hermesHostsEnabled, hermesHostsFromEnv, hermesHostsRefreshDue, hermesHostsSnapshot, parseHermesHostsStoreText, refreshHermesHosts, thresholdsFromEnv } from "./hermes-hosts";
 import { hermesUsageRefreshDue, hermesUsageSummary, parseHermesUsageStoreText, refreshHermesUsage } from "./hermes-usage";
 import { validOrcaHandle } from "./orca-focus";
 import { fleetSessionsEnabled, fleetSessionsPayload, fleetSessionsRefreshDue, mergeFleetSessions, parseFleetSessionStoreText, refreshFleetSessions } from "./fleet-sessions";
@@ -64,6 +65,7 @@ const GITEA_FILE = join(STATE_DIR, "gitea-activity.json");
 const FLEET_FILE = join(STATE_DIR, "fleet.json");
 const FLEET_SESSIONS_FILE = join(STATE_DIR, "fleet-sessions.json");
 const HERMES_USAGE_FILE = join(STATE_DIR, "hermes-usage.json");
+const HERMES_HOSTS_FILE = join(STATE_DIR, "hermes-hosts.json");
 const now = Date.now();
 const MIN_RATE_DT = 1;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
@@ -490,6 +492,25 @@ async function attachFleetSessions(rows: any[], hosts: ReturnType<typeof fleetHo
     return mergeFleetSessions(rows, refreshed);
   }
   return mergeFleetSessions(rows, store);
+}
+
+// HERMES HOSTS: read-only overview of remote Hermes agent hosts (see
+// hermes-hosts.ts). Same disk-persisted throttle as FLEET; the overlay reads
+// the store and never probes. Unconfigured it costs one env read and the
+// snapshot carries no key at all.
+const HERMES_HOSTS_WRITER = instanceId() !== "overlay";
+async function hermesHostsActivity() {
+  const hosts = hermesHostsFromEnv();
+  if (!hosts.length || !hermesHostsEnabled()) return undefined;
+  let store = parseHermesHostsStoreText(read(HERMES_HOSTS_FILE));
+  if (HERMES_HOSTS_WRITER && hermesHostsRefreshDue(store, now)) {
+    store = await refreshHermesHosts(store, now, hosts, run);
+    try { writePrivateStateFile(STATE_DIR, basename(HERMES_HOSTS_FILE), JSON.stringify(store)); } catch {}
+  }
+  // Only configured hosts are shown: a host removed from the env disappears
+  // even while its old result is still on disk.
+  const wanted = new Set(hosts.map(h => h.host));
+  return hermesHostsSnapshot({ ...store, results: store.results.filter(r => wanted.has(r.host)) }, now, thresholdsFromEnv());
 }
 
 // Hermes/OpenRouter model usage, read from the same configured hosts (see
@@ -3690,10 +3711,10 @@ export function frameSnapshot(value: unknown): string {
   // object smuggled in as a pid) can no longer trip the budget check into
   // replacing the whole desk with an error frame.
   let sanitized = sanitizeForUi(value);
-  // Optional roster data must never turn a valid local desk into an error frame.
-  if (sanitized?.ai?.remoteRoster !== undefined &&
-      (!structureWithinBudget(sanitized, MAX_JSON_NODES, MAX_JSON_DEPTH) || Buffer.byteLength(JSON.stringify(sanitized), "utf8") > MAX_SNAPSHOT_BYTES)) {
-    delete sanitized.ai.remoteRoster;
+  // Optional remote data must never turn a valid local desk into an error frame.
+  const overBudget = () => !structureWithinBudget(sanitized, MAX_JSON_NODES, MAX_JSON_DEPTH) || Buffer.byteLength(JSON.stringify(sanitized), "utf8") > MAX_SNAPSHOT_BYTES;
+  for (const optional of ["hermesHosts", "remoteRoster"]) {
+    if (sanitized?.ai?.[optional] !== undefined && overBudget()) delete sanitized.ai[optional];
   }
   if (!structureWithinBudget(sanitized, MAX_JSON_NODES, MAX_JSON_DEPTH)) throw new Error("snapshot structure exceeded budget");
   const payload = JSON.stringify(sanitized);
@@ -3843,7 +3864,7 @@ function demoSnapshot(stamp = Date.now()) {
         claude: { name: "Claude", ready: true, tierLabel: "Max", todayPrompts: 18, todayTotalTokens: 184_000, limits: [{ label: "SESSION", percent: 0.46, resetsAt: new Date(stamp + 2.1 * 3600_000).toISOString() }, { label: "WEEKLY", percent: 0.61, resetsAt: new Date(stamp + 3.4 * 86400_000).toISOString() }] },
         codex: { name: "Codex", ready: true, tierLabel: "Pro", todayPrompts: 27, todayTotalTokens: 311_000, limits: [{ label: "5-HOUR", percent: 0.38, resetsAt: new Date(stamp + 3.2 * 3600_000).toISOString() }, { label: "7-DAY", percent: 0.54, resetsAt: new Date(stamp + 4.2 * 86400_000).toISOString() }] },
       },
-      heatmap: { start: dayStarts[0], days: dayStarts, cells }, github, gitea, fleet: [], recent, recentTruncated: false,
+      heatmap: { start: dayStarts[0], days: dayStarts, cells }, github, gitea, fleet: [], hermesHosts: demoHermesHosts(), recent, recentTruncated: false,
     },
   };
 }
@@ -3865,8 +3886,8 @@ async function runCollector() {
     return;
   }
   const pids = scanProcs();
-  const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama, externalIpS, github, gitea, containers, fleet, hermesUsage] = await Promise.all([
-    Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(), externalIp(), githubActivity(), giteaActivity(), containerState(), fleetActivity(), hermesUsageActivity(),
+  const [cpuS, memS, diskS, netS, pingS, gpuS, sessions, ollama, externalIpS, github, gitea, containers, fleet, hermesUsage, hermesHosts] = await Promise.all([
+    Promise.resolve(cpu()), Promise.resolve(mem()), disk(), net(), ping(), gpu(), liveSessions(pids), ollamaState(), externalIp(), githubActivity(), giteaActivity(), containerState(), fleetActivity(), hermesUsageActivity(), hermesHostsActivity(),
     grokBillingAllowed() ? refreshGrokBilling() : undefined,
     claudeRefreshAllowed() ? refreshClaudeAuthIfNeeded() : undefined,
   ]);
@@ -3913,6 +3934,7 @@ async function runCollector() {
       heatmap: { start: start7, days: heatDays, cells: heat.map(c => [c.n, c.p]) },
       github, gitea,
       fleet,
+      ...(hermesHosts ? { hermesHosts } : {}),
       remoteRoster: readRemoteRoster(),
       recent: dashboardRecent, recentTruncated,
     },

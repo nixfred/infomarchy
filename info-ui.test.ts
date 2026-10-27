@@ -410,8 +410,8 @@ describe("right column fits a 1080p desk", () => {
 describe("containers card", () => {
   test("registers a reorderable lower-right module with per-row on/off toggles", () => {
     expect(settings).toContain('{ id: "containers", label: "CONTAINERS" }');
-    expect(settings).toContain('property var rightOrder: ["usage", "localAi", "remoteRoster", "fleet", "machine", "media", "containers"]');
-    expect(settings).toContain('var allowed = ["usage", "localAi", "remoteRoster", "fleet", "machine", "media", "containers"]');
+    expect(settings).toContain('property var rightOrder: ["usage", "localAi", "remoteRoster", "fleet", "hermesHosts", "machine", "media", "containers"]');
+    expect(settings).toContain('var allowed = ["usage", "localAi", "remoteRoster", "fleet", "hermesHosts", "machine", "media", "containers"]');
     expect(view).toContain('title: "CONTAINERS"');
     expect(view).toContain('moveId: "containers"');
     expect(view).toContain("component PowerToggle: Item");
@@ -749,9 +749,9 @@ describe("github activity heatmap", () => {
   test("registers GITHUB as a removable module beside ACTIVITY and reaches it from the keyboard", () => {
     const ids = [...settings.matchAll(/\{ id: "([a-zA-Z]+)", label: "[^"]+" \}/g)].map(match => match[1]);
     expect(ids.indexOf("github")).toBe(ids.indexOf("activity") + 1);
-    // 15 with CONTAINERS (#19) and FLEET (#35). Pinned on purpose: a module
+    // 16 with CONTAINERS (#19), FLEET (#35) and HERMES HOSTS. Pinned on purpose: a module
     // added without a decision shows up here.
-    expect(ids).toHaveLength(15);
+    expect(ids).toHaveLength(16);
     expect(ids[10]).toBe("media");
     expect(ids[11]).toBe("gitea");
     expect(ids[12]).toBe("apps");
@@ -810,7 +810,7 @@ test("persisted Ollama origins reject credentials and request paths", () => {
 describe("media controls card", () => {
   test("registers a reorderable lower-right MPRIS card with prev/play/next and a title line", () => {
     expect(settings).toContain('{ id: "media", label: "MEDIA" }');
-    expect(settings).toContain('property var rightOrder: ["usage", "localAi", "remoteRoster", "fleet", "machine", "media", "containers"]');
+    expect(settings).toContain('property var rightOrder: ["usage", "localAi", "remoteRoster", "fleet", "hermesHosts", "machine", "media", "containers"]');
     expect(view).toContain('title: "MEDIA CONTROLS"');
     expect(view).toContain('moveId: "media"');
     expect(view).toContain("import Quickshell.Services.Mpris");
@@ -1244,10 +1244,10 @@ describe("external roster presentation", () => {
   const card = view.slice(start, view.indexOf("// ---- machine corner", start));
   test("migrates persisted order next to LOCAL AI without adding an eleventh module", () => {
     const normalize = Function(`return (${settings.match(/function normalizedRightOrder\([\s\S]*?\n  \}/)![0]})`)();
-    expect(normalize(["usage", "localAi", "machine"])).toEqual(["usage", "localAi", "remoteRoster", "machine", "fleet", "media", "containers"]);
-    expect(normalize(null)).toEqual(["usage", "localAi", "remoteRoster", "fleet", "machine", "media", "containers"]);
-    expect(normalize(["machine", "usage", "localAi"])).toEqual(["machine", "usage", "localAi", "remoteRoster", "fleet", "media", "containers"]);
-    expect(normalize(["remoteRoster", "machine", "localAi", "usage", "remoteRoster"])).toEqual(["remoteRoster", "machine", "localAi", "usage", "fleet", "media", "containers"]);
+    expect(normalize(["usage", "localAi", "machine"])).toEqual(["usage", "localAi", "remoteRoster", "machine", "fleet", "hermesHosts", "media", "containers"]);
+    expect(normalize(null)).toEqual(["usage", "localAi", "remoteRoster", "fleet", "hermesHosts", "machine", "media", "containers"]);
+    expect(normalize(["machine", "usage", "localAi"])).toEqual(["machine", "usage", "localAi", "remoteRoster", "fleet", "hermesHosts", "media", "containers"]);
+    expect(normalize(["remoteRoster", "machine", "localAi", "usage", "remoteRoster"])).toEqual(["remoteRoster", "machine", "localAi", "usage", "fleet", "hermesHosts", "media", "containers"]);
     expect(settings.slice(settings.indexOf("readonly property var definitions"), settings.indexOf("property var sections"))).not.toContain("remoteRoster");
     expect(view).toContain('|| !!view.ai.remoteRoster');
     expect(card).toContain('rightIndex("remoteRoster")');

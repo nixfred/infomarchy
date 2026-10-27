@@ -244,6 +244,18 @@ Item {
   readonly property var visibleCollisions: collisions.filter(function(item) { return projectMatches(item) })
   readonly property var usage: (ai && ai.usage) ? ai.usage : ({})
   readonly property var fleet: (ai && Array.isArray(ai.fleet)) ? ai.fleet : ([])
+  readonly property var hermesHosts: (ai && Array.isArray(ai.hermesHosts)) ? ai.hermesHosts : ([])
+  readonly property int hermesApprovals: hermesHosts.reduce(function(sum, host) { return sum + (host.approvals || 0) }, 0)
+  // "12m ago" for every row. Seconds, not a timestamp: the collector measured
+  // the age on the remote host's own clock, so a skewed host cannot look fresh.
+  function hermesAge(sec) {
+    if (sec === null || sec === undefined) return "never"
+    sec = Math.max(0, Math.floor(Number(sec) || 0))
+    if (sec < 60) return sec + "s ago"
+    if (sec < 3600) return Math.floor(sec / 60) + "m ago"
+    if (sec < 86400) return Math.floor(sec / 3600) + "h ago"
+    return Math.floor(sec / 86400) + "d ago"
+  }
   readonly property int fleetNeedsYou: fleet.reduce(function(sum, host) { return sum + (host.needsYou || 0) }, 0)
   readonly property bool activityFilterActive: sectionEnabled("activity") && (activityCellFilter >= 0 || activityProviderFilter !== "")
   readonly property var visibleRecentTasks: {
@@ -2200,7 +2212,7 @@ Item {
       // RIGHT COLUMN: usage + local AI + remote roster + machine corner
       GridLayout {
         id: rightColumn
-        visible: view.sectionEnabled("usage") || view.sectionEnabled("localAi") || view.sectionEnabled("machine") || view.sectionEnabled("media") || view.sectionEnabled("containers") || view.sectionEnabled("fleet") || !!view.ai.remoteRoster
+        visible: view.sectionEnabled("usage") || view.sectionEnabled("localAi") || view.sectionEnabled("machine") || view.sectionEnabled("media") || view.sectionEnabled("containers") || view.sectionEnabled("fleet") || view.sectionEnabled("hermesHosts") || !!view.ai.remoteRoster
         Layout.fillHeight: true
         // A fixed column: content-driven widths let the column drift narrower
         // whenever card text became shrinkable, and rows then overran the border.
@@ -2733,6 +2745,76 @@ Item {
                   }
                 }
               }
+              }
+            }
+          }
+        }
+
+        // ---- HERMES HOSTS: read-only overview of remote Hermes agent hosts
+        // (hermes-hosts.ts). Invisible until INFOMARCHY_HERMES_HOSTS names a
+        // host. Nothing on this card writes to or controls a remote machine:
+        // approvals are a count and a list, never approve or deny.
+        Card {
+          id: hermesHostsCard
+          Layout.row: view.settings.rightIndex("hermesHosts")
+          Layout.column: 0
+          Layout.fillWidth: true
+          visible: view.sectionEnabled("hermesHosts") && view.hermesHosts.length > 0
+          moveId: "hermesHosts"
+          draggable: true
+          title: "HERMES HOSTS"
+          hint: view.hermesHosts.filter(function(h) { return h.connected }).length + "/" + view.hermesHosts.length + " connected"
+          glow: view.hermesApprovals > 0
+          glowTone: view.desk.yellow
+          ColumnLayout {
+            width: parent.width
+            spacing: Style.spacing.sm
+            Repeater {
+              model: view.hermesHosts
+              delegate: ColumnLayout {
+                id: hermesHost
+                required property var modelData
+                readonly property bool unreachable: modelData.status === "unreachable"
+                readonly property bool unreadable: modelData.status === "unreadable"
+                // fresh reads normally, stale is dimmed, critical (and any
+                // unreachable host) is red. Age is on every row regardless.
+                readonly property color tone: unreachable || modelData.level === "critical" ? view.desk.red : modelData.level === "stale" ? view.desk.yellow : view.desk.green
+                Layout.fillWidth: true
+                spacing: Style.spacing.xs
+                opacity: modelData.level === "fresh" || unreachable ? 1 : 0.55
+                RowLayout {
+                  Layout.fillWidth: true
+                  spacing: Style.spacing.sm
+                  Rectangle { width: 8; height: 8; radius: 4; color: hermesHost.tone }
+                  PlainText { text: hermesHost.modelData.label || hermesHost.modelData.host; color: view.desk.themeForeground; font.family: view.mono; font.pixelSize: Style.font.bodySmall; Layout.fillWidth: true; Layout.minimumWidth: 0; elide: Text.ElideRight }
+                  PlainText { visible: hermesHost.unreachable; text: "unreachable"; color: view.desk.red; font.family: view.mono; font.pixelSize: Style.font.caption }
+                  PlainText { visible: hermesHost.unreadable; text: "no Hermes state"; color: view.desk.yellow; font.family: view.mono; font.pixelSize: Style.font.caption }
+                  PlainText { visible: !hermesHost.unreachable && !hermesHost.unreadable && !hermesHost.modelData.connected; text: hermesHost.modelData.gateway || "no gateway"; color: view.desk.red; font.family: view.mono; font.pixelSize: Style.font.caption }
+                  Tag { visible: !hermesHost.unreachable && !hermesHost.unreadable && hermesHost.modelData.approvals > 0; text: hermesHost.modelData.approvals + (hermesHost.modelData.approvals === 1 ? " approval" : " approvals"); tone: view.desk.yellow }
+                  PlainText {
+                    // An unreachable host never shows its last good state, only
+                    // how long ago it was last seen.
+                    text: hermesHost.unreachable ? (hermesHost.modelData.lastSeenSec === null ? "never seen" : "seen " + view.hermesAge(hermesHost.modelData.lastSeenSec)) : view.hermesAge(hermesHost.modelData.ageSec)
+                    color: hermesHost.modelData.level === "fresh" ? view.textFaint : hermesHost.tone
+                    font.family: view.mono; font.pixelSize: Style.font.caption; horizontalAlignment: Text.AlignRight
+                  }
+                }
+                PlainText {
+                  visible: !hermesHost.unreachable && !hermesHost.unreadable && hermesHost.modelData.connected
+                  Layout.fillWidth: true; Layout.leftMargin: 16
+                  text: hermesHost.modelData.working ? (view.privacyMode ? "working" : (hermesHost.modelData.task || hermesHost.modelData.activity || "working")) : "idle"
+                  color: hermesHost.modelData.working ? view.textDim : view.textFaint
+                  font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight
+                }
+                Repeater {
+                  model: view.privacyMode || hermesHost.unreachable || hermesHost.unreadable ? [] : (hermesHost.modelData.approvalItems || []).slice(0, 3)
+                  delegate: PlainText {
+                    required property var modelData
+                    Layout.fillWidth: true; Layout.leftMargin: 16
+                    text: "• " + (modelData.kind ? modelData.kind + ": " : "") + modelData.summary
+                    color: view.desk.yellow; font.family: view.mono; font.pixelSize: Style.font.caption; elide: Text.ElideRight
+                  }
+                }
               }
             }
           }

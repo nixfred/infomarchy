@@ -29,7 +29,8 @@ Item {
     // (see Overlay.qml), so a mid-list insertion would silently reassign an
     // existing shortcut. FLEET lands beyond the keyboard's reach, same as
     // MEDIA and GITEA already do.
-    { id: "fleet", label: "FLEET" }
+    { id: "fleet", label: "FLEET" },
+    { id: "hermesHosts", label: "HERMES HOSTS" }
   ]
   property var sections: ({})
   property var attentionMuted: ({})
@@ -95,7 +96,7 @@ Item {
   property int privacyUnlockCount: 0
   readonly property int privacyUnlockNeeded: 3
   readonly property int privacyUnlockMs: 2000
-  property var rightOrder: ["usage", "localAi", "remoteRoster", "fleet", "machine", "media", "containers"]
+  property var rightOrder: ["usage", "localAi", "remoteRoster", "fleet", "hermesHosts", "machine", "media", "containers"]
   property bool webEnabled: false
   property bool webReady: false
   property bool webStarting: false
@@ -112,7 +113,7 @@ Item {
   property var opsOrder: ["changes", "needs", "projects"]
 
   function normalizedRightOrder(value) {
-    var allowed = ["usage", "localAi", "remoteRoster", "fleet", "machine", "media", "containers"], result = []
+    var allowed = ["usage", "localAi", "remoteRoster", "fleet", "hermesHosts", "machine", "media", "containers"], result = []
     if (Array.isArray(value)) for (var i = 0; i < value.length; i++) if (allowed.indexOf(value[i]) >= 0 && result.indexOf(value[i]) < 0) result.push(value[i])
     // Preserve existing custom order; migrate the new card next to LOCAL AI.
     for (var j = 0; j < allowed.length; j++) if (allowed[j] !== "remoteRoster" && result.indexOf(allowed[j]) < 0) result.push(allowed[j])
