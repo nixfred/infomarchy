@@ -144,6 +144,10 @@ describe("overlay shows the real desktop", () => {
     expect(overlay).toContain("visible: dashboardSettings.ready && dashboardSettings.dashboardVisible\n          onNavigated: root.close()");
     expect(overlay).not.toContain("Util.alpha(infoModel.themeBackground, 0.88)");
   });
+
+  test("SUPER+D leaves the bar visible", () => {
+    expect(overlay).toContain("exclusionMode: ExclusionMode.Normal");
+  });
 });
 
 describe("a video wallpaper plays instead of showing nothing", () => {
