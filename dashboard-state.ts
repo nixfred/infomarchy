@@ -7,7 +7,7 @@ import { parseJsonBounded, readRegularFileLimited, writePrivateStateFile } from 
 import { withStateLock } from "./state-lock";
 
 const MAPS = ["sections", "webSections", "attentionMuted", "pinnedPrompts", "seenChanges", "notificationEvents", "notificationProviders", "sessionGroups"];
-const BOOLS = ["notificationsEnabled", "quietHoursEnabled", "dashboardVisible", "privacyMode", "webEnabled", "videoAudio", "hideQuietSessions"];
+const BOOLS = ["notificationsEnabled", "quietHoursEnabled", "dashboardVisible", "privacyMode", "webEnabled", "videoAudio", "hideQuietSessions", "wallpaperPassthrough"];
 const STRINGS = ["selectedOllamaModel", "ollamaHost"];
 const ORDERS = ["rightOrder", "opsOrder", "webNarrowOrder"];
 const BAD_KEYS = ["__proto__", "prototype", "constructor", "toJSON", "toString", "valueOf"];
