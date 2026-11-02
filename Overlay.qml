@@ -72,7 +72,8 @@ Scope {
       WlrLayershell.namespace: "infomarchy-overlay"
       WlrLayershell.layer: WlrLayer.Overlay
       WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
-      exclusionMode: ExclusionMode.Ignore
+      // Respect the bar's reserved strip instead of covering it.
+      exclusionMode: ExclusionMode.Normal
 
       ScreenMoveRemap {
         id: remapGuard
