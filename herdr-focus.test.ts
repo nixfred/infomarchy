@@ -8,6 +8,8 @@ describe("Herdr focus helper", () => {
   test("socket path must be an absolute .sock without whitespace; empty means the default", () => {
     expect(validHerdrSocket("/home/u/.config/herdr/herdr.sock", "/home/u")).toBe("/home/u/.config/herdr/herdr.sock");
     expect(validHerdrSocket("", "/home/u")).toBe("/home/u/.config/herdr/herdr.sock");
+    expect(validHerdrSocket("/home/john-doe/.config/herdr/my-session/herdr.sock", "/home/u")).toBe("/home/john-doe/.config/herdr/my-session/herdr.sock");
+    expect(validHerdrSocket("/tmp/a\x01b.sock", "/home/u")).toBe("");
     expect(validHerdrSocket("relative.sock", "/home/u")).toBe("");
     expect(validHerdrSocket("/tmp/x.sock; rm -rf", "/home/u")).toBe("");
     expect(validHerdrSocket("/tmp/notasocket", "/home/u")).toBe("");

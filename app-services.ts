@@ -154,7 +154,7 @@ export class AppServices {
     const active = ["active", "activating", "reloading"].includes(info.ActiveState);
     const ready = active && !!bound.length && !conflicts.length && (!probe || await this.io.healthy(app));
     const state = conflicts.length ? "conflict" : info.LoadState === "not-found" ? "not-installed" : ready ? "running" : active ? (bound.length ? "unhealthy" : "starting") : info.ActiveState === "failed" ? "failed" : "stopped";
-    const entries = this.io.git(app.path, ["status", "--porcelain=v1", "--branch", "-z"]).split("\0");
+    const entries = (existsSync(app.path) ? this.io.git(app.path, ["status", "--porcelain=v1", "--branch", "-z"]) : "").split("\0");
     const branch = entries[0]?.startsWith("## ") ? entries[0].slice(3).split("...")[0] : "not a Git repo";
     let changes = 0;
     for (let i = 1; i < entries.length && entries[i]; i += /[RC]/.test(entries[i].slice(0, 2)) ? 2 : 1) changes++;

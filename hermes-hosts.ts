@@ -169,7 +169,7 @@ export function parseHermesProbe(output: string): HermesHostFacts | null {
   if (!heartbeat && !state && !session && !files.length) return null;
   const remoteNow = Number.isFinite(nowEpoch) && nowEpoch > 0 ? nowEpoch : 0;
 
-  const beat = heartbeat && typeof heartbeat.updated_at === "string" ? Date.parse(heartbeat.updated_at) / 1000 : NaN;
+  const beat = heartbeat && typeof heartbeat.updated_at === "string" && /(Z|[+-]\d\d:?\d\d)$/i.test(heartbeat.updated_at.trim()) ? Date.parse(heartbeat.updated_at) / 1000 : NaN;
   const heartbeatAgeSec = remoteNow && Number.isFinite(beat) ? Math.max(0, Math.round(remoteNow - beat)) : null;
   const sessionAt = session ? finite(session.at) : 0;
   const taskAgeSec = remoteNow && sessionAt ? Math.max(0, Math.round(remoteNow - sessionAt)) : null;

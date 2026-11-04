@@ -18,3 +18,12 @@ describe("local history days", () => {
     expect(localDayIndex(new Date("2026-11-01T23:30:00-05:00").getTime(), days)).toBe(1);
   });
 });
+
+describe("localDayStarts midnight-DST zones", () => {
+  test("every start is a local midnight, even where DST changes at 00:00", () => {
+    const run = Bun.spawnSync(["bun", "-e", `import { localDayStarts } from "./history-time";
+const s = localDayStarts(new Date(2026, 2, 20, 15).getTime(), 14).slice(2);
+console.log(s.every(t => new Date(t).getHours() === 0 && new Date(t).getMinutes() === 0));`], { env: { ...process.env, TZ: "America/Havana" }, cwd: import.meta.dir });
+    expect(run.stdout.toString().trim()).toBe("true");
+  });
+});

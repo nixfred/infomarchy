@@ -238,12 +238,13 @@ export async function controlContainer(
   if (!engine) return { ok: false, action: request.action, name: request.name, message: "No container engine" };
 
   const listed = await run(containerListArgv(engine), 3000);
+  if (listed.code !== 0) return { ok: false, action: request.action, name: request.name, message: "Container engine unavailable" };
   const items = parseContainerList(listed.stdout);
   const match = items.find(item => item.name === request.name);
   if (!match) return { ok: false, action: request.action, name: request.name, message: "Container is not in the live inventory" };
   if (request.action === "start" && match.running)
     return { ok: true, action: request.action, name: request.name, message: "Already running" };
-  if (request.action === "stop" && !match.running)
+  if (request.action === "stop" && !match.running && !["paused", "restarting"].includes(match.state))
     return { ok: true, action: request.action, name: request.name, message: "Already stopped" };
 
   const mutated = await run(containerMutateArgv(engine, request.action, match.name), request.action === "stop" ? 20000 : 15000);

@@ -12,6 +12,7 @@
 // desk sent every one of their clicks to that one pane. The card looked broken
 // while pointing at a real, live pane. Orca wins over inherited multiplexer
 // variables in sessionHostsFromEnvironment for that reason.
+import { existsSync } from "fs";
 export const ORCA_TIMEOUT_MS = 4000;
 // term_ plus a v4 UUID, which is what Orca 1.4 issues. Checked here even though
 // InfoModel.qml checks it too, because this is where it becomes a command.
@@ -29,7 +30,7 @@ export function resolveOrcaBinary(home = process.env.HOME || ""): string {
   const found = typeof Bun !== "undefined" ? Bun.which("orca") : "";
   if (found) return found;
   for (const candidate of [home ? home + "/bin/orca" : "", "/usr/local/bin/orca", "/usr/bin/orca"]) {
-    try { if (candidate && Bun.file(candidate).size >= 0) return candidate; } catch {}
+    try { if (candidate && existsSync(candidate)) return candidate; } catch {}
   }
   return "orca";
 }
