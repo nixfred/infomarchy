@@ -1316,3 +1316,18 @@ describe("external roster presentation", () => {
     // actual on-desk visibility still needs a renderer with real font metrics.
   });
 });
+
+describe("background work stays off while the desk is hidden", () => {
+  const read = (n: string) => require("fs").readFileSync(require("path").join(import.meta.dir, n), "utf8");
+  test("the hymission poll runs only while the dashboard is visible", () => {
+    const qml = read("Infomarchy.qml");
+    expect(qml).toContain("running: dashboardSettings.ready && dashboardSettings.dashboardVisible\n        repeat: true\n        onTriggered: if (!stageStateProc.running)");
+  });
+  test("the closed overlay does not poll web status", () => {
+    expect(read("Overlay.qml")).toContain("InfoSettings { id: dashboardSettings; pollWeb: root.opened }");
+    expect(read("InfoSettings.qml")).toContain("running: root.ready && root.webEnabled && root.pollWeb");
+  });
+  test("overlay hotkeys ignore Ctrl/Alt chords", () => {
+    expect(read("Overlay.qml")).toContain("if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier)) return");
+  });
+});

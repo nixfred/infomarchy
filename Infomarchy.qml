@@ -403,9 +403,12 @@ Scope {
       Timer {
         interval: 1500
         triggeredOnStart: true
-        running: true
+        // Only the visible dashboard reads the reservation (leftMargin below),
+        // so a hidden desk must not fork hyprctl every 1.5 s per monitor.
+        running: dashboardSettings.ready && dashboardSettings.dashboardVisible
         repeat: true
         onTriggered: if (!stageStateProc.running) stageStateProc.running = true
+        onRunningChanged: if (!running) panel.stageState = null
       }
 
       // Dimming belongs to the dashboard. When SUPER+I hides it, restore the

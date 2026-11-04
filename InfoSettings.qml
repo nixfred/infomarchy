@@ -609,10 +609,14 @@ Item {
   }
   Timer {
     interval: 3000
-    running: root.ready && root.webEnabled
+    running: root.ready && root.webEnabled && root.pollWeb
+    triggeredOnStart: true
     repeat: true
     onTriggered: root.refreshWebStatus()
   }
+  // The overlay owns a second InfoSettings; it sets this to false while closed
+  // so one WEB state is not polled by two bun processes every 3 s.
+  property bool pollWeb: true
   function rightIndex(id) { var index = rightOrder.indexOf(id); return index < 0 ? 99 : index }
   function moveRight(id, direction) {
     var next = normalizedRightOrder(rightOrder), from = next.indexOf(id), to = adjacentEnabledIndex(next, from, direction, sections)

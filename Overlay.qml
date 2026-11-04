@@ -13,7 +13,7 @@ Scope {
   property bool opened: false
 
   InfoModel { id: infoModel; refreshMs: 3000; active: root.opened; instance: "overlay"; demoMode: demoMarker.present; ollamaHost: dashboardSettings.ollamaHost; usageVisible: root.opened && dashboardSettings.ready && dashboardSettings.dashboardVisible && dashboardSettings.sectionEnabled("usage") }
-  InfoSettings { id: dashboardSettings }
+  InfoSettings { id: dashboardSettings; pollWeb: root.opened }
   // Demo mode is set on the wallpaper service; a screenshot taken with the
   // overlay open must not leak live prompts. Mirror the runtime marker.
   FileView {
@@ -142,6 +142,8 @@ Scope {
             event.accepted = true
             return
           }
+          // Plain keys only: Ctrl/Alt chords belong to other tools and must not toggle sections.
+          if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier)) return
           if (event.key >= Qt.Key_0 && event.key <= Qt.Key_9) { var i = event.key === Qt.Key_0 ? 9 : event.key - Qt.Key_1; var def = dashboardSettings.definitions[i]; if (def) dashboardSettings.toggleSection(def.id); event.accepted = true; return }
           if (event.key === Qt.Key_J || event.key === Qt.Key_Down) { infoView.keyboardStep(1); event.accepted = true; return }
           if (event.key === Qt.Key_K || event.key === Qt.Key_Up) { infoView.keyboardStep(-1); event.accepted = true; return }
