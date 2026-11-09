@@ -219,6 +219,10 @@ describe("providerOf", () => {
     expect(providerOf(["pi"])).toBe("pi");
     expect(providerOf(["/home/u/.local/share/mise/installs/pi/0.85.1/pi/pi"])).toBe("pi");
     expect(providerOf(["cat", "/usr/bin/pi"])).toBeNull();
+    expect(providerOf(["omp"])).toBe("omp");
+    expect(providerOf(["/home/u/.local/share/mise/installs/github-can1357-oh-my-pi/18.18.3/omp", "__omp_worker_text_predict"])).toBe("omp");
+    expect(providerOf(["cat", "/usr/bin/omp"])).toBeNull();
+    expect(providerOf(["/usr/bin/romp"])).toBeNull();
     expect(providerOf(["vim", "notes/pi"])).toBeNull();
   });
 });

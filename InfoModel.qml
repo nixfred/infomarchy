@@ -147,6 +147,7 @@ Item {
       case "ollama": return root.green
       case "opencode": return root.blue
       case "pi": return root.green
+      case "omp": return root.magenta
       case "cursor": return root.cyan
       case "aider": return root.yellow
       case "remote": return root.cyan
@@ -181,6 +182,7 @@ Item {
       case "ollama": return "Ollama"
       case "opencode": return "opencode"
       case "pi": return "Pi"
+      case "omp": return "Oh My Pi"
       case "cursor": return "Cursor"
       case "aider": return "Aider"
       case "remote": return "Remote"

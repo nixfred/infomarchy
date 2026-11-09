@@ -795,6 +795,9 @@ const PROVIDERS: [string, RegExp][] = [
   // binary as "antigravity"); both launch the identical program.
   ["antigravity", /(^|\/)(antigravity|agy)$/],
   ["pi", /(^|\/)pi$/],
+  // Oh My Pi, a fork of Pi with its own launcher. Its helper processes run
+  // as `omp __omp_worker_*` under the session, so they are skipped as children.
+  ["omp", /(^|\/)omp$/],
   // Cursor's agent ships as `cursor-agent`, both as a terminal CLI and as the
   // binary the IDE launches for its own worker.
   ["cursor", /(^|\/)cursor-agent$/],
@@ -1148,8 +1151,10 @@ function openSessionIds(pid: number, provider: string): string[] {
       // sessions/<encoded-cwd>/<session-id>/. The directory name IS the id, so
       // this is the exact session, not a guess from history.
       match = target.match(/\/sessions\/[^/]+\/([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})\/[^/]+$/i);
-    else if (provider === "pi")
-      match = target.match(/\/\.pi\/agent\/sessions\/[^/]+\/[^/]*_([0-9A-Za-z][0-9A-Za-z_-]{7,127})\.jsonl$/);
+    else if (provider === "pi" || provider === "omp")
+      match = target.match(provider === "pi"
+        ? /\/\.pi\/agent\/sessions\/[^/]+\/[^/]*_([0-9A-Za-z][0-9A-Za-z_-]{7,127})\.jsonl$/
+        : /\/\.omp\/agent\/sessions\/[^/]+\/[^/]*_([0-9A-Za-z][0-9A-Za-z_-]{7,127})\.jsonl$/);
     const id = cleanSessionId(match?.[1]);
     if (id) ids.add(id);
   }
@@ -2558,8 +2563,9 @@ export function piSessionIdFromName(fileName: string): string {
   const match = String(fileName || "").match(/_([0-9A-Za-z][0-9A-Za-z_-]{7,127})\.jsonl$/);
   return cleanSessionId(match?.[1]);
 }
-function piHistory() {
-  const root = join(HOME, ".pi", "agent", "sessions");
+// Pi and Oh My Pi write the same session format, each under its own root:
+// ~/.pi/agent/sessions and ~/.omp/agent/sessions.
+function piHistory(root = join(HOME, ".pi", "agent", "sessions"), provider = "pi") {
   if (!existsSync(root)) return { present: false };
   let prompts = 0;
   const sessionIds = new Set<string>();
@@ -2599,8 +2605,8 @@ function piHistory() {
         if (!Number.isFinite(ts)) continue;
         prompts++;
         if (session) sessionIds.add(session);
-        bump(ts, "pi"); cnt("pi", ts);
-        if (plausibleTimestamp(ts)) recent.push({ provider: "pi", ts, project: shortPath(cwd), text: safePrompt(raw), session });
+        bump(ts, provider); cnt(provider, ts);
+        if (plausibleTimestamp(ts)) recent.push({ provider, ts, project: shortPath(cwd), text: safePrompt(raw), session });
       }
     }
     if (filesSeen >= MAX_COLLECTION_ITEMS) break;
@@ -3891,7 +3897,7 @@ async function runCollector() {
     grokBillingAllowed() ? refreshGrokBilling() : undefined,
     claudeRefreshAllowed() ? refreshClaudeAuthIfNeeded() : undefined,
   ]);
-  const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory(), grokBot = grokBotHistory(), opencode = opencodeHistory(), pi = piHistory(), hermes = hermesHistory(), kimi = kimiHistory(), cursor = cursorHistory();
+  const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory(), grokBot = grokBotHistory(), opencode = opencodeHistory(), pi = piHistory(), omp = piHistory(join(HOME, ".omp", "agent", "sessions"), "omp"), hermes = hermesHistory(), kimi = kimiHistory(), cursor = cursorHistory();
   // Same priority as grok's own fallback below: a real cache (Omarchy's own
   // agents plugin) always wins over what we can read ourselves.
   const usage = agentsUsage();
@@ -3929,7 +3935,7 @@ async function runCollector() {
       attention: sessions.filter((s: any) => s.attention),
       events: notificationState.events,
       collisions: repoCollisions(sessions),
-      counts, providers: { claude, codex, grok, grokBot, opencode, pi, hermes, kimi, cursor, ollama }, usage,
+      counts, providers: { claude, codex, grok, grokBot, opencode, pi, omp, hermes, kimi, cursor, ollama }, usage,
       usageDays: heatDays.map(localDayKey),
       heatmap: { start: start7, days: heatDays, cells: heat.map(c => [c.n, c.p]) },
       github, gitea,

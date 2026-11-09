@@ -785,7 +785,7 @@ describe("github activity heatmap", () => {
     expect(view).toContain("cells: view.github.cells || []");
     expect(view).toContain("kindFiltersCells: true");
     expect(view).toContain("showRepos: true");
-    expect(view).toContain('kinds: ["claude", "codex", "grok", "hermes", "opencode", "pi", "cursor", "gemini", "ollama"]');
+    expect(view).toContain('kinds: ["claude", "codex", "grok", "hermes", "opencode", "pi", "omp", "cursor", "gemini", "ollama"]');
   });
 
   test("explains every GitHub feed state and keeps the AI activity filter wiring intact", () => {

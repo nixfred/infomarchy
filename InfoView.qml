@@ -1961,7 +1961,7 @@ Item {
               cells: (view.ai.heatmap || {}).cells || []
               startTs: (view.ai.heatmap || {}).start || 0
               days: (view.ai.heatmap || {}).days || []
-              kinds: ["claude", "codex", "grok", "hermes", "opencode", "pi", "cursor", "gemini", "ollama"]
+              kinds: ["claude", "codex", "grok", "hermes", "opencode", "pi", "omp", "cursor", "gemini", "ollama"]
               unit: "prompts"
               kindFiltersCells: true
               selectedCell: view.activityCellFilter
@@ -2629,6 +2629,7 @@ Item {
               Tag { visible: !!(provRow.ps.grokBot && provRow.ps.grokBot.present); text: "grok bot " + (provRow.ps.grokBot ? provRow.ps.grokBot.sessions : 0) + " bots" + (provRow.ps.grokBot && provRow.ps.grokBot.unread ? " · " + provRow.ps.grokBot.unread + " unread" : ""); tone: view.desk.providerColor("grok-bot") }
               Tag { visible: !!(provRow.ps.opencode && provRow.ps.opencode.present); text: "opencode " + (provRow.ps.opencode ? provRow.ps.opencode.sessions : 0) + " sess"; tone: view.desk.providerColor("opencode") }
               Tag { visible: !!(provRow.ps.pi && provRow.ps.pi.present); text: "pi " + (provRow.ps.pi ? provRow.ps.pi.sessions : 0) + " sess"; tone: view.desk.providerColor("pi") }
+              Tag { visible: !!(provRow.ps.omp && provRow.ps.omp.present); text: "omp " + (provRow.ps.omp ? provRow.ps.omp.sessions : 0) + " sess"; tone: view.desk.providerColor("omp") }
               Tag { visible: !!(provRow.ps.cursor && provRow.ps.cursor.present); text: "cursor " + (provRow.ps.cursor ? provRow.ps.cursor.sessions : 0) + " chats" + (provRow.ps.cursor && provRow.ps.cursor.busy ? " · " + provRow.ps.cursor.busy + " working" : ""); tone: view.desk.providerColor("cursor") }
             }
           }
