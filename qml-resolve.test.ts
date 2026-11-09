@@ -36,7 +36,10 @@ const CEILINGS: Record<string, number> = {
   // same PanelWindow, the same false positive again.
   // +1 (#25): the Web Mode listener Process has an onExited handler, the
   // same exit-status metadata warning every other Process handler produces.
-  "Infomarchy.qml": 33,
+  // +4: setModuleStrip, getModuleStrip and openSettings read dashboardSettings
+  // and root.deskView from the IPC handler, the same unqualified false
+  // positive the handlers above already produce.
+  "Infomarchy.qml": 37,
   "InfoModel.qml": 6,
   // 3 (#25): the settings writer, the RETRY SETUP launcher and the WEB
   // prerequisite check are Processes with onExited handlers, which qmllint
@@ -79,8 +82,15 @@ const CEILINGS: Record<string, number> = {
   // unresolved-name finding, only that same pattern.
   // +2: usagePaceDelta() and usageLimitLabel() read the limit and the pace
   // helper through the outer scope, [unqualified] only (diffed, no other kind).
-  "InfoView.qml": 624,
-  "Overlay.qml": 30,
+  // +24: the compact/overlay strip. The hover edge, the strip host and the
+  // STRIP chip read view.settings, view.moduleStripShown and the hover flags
+  // through the outer scope — [unqualified], the same false positive the
+  // rest of this count is made of. No new missing-property kind.
+  "InfoView.qml": 648,
+  // +3: openSettings's per-screen Connections reads infoView, and
+  // setModuleStrip / getModuleStrip read dashboardSettings from the overlay
+  // root. Same unqualified outer-id false positive as the hotkeys here.
+  "Overlay.qml": 33,
   "WaveWallpaper.qml": 0,
   // Settings drawer (#25): dynamic Style properties qmllint sees as QObject,
   // modelData reads inside nested delegate children, and Process exit-status

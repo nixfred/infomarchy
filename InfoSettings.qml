@@ -67,6 +67,14 @@ Item {
   // one you can, and mixing them makes the clickable ones hard to find.
   property string sessionSort: "recent"
   readonly property var sessionSorts: ["recent", "terminal"]
+  // How the module strip is drawn. always is today's full chip row on both
+  // surfaces. compact keeps the enabled sections, so a 1280-wide desk stays
+  // one line and the SETTINGS drawer still reaches the ones that were hidden.
+  // overlay draws the strip only in SUPER+D. hover reveals it on the wallpaper
+  // when the pointer reaches the top edge. never hides it; sections stay
+  // reachable from the drawer (openSettings) and from setSection.
+  property string moduleStrip: "always"
+  readonly property var moduleStrips: ["always", "compact", "overlay", "hover", "never"]
   // Which workspace the desk is drawn on. The background layer itself is
   // per-output and has no workspace of its own, so this gates the cards only:
   // the wallpaper keeps rendering everywhere, exactly as it does now. 0 is
@@ -148,6 +156,7 @@ Item {
       sessionQuietMinutes = parsed && Number.isInteger(parsed.sessionQuietMinutes) ? Math.max(0, Math.min(10080, parsed.sessionQuietMinutes)) : 60
       hideQuietSessions = !parsed || parsed.hideQuietSessions !== false
       sessionSort = parsed && sessionSorts.indexOf(String(parsed.sessionSort)) >= 0 ? String(parsed.sessionSort) : "recent"
+      moduleStrip = parsed && moduleStrips.indexOf(String(parsed.moduleStrip)) >= 0 ? String(parsed.moduleStrip) : "always"
       deskWorkspace = parsed && Number.isInteger(parsed.deskWorkspace) ? Math.max(0, Math.min(maxWorkspace, parsed.deskWorkspace)) : 0
       videoAudio = !!(parsed && parsed.videoAudio === true)
       quietHoursEnabled = !!(parsed && parsed.quietHoursEnabled === true)
@@ -189,6 +198,7 @@ Item {
       sessionQuietMinutes = 60
       hideQuietSessions = true
       sessionSort = "recent"
+      moduleStrip = "always"
       deskWorkspace = 0
       videoAudio = false
       quietHoursEnabled = false
@@ -363,6 +373,41 @@ Item {
     return true
   }
   function cycleSessionSort() { setSessionSort(sessionSort === "recent" ? "terminal" : "recent") }
+  function setModuleStrip(mode) {
+    var value = String(mode || "").trim().toLowerCase()
+    if (moduleStrips.indexOf(value) < 0) return false
+    if (moduleStrip === value) return true
+    moduleStrip = value
+    persist({ moduleStrip: moduleStrip })
+    return true
+  }
+  function cycleModuleStrip() {
+    var index = moduleStrips.indexOf(moduleStrip)
+    return setModuleStrip(moduleStrips[(index + 1) % moduleStrips.length])
+  }
+  // compact is the only mode that drops chips. Disabled sections stay off
+  // the row; apps is the one section that defaults to off, same rule as
+  // sectionEnabled, so a compact strip does not grow an APPS chip unasked.
+  function moduleStripEntries(mode, definitions, sectionState) {
+    var list = Array.isArray(definitions) ? definitions : []
+    if (mode !== "compact") return list
+    var state = sectionState && typeof sectionState === "object" ? sectionState : ({})
+    var shown = []
+    for (var i = 0; i < list.length; i++) {
+      var id = list[i] && list[i].id
+      if (id === "apps" ? state[id] === true : state[id] !== false) shown.push(list[i])
+    }
+    return shown
+  }
+  // always and compact are drawn wherever the desk is. overlay and never
+  // leave the wallpaper alone; hover joins them until the pointer is there.
+  // The overlay has the keyboard, so it keeps the strip in hover and overlay.
+  function moduleStripShown(mode, keyboard, hovering) {
+    if (mode === "never") return false
+    if (mode === "overlay") return !!keyboard
+    if (mode === "hover") return !!keyboard || !!hovering
+    return true
+  }
   function toggleHideQuietSessions() { setHideQuietSessions(!hideQuietSessions) }
   // Hyprland's named/special workspaces carry negative ids (olrec is -1337);
   // those are not places the desk belongs, so only ordinary positive ids and

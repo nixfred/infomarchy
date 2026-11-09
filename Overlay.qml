@@ -58,6 +58,12 @@ Scope {
   // loader, not the wallpaper IpcHandler.
   function refresh() { infoModel.refresh() }
   function hardRefresh() { infoModel.hardRefresh() }
+  // shell call lands here rather than on the wallpaper IpcHandler. The mode
+  // is the same file both surfaces read; opening settings is per view.
+  property int settingsRequest: 0
+  function setModuleStrip(v) { return dashboardSettings.setModuleStrip(v) ? "ok" : "usage: setModuleStrip always|compact|overlay|hover|never" }
+  function getModuleStrip() { return dashboardSettings.moduleStrip }
+  function openSettings() { settingsRequest = settingsRequest + 1; return "open" }
 
   Variants {
     model: Quickshell.screens
@@ -154,6 +160,10 @@ Scope {
         // needs an item with activeFocus or Esc never fires.
         onVisibleChanged: if (visible) Qt.callLater(function() { keyCatcher.forceActiveFocus() })
         MouseArea { anchors.fill: parent; onClicked: root.close() }
+        Connections {
+          target: root
+          function onSettingsRequestChanged() { infoView.settingsOpen = true }
+        }
         InfoView {
           id: infoView
           anchors.fill: parent

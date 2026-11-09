@@ -29,6 +29,9 @@ function validPatch(patch: any): boolean {
     // An enum, not a free string: an unknown sort would load as a mode the
     // desk has no ordering for.
     if (key === "sessionSort") return value === "recent" || value === "terminal";
+    // Same shape as sessionSort: an unknown strip mode would load as a row
+    // the desk has no drawing for, so the patch writer refuses it outright.
+    if (key === "moduleStrip") return value === "always" || value === "compact" || value === "overlay" || value === "hover" || value === "never";
     if (key === "quietStartHour" || key === "quietEndHour") return Number.isInteger(value) && value >= 0 && value <= 23;
     if (key === "sessionQuietMinutes") return Number.isInteger(value) && value >= 0 && value <= 10080;
     if (key === "deskWorkspace") return Number.isInteger(value) && value >= 0 && value <= 999;
