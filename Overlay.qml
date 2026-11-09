@@ -3,7 +3,6 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
-import qs.Ui
 
 // Summonable fullscreen twin of the desk, for when windows cover the
 // wallpaper. Bind e.g. SUPER+D → `omarchy-shell shell toggle nixfred.infomarchy`.
@@ -65,7 +64,7 @@ Scope {
       id: panel
       required property var modelData
       screen: modelData
-      visible: root.opened && !remapGuard.remapping
+      visible: root.opened
       anchors { top: true; bottom: true; left: true; right: true }
       color: "transparent"
       updatesEnabled: root.opened
@@ -74,11 +73,6 @@ Scope {
       WlrLayershell.keyboardFocus: root.opened ? WlrKeyboardFocus.Exclusive : WlrKeyboardFocus.None
       // Respect the bar's reserved strip instead of covering it.
       exclusionMode: ExclusionMode.Normal
-
-      ScreenMoveRemap {
-        id: remapGuard
-        window: panel
-      }
 
       Rectangle {
         id: keyCatcher

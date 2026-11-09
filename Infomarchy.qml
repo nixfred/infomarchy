@@ -5,7 +5,6 @@ import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
-import qs.Ui
 import "bar-insets.js" as BarInsets
 
 // Background-layer host. Replaces omarchy.background (manifest clonedFrom), so
@@ -344,9 +343,6 @@ Scope {
       id: panel
       required property var modelData
       screen: modelData
-      // Hyprland leaves a mapped layer at its old global origin when a monitor
-      // moves (undock). Pulse unmapped so the compositor re-places us.
-      visible: !remapGuard.remapping
       anchors { top: true; bottom: true; left: true; right: true }
       color: infoModel.themeBackground
       WlrLayershell.namespace: "omarchy-background"
@@ -372,11 +368,6 @@ Scope {
       // layers its own copy of it. Same rule the built-in renderer uses.
       readonly property bool firstScreen: Quickshell.screens.length > 0
         && String(Quickshell.screens[0].name || "") === String(modelData.name || "")
-
-      ScreenMoveRemap {
-        id: remapGuard
-        window: panel
-      }
 
       // hymission's stage sidebar reserves a left band over the background
       // layer; keep the dashboard clear of it. Polled — the reservation only
