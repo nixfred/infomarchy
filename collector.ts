@@ -794,6 +794,39 @@ export function hermesTurnPids(raw: unknown): Set<number> {
   }
   return pids;
 }
+// A gateway chat stays open in state.db (ended_at NULL) between turns, while
+// its lease lasts only one turn. Open chats active within the last day keep
+// the gateway on the desk; the view's quiet rule hides it after the usual
+// idle window, the same as any other card.
+export const HERMES_CHAT_WINDOW_MS = 24 * 3600_000;
+export function hermesOpenGatewayChats(rows: unknown, stamp = now): string[] {
+  const list = Array.isArray(rows) ? rows.slice(0, MAX_COLLECTION_ITEMS) : [];
+  return list
+    .map((row: any) => ({ id: cleanSessionId(row?.id), key: hermesSessionId(row?.session_key), at: hermesTimestampMs(row?.last_activity_at) }))
+    .filter(chat => chat.id && chat.key && chat.at && stamp - chat.at <= HERMES_CHAT_WINDOW_MS && chat.at <= stamp + 60_000)
+    .sort((a, b) => b.at - a.at)
+    .map(chat => chat.id);
+}
+export function hermesIsGateway(cmd: string[]): boolean {
+  const args = hermesBootstrapArgs(cmd);
+  return !!args && (args.find(a => !a.startsWith("-")) || "") === "gateway";
+}
+function hermesGatewayChats(): string[] {
+  const home = process.env.HERMES_HOME || join(HOME, ".hermes");
+  const path = join(home, "state.db");
+  try { if (!lstatSync(path).isFile()) return []; } catch { return []; }
+  let db: Database | null = null;
+  try {
+    db = new Database(path, { readonly: true });
+    return hermesOpenGatewayChats(db.query(`
+      SELECT id, session_key, last_activity_at FROM sessions
+       WHERE ended_at IS NULL AND session_key IS NOT NULL
+         AND ifnull(archived, 0) = 0 AND ifnull(hidden, 0) = 0
+         AND ifnull(source, '') NOT IN ('cron')
+       ORDER BY last_activity_at DESC LIMIT 50
+    `).all());
+  } catch { return []; } finally { try { db?.close(); } catch {} }
+}
 function hermesLeases(): unknown {
   const home = process.env.HERMES_HOME || join(HOME, ".hermes");
   return readJson(join(home, "runtime/active_sessions.json"));
@@ -1789,11 +1822,13 @@ async function liveSessions(pids: number[]) {
   const leases = hermesLeases();
   const hermesByPid = hermesSessionByPid(leases);
   const hermesTurns = hermesTurnPids(leases);
+  const gatewayChats = hermesGatewayChats();
   const herdrClients = herdrState(winByPid);
   const boomuxClients = boomuxState(winByPid);
   for (const pid of pids) {
     const cmd = cmdByPid.get(pid) || [];
-    const prov = providerOf(cmd) || hermesLeaseProvider(cmd, pid, hermesByPid); if (!prov) continue;
+    const prov = providerOf(cmd) || hermesLeaseProvider(cmd, pid, hermesByPid)
+      || (gatewayChats.length && hermesIsGateway(cmd) ? "hermes" : null); if (!prov) continue;
     const p = info(pid); if (!p) continue;
     // skip children of an already-reported agent process (subagents, helpers)
     let anc = info(p.ppid), child = false;
@@ -1899,6 +1934,10 @@ async function liveSessions(pids: number[]) {
         const id = hermesByPid.get(child);
         if (id && !sessionIds.includes(id)) { sessionIds.unshift(id); break; }
       }
+    // state.db ids, newest first, so the chat's own prompts give the card its
+    // topic and its last-activity time.
+    if (prov === "hermes" && hermesIsGateway(p.cmd))
+      for (const id of [...gatewayChats].reverse()) if (!sessionIds.includes(id)) sessionIds.unshift(id);
     // A reused pid with a fresh process must not inherit the old baseline.
     const agentKey = `${p.pid}:${Math.round(p.start)}`;
     currentAgentRaw[agentKey] = sample.ticks;
