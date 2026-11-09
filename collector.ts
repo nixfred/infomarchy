@@ -827,6 +827,40 @@ function hermesGatewayChats(): string[] {
     `).all());
   } catch { return []; } finally { try { db?.close(); } catch {} }
 }
+// Recent Tasks leaves out hidden sessions, and Hermes Desktop's Bot Chat is
+// one, so its card never got a last-prompt time and the quiet rule hid it as
+// idle since the backend started. Read only the time of each live card's last
+// prompt (never its text) straight from state.db.
+export function attachHermesPromptTimes(sessions: any[], lastPromptAt: Map<string, number>): any[] {
+  for (const session of sessions) {
+    if (session?.provider !== "hermes" || Number(session.topicAt) > 0) continue;
+    const ids = Array.isArray(session.sessionIds) ? session.sessionIds : [];
+    const at = Math.max(0, ...ids.map((id: any) => lastPromptAt.get(String(id)) || 0));
+    if (at > 0) session.topicAt = at;
+  }
+  return sessions;
+}
+function hermesLastPromptTimes(sessions: any[]): Map<string, number> {
+  const out = new Map<string, number>();
+  const ids = [...new Set(sessions.filter(s => s?.provider === "hermes")
+    .flatMap(s => (Array.isArray(s.sessionIds) ? s.sessionIds : []).map((id: any) => cleanSessionId(id)).filter(Boolean)))].slice(0, 64);
+  if (!ids.length) return out;
+  const home = process.env.HERMES_HOME || join(HOME, ".hermes");
+  const path = join(home, "state.db");
+  try { if (!lstatSync(path).isFile()) return out; } catch { return out; }
+  let db: Database | null = null;
+  try {
+    db = new Database(path, { readonly: true });
+    const rows = db.query(`SELECT session_id, max(timestamp) AS ts FROM messages
+       WHERE role = 'user' AND ifnull(active, 1) = 1 AND session_id IN (${ids.map(() => "?").join(",")})
+       GROUP BY session_id`).all(...ids) as any[];
+    for (const row of rows) {
+      const ts = hermesTimestampMs(row.ts);
+      if (ts && plausibleTimestamp(ts) && ts <= now + 60_000) out.set(String(row.session_id), ts);
+    }
+  } catch {} finally { try { db?.close(); } catch {} }
+  return out;
+}
 function hermesLeases(): unknown {
   const home = process.env.HERMES_HOME || join(HOME, ".hermes");
   return readJson(join(home, "runtime/active_sessions.json"));
@@ -3987,6 +4021,7 @@ async function runCollector() {
   for (const entry of recent) entry.activityCell = activityCellIndex(entry.ts, heatDays);
   inferSessionIdsFromRecent(sessions, recent);
   attachSessionTopics(sessions, recent);
+  attachHermesPromptTimes(sessions, hermesLastPromptTimes(sessions));
   attachGrokBotRoster(sessions, grokBot);
   attachStaleness(sessions);
   const topicSummaries = await refineSessionTopics(sessions, recent, ollama);
