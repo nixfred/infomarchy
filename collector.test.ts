@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSyn
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join, relative } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents, sessionStaleness, opencodeUsageFromRows, STALE_AFTER_MS, decodeBase32, grokBotLine, grokBotRow, grokBotAttention, attachGrokBotRoster, grokSessionUsage, usageModelBreakdown, windowMatchesProvider, hermesSessionByPid, validNetDevice, observationalGitCommand, observationalGitEnv, piUserText, piSessionIdFromName, grokTurnFromUpdate, foldGrokTurnsChunk, emptyGrokFileEntry, newestGrokFiles, grokEntryFromPrev, grokUsageFilesForPrev, cursorProjectPath, cursorUserText, cursorTimestamp, cursorTranscriptBusy, cursorIsWorker, cursorWorkspaceDir, cursorCurrentChat, sessionBusyState, hermesBootstrapArgs, hermesLeaseProvider } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents, sessionStaleness, opencodeUsageFromRows, STALE_AFTER_MS, decodeBase32, grokBotLine, grokBotRow, grokBotAttention, attachGrokBotRoster, grokSessionUsage, usageModelBreakdown, windowMatchesProvider, hermesSessionByPid, validNetDevice, observationalGitCommand, observationalGitEnv, piUserText, piSessionIdFromName, grokTurnFromUpdate, foldGrokTurnsChunk, emptyGrokFileEntry, newestGrokFiles, grokEntryFromPrev, grokUsageFilesForPrev, cursorProjectPath, cursorUserText, cursorTimestamp, cursorTranscriptBusy, cursorIsWorker, cursorWorkspaceDir, cursorCurrentChat, sessionBusyState, hermesBootstrapArgs, hermesLeaseProvider, hermesSessionId, hermesTurnPids } from "./collector.ts";
 import { sessionEventId } from "./notification-events.ts";
 
 const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
@@ -162,6 +162,15 @@ describe("providerOf", () => {
     expect(hermesLeaseProvider([py, "-I", "-c", hermesBoot, "serve"], 43, leases)).toBeNull();
     // A reused pid running something else must not inherit the stale lease.
     expect(hermesLeaseProvider(["/usr/bin/vim", "notes"], 42, leases)).toBeNull();
+  });
+
+  test("the Hermes gateway is a session only while it holds a chat's lease", () => {
+    const leases = hermesSessionByPid({
+      entries: [{ pid: 704, session_id: "agent:main:local:dm:local-abcdef12", surface: "gateway:local" }],
+    });
+    expect(providerOf([py, "-I", "-c", hermesBoot, "gateway", "run"])).toBeNull();
+    expect(hermesLeaseProvider([py, "-I", "-c", hermesBoot, "gateway", "run"], 704, leases)).toBe("hermes");
+    expect(hermesLeaseProvider([py, "-I", "-c", hermesBoot, "gateway", "run"], 704, new Map())).toBeNull();
   });
 
   test("treats an interactive Codex CLI as a session", () => {
@@ -1742,6 +1751,32 @@ describe("an app that launches its own GUI is still clickable", () => {
     expect(byPid.size).toBe(2);
     expect(hermesSessionByPid(null).size).toBe(0);
     expect(hermesSessionByPid({ entries: "nope" }).size).toBe(0);
+  });
+
+  test("a gateway chat's route-shaped session id is read from its lease", () => {
+    const route = "agent:main:local:dm:local-" + "4d73f964".repeat(8);
+    const raw = { entries: [{ pid: 704, session_id: route, surface: "gateway:local" }] };
+    expect(hermesSessionId(route)).toBe(route);
+    expect(hermesSessionByPid(raw).get(704)).toBe(route);
+    // Still bounded: no spaces, no path characters, no unbounded length.
+    expect(hermesSessionId("agent:main local")).toBe("");
+    expect(hermesSessionId("agent:../../etc")).toBe("");
+    expect(hermesSessionId("a".repeat(257))).toBe("");
+  });
+
+  test("a gateway lease marks its pid busy; cli and desktop leases do not", () => {
+    const turns = hermesTurnPids({
+      entries: [
+        { pid: 704, session_id: "agent:main:local:dm:local-abcdef12", surface: "gateway:local" },
+        { pid: 705, session_id: "agent:main:telegram:dm:12345678", surface: "gateway:telegram" },
+        { pid: 4242, session_id: "20260908_210000_aaaaaa", surface: "cli" },
+        { pid: 1046613, session_id: "20260908_204340_1c9196", surface: "desktop" },
+        { pid: 0, session_id: "agent:main:local:dm:local-abcdef12", surface: "gateway:local" },
+        { pid: 706, session_id: "no", surface: "gateway:local" },
+      ],
+    });
+    expect([...turns].sort()).toEqual([704, 705]);
+    expect(hermesTurnPids(null).size).toBe(0);
   });
 });
 

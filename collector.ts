@@ -763,20 +763,40 @@ function info(pid: number): Proc | null {
 // Hermes runs a launcher, an Electron app and a backend as separate processes
 // and records the live session against the backend's pid, not the launcher the
 // card is built from. Read the lease file and match on the agent's own tree.
+function hermesLeaseEntries(raw: unknown): any[] {
+  const entries = (raw && typeof raw === "object" && Array.isArray((raw as any).entries)) ? (raw as any).entries : [];
+  return entries.slice(0, MAX_COLLECTION_ITEMS).filter((entry: any) => entry && typeof entry === "object");
+}
+// Gateway chats key their session by route, e.g.
+// "agent:main:local:dm:local-<64 hex>": colons, and longer than the
+// 128-character ids the other providers use.
+export function hermesSessionId(value: unknown): string {
+  const id = String(value || "").trim();
+  return /^[A-Za-z0-9][A-Za-z0-9_:-]{7,255}$/.test(id) ? id : "";
+}
 export function hermesSessionByPid(raw: unknown): Map<number, string> {
   const byPid = new Map<number, string>();
-  const entries = (raw && typeof raw === "object" && Array.isArray((raw as any).entries)) ? (raw as any).entries : [];
-  for (const entry of entries.slice(0, MAX_COLLECTION_ITEMS)) {
-    if (!entry || typeof entry !== "object") continue;
-    const id = cleanSessionId(entry.session_id);
+  for (const entry of hermesLeaseEntries(raw)) {
+    const id = hermesSessionId(entry.session_id);
     const pid = Number(entry.pid);
     if (id && Number.isInteger(pid) && pid > 0) byPid.set(pid, id);
   }
   return byPid;
 }
-function hermesSessions(): Map<number, string> {
+// The gateway holds a chat's lease only while that chat runs a turn, so a
+// gateway pid with a lease is busy right now.
+export function hermesTurnPids(raw: unknown): Set<number> {
+  const pids = new Set<number>();
+  for (const entry of hermesLeaseEntries(raw)) {
+    const pid = Number(entry.pid);
+    if (String(entry.surface || "").startsWith("gateway") && hermesSessionId(entry.session_id) && Number.isInteger(pid) && pid > 0)
+      pids.add(pid);
+  }
+  return pids;
+}
+function hermesLeases(): unknown {
   const home = process.env.HERMES_HOME || join(HOME, ".hermes");
-  return hermesSessionByPid(readJson(join(home, "runtime/active_sessions.json")));
+  return readJson(join(home, "runtime/active_sessions.json"));
 }
 
 // provider detection from argv — match the launcher name, not the runtime
@@ -1766,7 +1786,9 @@ async function liveSessions(pids: number[]) {
   // is inferred from a terminal title or a systemd inhibitor.
   const cursorBusyByPid = new Map<number, boolean>();
   const [gpuByPid, tmux, claudeRegistry] = await Promise.all([gpuMemoryByPid(), tmuxState(winByPid, pids), claudeAgents()]);
-  const hermesByPid = hermesSessions();
+  const leases = hermesLeases();
+  const hermesByPid = hermesSessionByPid(leases);
+  const hermesTurns = hermesTurnPids(leases);
   const herdrClients = herdrState(winByPid);
   const boomuxClients = boomuxState(winByPid);
   for (const pid of pids) {
@@ -1922,7 +1944,7 @@ async function liveSessions(pids: number[]) {
       registryBusy: s._registryBusy,
       transcriptBusy: cursorBusyByPid.has(s.pid) ? cursorBusyByPid.get(s.pid) : null,
       titleBusy,
-      turnBusy: turnBusy.has(s.pid),
+      turnBusy: turnBusy.has(s.pid) || (s.provider === "hermes" && hermesTurns.has(s.pid)),
     });
     if (!s.busy && s.window && titleLooksBusy(s.window.title) && s.provider === "grok")
       s.window = { ...s.window, title: "" };
