@@ -4,6 +4,10 @@ All notable changes to Infomarchy. The format follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-11-10
+
+Everything since 1.4.1, about two months of work. Twelve community contributors are credited below (@afoxybouquet, @maku, @reverb256, @brentkearney, @TRIBUSeric, @KI_Vater, @shieldsworks, @RidgetopAi, @auggernaut, @TechLuddite, @GreyforgeLabs and @Tech0001), and the last five pull requests (#44, #47, #48, #49, #50) were merged together and checked in a Test Drive VM on Hyprland 0.56.2 before landing. The headlines: Web Mode over Tailscale or your own HTTPS certificate, FLEET and HERMES HOSTS for agents on other machines, an optional APPS module, Oh My Pi, Hermes and Muse sessions, a module strip that can leave the wallpaper, and an opt-in wallpaper passthrough. The two newest settings, `moduleStrip` and `wallpaperPassthrough`, default to today's behaviour. Muse token usage is not read yet (see its entry below).
+
 ### Added
 - **Wallpaper passthrough for plugins that draw their own wallpaper.** (#43, @afoxybouquet) Opt-in and off by default: `omarchy-shell infomarchy setWallpaperPassthrough true` leaves the wallpaper to the plugin underneath, and Infomarchy draws only its cards above it.
 - **The module strip can leave the wallpaper.** (#46, requested by @maku, built by @reverb256) `moduleStrip` in `dashboard.json` is `always` (today's full chip row, the default), `compact` (enabled sections only, so a 1280-wide desk stays one line; SETTINGS still opens the drawer for the rest), `overlay` (the strip is drawn only in SUPER+D), `hover` (the wallpaper reveals it when the pointer reaches the top edge) or `never`. The STRIP chip cycles them. `omarchy-shell infomarchy setModuleStrip` persists the same value, and `openSettings` opens the drawer when the strip itself is hidden. Unknown values are refused rather than stored.
