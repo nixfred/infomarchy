@@ -4,6 +4,10 @@ All notable changes to Infomarchy. The format follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+## [1.5.1] — 2026-11-10
+
+A patch release about the desk staying live and cheap to run. The headline is a freeze that came from waiting on a local model; the rest is a watchdog for the next kind of hang, a way back from the hidden module strip, lighter polls and better fallback topics. Measurements are in the entries below, including the one that did not move.
+
 ### Fixed
 - **The desk no longer freezes while a local model is slow.** When Ollama had a model loaded, every poll that found a session with new prompts waited for `/api/generate` to reword its topic, up to six seconds, before it sent the snapshot, and the next poll could not start until it did. With a wedged model the desk stopped updating roughly every third poll: measured on the development machine, polls took 6.6 to 8 s instead of 0.7 s at the same CPU, because the process was only waiting. Rewording is now requested by a detached background worker (`collector.ts --refine-topics`) that writes a shared `topics.json`; the snapshot goes out immediately with the local summary and the model's wording appears on a later poll. The worker asks for one reword at a time, stops after the first failure so a sick model costs one timeout per minute instead of six, and the wallpaper and the overlay now share one answer instead of each asking.
 
