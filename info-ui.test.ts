@@ -1415,3 +1415,51 @@ describe("a hung collector cannot freeze the desk", () => {
   });
 });
 
+describe("pulsing costs a tenth of the frames, not a frame per vsync", () => {
+  const wave = (tick: number, period: number, from: number, to: number) => {
+    const source = view.match(/function wave\(periodMs, from, to\) \{[\s\S]*?\n  \}/)?.[0] || "";
+    expect(source).toBeTruthy();
+    return Function("view", `return (${source})`)({ pulseTick: tick, pulseStepMs: 100 })(period, from, to);
+  };
+
+  test("no infinite animation is left to keep the scene graph rendering", () => {
+    expect(view).not.toContain("Animation.Infinite");
+    expect(view.match(/view\.wave\(/g)?.length).toBe(3);
+  });
+
+  test("one shared clock steps no faster than ten times a second and only while the desk is visible", () => {
+    const clock = view.match(/Timer \{\s*interval: view\.pulseStepMs[\s\S]*?\n  \}/)?.[0] || "";
+    expect(clock).toContain("running: view.visible");
+    expect(clock).toContain("repeat: true");
+    expect(view).toMatch(/readonly property int pulseStepMs: (\d+)/);
+    expect(Number(view.match(/readonly property int pulseStepMs: (\d+)/)?.[1])).toBeGreaterThanOrEqual(80);
+  });
+
+  test("the wave starts at `from`, turns at half the period and is back at the end", () => {
+    expect(wave(0, 1400, 1, 0.2)).toBeCloseTo(1, 5);
+    expect(wave(7, 1400, 1, 0.2)).toBeCloseTo(0.2, 5);   // 700 ms of 1400
+    expect(wave(14, 1400, 1, 0.2)).toBeCloseTo(1, 5);
+    expect(wave(0, 2400, 0.12, 0.42)).toBeCloseTo(0.12, 5);
+    expect(wave(12, 2400, 0.12, 0.42)).toBeCloseTo(0.42, 5);
+    expect(wave(24, 2400, 0.12, 0.42)).toBeCloseTo(0.12, 5);
+    expect(wave(0, 2400, 0.72, 1)).toBeCloseTo(0.72, 5);
+    expect(wave(12, 2400, 0.72, 1)).toBeCloseTo(1, 5);
+  });
+
+  test("it stays inside its range, is symmetric about the turn, and repeats", () => {
+    for (let tick = 0; tick < 100; tick++) {
+      const v = wave(tick, 1400, 1, 0.2);
+      expect(v).toBeLessThanOrEqual(1 + 1e-9);
+      expect(v).toBeGreaterThanOrEqual(0.2 - 1e-9);
+      expect(wave(tick + 14, 1400, 1, 0.2)).toBeCloseTo(v, 9);
+    }
+    expect(wave(3, 1400, 1, 0.2)).toBeCloseTo(wave(11, 1400, 1, 0.2), 9);
+  });
+
+  test("each pulse is a binding gated on the state it signals, so a quiet desk produces no frames", () => {
+    expect(view).toContain("opacity: card.glow && card.visible ? view.wave(2400, 0.12, 0.42) : 0.42");
+    expect(view).toContain("opacity: sectionChip.needsAttention && sectionChip.visible ? view.wave(2400, 0.72, 1) : 1");
+    expect(view).toContain("opacity: sc.busy && sc.visible ? view.wave(1400, 1, 0.2) : 1");
+  });
+});
+

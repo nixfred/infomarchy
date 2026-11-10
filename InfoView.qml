@@ -20,6 +20,30 @@ Item {
   // field there can never receive keystrokes. The host sets this false and
   // the search box becomes a pointer to the overlay instead of a dead input.
   property bool keyboardAvailable: true
+  // One clock for every pulse on the desk (busy dots, attention glows, the
+  // NEEDS chip). Each of those used to be its own infinite animation, and an
+  // animation makes the scene graph produce a frame on every vsync for as long
+  // as it runs, which on a desk that always has a busy agent is always. Measured
+  // with the whole desk rendered offscreen: 20% of a core while pulsing, 0%
+  // with the three animations stopped, nothing else changed. A bound opacity
+  // stepping ten times a second keeps the breathing and costs a tenth of the
+  // frames; a tick that no binding reads dirties nothing, so it is free when
+  // nothing pulses.
+  readonly property int pulseStepMs: 100
+  property int pulseTick: 0
+  Timer {
+    interval: view.pulseStepMs
+    repeat: true
+    running: view.visible
+    onTriggered: view.pulseTick += 1
+  }
+  // A triangle wave eased with a cosine, starting at `from`, reaching `to` at
+  // half the period and coming back: the shape of the animations it replaces.
+  function wave(periodMs, from, to) {
+    var phase = ((view.pulseTick * view.pulseStepMs) % periodMs) / periodMs
+    var t = phase < 0.5 ? phase * 2 : (1 - phase) * 2
+    return from + (to - from) * (0.5 - 0.5 * Math.cos(t * Math.PI))
+  }
   // Drawn list for the module strip. compact drops disabled sections; every
   // other mode keeps the full row. Visibility is separate: overlay and never
   // take the row off the wallpaper, hover brings it back from the top edge.
@@ -852,12 +876,7 @@ Item {
       radius: card.radius + 3
       border.width: 2
       border.color: card.glowTone
-      SequentialAnimation on opacity {
-        running: card.glow && card.visible
-        loops: Animation.Infinite
-        NumberAnimation { from: 0.12; to: 0.42; duration: 1200; easing.type: Easing.InOutSine }
-        NumberAnimation { from: 0.42; to: 0.12; duration: 1200; easing.type: Easing.InOutSine }
-      }
+      opacity: card.glow && card.visible ? view.wave(2400, 0.12, 0.42) : 0.42
     }
     implicitHeight: col.implicitHeight + view.pad * 2
     // Swallow clicks on card chrome so the overlay's click-outside-to-close
@@ -1271,12 +1290,7 @@ Item {
     color: Util.alpha(selected ? view.desk.green : view.desk.themeForeground, selected ? 0.13 : 0.035)
     border.color: Util.alpha(selected ? view.desk.green : view.desk.themeForeground, selected ? 0.45 : 0.13)
     border.width: 1
-    SequentialAnimation on opacity {
-      running: sectionChip.needsAttention && sectionChip.visible
-      loops: Animation.Infinite
-      NumberAnimation { from: 0.72; to: 1; duration: 1200; easing.type: Easing.InOutSine }
-      NumberAnimation { from: 1; to: 0.72; duration: 1200; easing.type: Easing.InOutSine }
-    }
+    opacity: sectionChip.needsAttention && sectionChip.visible ? view.wave(2400, 0.72, 1) : 1
     radius: view.radius
     implicitWidth: sectionLabel.implicitWidth + Style.spacing.lg * 2
     implicitHeight: sectionLabel.implicitHeight + Style.spacing.xs * 2
@@ -1551,10 +1565,7 @@ Item {
                     Layout.fillWidth: true
                     Layout.minimumWidth: 0
                     Rectangle { id: dot; width: 8; height: 8; radius: 4; color: sc.tone
-                      SequentialAnimation { running: sc.busy && sc.visible; loops: Animation.Infinite
-                        onRunningChanged: if (!running) dot.opacity = 1
-                        NumberAnimation { target: dot; property: "opacity"; from: 1; to: 0.2; duration: 700 }
-                        NumberAnimation { target: dot; property: "opacity"; from: 0.2; to: 1; duration: 700 } } }
+                      opacity: sc.busy && sc.visible ? view.wave(1400, 1, 0.2) : 1 }
                     // The provider name plus a disclosure caret: grouping
                     // belongs to a provider, the provider is named here, and
                     // WHAT CHANGED already spells "this row expands and
