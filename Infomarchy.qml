@@ -325,6 +325,15 @@ Scope {
     // the supervisor-run workers nothing can jump to).
     function setSessionSort(v: string): string { return dashboardSettings.setSessionSort(String(v).toLowerCase()) ? "ok" : "usage: setSessionSort recent|terminal" }
     function getSessionSort(): string { return dashboardSettings.sessionSort }
+    // always | compact | overlay | hover | never. Default always is today's strip.
+    function setModuleStrip(v: string): string { return dashboardSettings.setModuleStrip(v) ? "ok" : "usage: setModuleStrip always|compact|overlay|hover|never" }
+    function getModuleStrip(): string { return dashboardSettings.moduleStrip }
+    // The drawer, when the strip itself is hidden. Sections still live there.
+    function openSettings(): string {
+      if (!root.deskView) return "no desk"
+      root.deskView.settingsOpen = true
+      return "open"
+    }
     function toggleSessionSort(): void { dashboardSettings.cycleSessionSort() }
     // 0 restores the desk to every workspace.
     function setDeskWorkspace(v: string): string { return dashboardSettings.setDeskWorkspace(Number(v)) ? "ok" : "usage: setDeskWorkspace 0-" + dashboardSettings.maxWorkspace }

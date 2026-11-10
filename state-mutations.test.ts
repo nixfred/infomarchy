@@ -211,7 +211,7 @@ test("every setting InfoSettings loads is one the patch writer accepts, and no c
     notificationsEnabled: true, quietHoursEnabled: true, dashboardVisible: true, privacyMode: true, webEnabled: false,
     videoAudio: true, hideQuietSessions: true, wallpaperPassthrough: true, selectedOllamaModel: "m", ollamaHost: "http://127.0.0.1:11434",
     rightOrder: ["usage"], opsOrder: ["changes"], webNarrowOrder: ["sessions"], quietStartHour: 22, quietEndHour: 7,
-    sessionQuietMinutes: 60, deskWorkspace: 5, webAccessMode: "manual", sessionSort: "terminal",
+    sessionQuietMinutes: 60, deskWorkspace: 5, webAccessMode: "manual", sessionSort: "terminal", moduleStrip: "compact",
     manualHttps: { hostname: "192.168.1.20", bind: "192.168.1.20", port: 8789, certPath: "/c.pem", keyPath: "/k.pem", fingerprint: "ab".repeat(32) },
   };
   expect(keys.length).toBeGreaterThan(20);

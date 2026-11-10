@@ -486,6 +486,8 @@ omarchy-shell infomarchy setWallpaperPassthrough true                 # don't pa
 omarchy-shell infomarchy setWallpaperPassthrough false                # paint Infomarchy's own wallpaper again (default)
 omarchy-shell infomarchy toggleSection machine                        # remove/restore one dashboard card
 omarchy-shell infomarchy setSection recent true                       # explicit section visibility
+omarchy-shell infomarchy setModuleStrip compact                       # always | compact | overlay | hover | never
+omarchy-shell infomarchy openSettings                                 # settings drawer, including when the strip is hidden
 omarchy-shell infomarchy toggleNotifications                         # all Infomarchy alerts on/off
 omarchy-shell infomarchy geometry                                    # live layout widths as JSON (view, columns, LOCAL AI card/body/rows)
 omarchy-shell infomarchy toggleQuietHours                            # fixed quiet window, 22:00–08:00
@@ -500,6 +502,7 @@ omarchy-shell infomarchy setDemo false                                # return t
 | wallpaper dashboard | `SUPER+I` or wallpaper IPC above; state survives shell/plugin restarts | visible |
 | desk workspace | `setDeskWorkspace` above; `0` is every workspace | 0 (every workspace) |
 | wallpaper passthrough | `setWallpaperPassthrough` above; while the desk is shown, clicks and double-clicks go to Infomarchy, not the wallpaper plugin underneath | off (Infomarchy paints the wallpaper) |
+| module strip | `setModuleStrip` above, or the STRIP chip. `always` is the full row. `compact` keeps enabled sections. `overlay` is SUPER+D only. `hover` reveals from the top edge. `never` hides it; `openSettings` still opens the drawer | always |
 | session notifications | Next Actions card or wallpaper IPC above | on |
 | notification quiet hours | Next Actions card or wallpaper IPC above | off (22:00–08:00 when enabled) |
 | space left for the bar | live `shell.bar` edge and `barSize` in `Infomarchy.qml` | measured bar thickness on that edge; 40 px × font scale at the top when no bar is injected |

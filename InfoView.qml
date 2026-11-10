@@ -20,6 +20,15 @@ Item {
   // field there can never receive keystrokes. The host sets this false and
   // the search box becomes a pointer to the overlay instead of a dead input.
   property bool keyboardAvailable: true
+  // Drawn list for the module strip. compact drops disabled sections; every
+  // other mode keeps the full row. Visibility is separate: overlay and never
+  // take the row off the wallpaper, hover brings it back from the top edge.
+  // The hover flags are written from HoverHandlers. Binding the row's visible
+  // to the handler's hovered property loops, because hiding the row clears it.
+  property bool stripEdgeHot: false
+  property bool stripBodyHot: false
+  readonly property var moduleStripSections: settings.moduleStripEntries(settings.moduleStrip, settings.definitions, settings.sections)
+  readonly property bool moduleStripShown: settings.moduleStripShown(settings.moduleStrip, keyboardAvailable, stripEdgeHot || stripBodyHot)
   property int activityCellFilter: -1
   property string activityProviderFilter: ""
   // The forge heatmaps have no list to filter, so a selected cell is a pin
@@ -1288,6 +1297,22 @@ Item {
     }
   }
 
+  // hover mode: the band reserved for the bar is the top edge. It overlaps
+  // the strip by a couple of pixels so the pointer can move onto a chip
+  // without the row closing in the gap. HoverHandler takes no clicks, so
+  // the wallpaper gestures underneath still receive them.
+  Item {
+    id: stripEdge
+    anchors { top: parent.top; left: parent.left; right: parent.right }
+    height: view.topInset + view.gap + 2
+    visible: view.settings.moduleStrip === "hover" && !view.keyboardAvailable
+    HoverHandler { onHoveredChanged: view.stripEdgeHot = hovered }
+  }
+  Connections {
+    target: view.settings
+    function onModuleStripChanged() { view.stripEdgeHot = false; view.stripBodyHot = false }
+  }
+
   // ---- layout ----------------------------------------------------------------
   Item {
     anchors {
@@ -1304,57 +1329,81 @@ Item {
       // left the module strip a gap short of the rest of the desk (lg / view.gap, 8px).
       spacing: view.gap
 
-      Flow {
-        id: moduleStrip
+      Item {
+        id: stripHost
         Layout.fillWidth: true
-        Layout.preferredHeight: implicitHeight
-        spacing: Style.spacing.sm
-        Tag {
-          text: view.desk.hardRefreshing ? "HARD REFRESH …" : "HARD REFRESH"
-          tone: view.desk.hardRefreshing ? view.desk.yellow : view.desk.cyan
-          MouseArea {
-            anchors.fill: parent
-            enabled: view.interactive && !view.desk.hardRefreshing
-            cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
-            onClicked: view.desk.hardRefresh()
+        Layout.preferredHeight: view.moduleStripShown ? moduleStrip.implicitHeight : 0
+        visible: view.moduleStripShown
+        implicitHeight: moduleStrip.implicitHeight
+        HoverHandler { onHoveredChanged: view.stripBodyHot = hovered }
+        Flow {
+          id: moduleStrip
+          width: parent.width
+          spacing: Style.spacing.sm
+          Tag {
+            text: view.desk.hardRefreshing ? "HARD REFRESH …" : "HARD REFRESH"
+            tone: view.desk.hardRefreshing ? view.desk.yellow : view.desk.cyan
+            MouseArea {
+              anchors.fill: parent
+              enabled: view.interactive && !view.desk.hardRefreshing
+              cursorShape: enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
+              onClicked: view.desk.hardRefresh()
+            }
           }
-        }
-        Repeater {
-          model: view.settings.definitions
-          delegate: SectionChip { required property var modelData; section: modelData }
-        }
-        Tag {
-          visible: view.projectFilter !== ""
-          text: "PROJECT · " + view.projectFilter.replace(/^.*\//, "") + " ×"
-          tone: view.desk.cyan
-          MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.projectFilter = "" }
-        }
-        Tag { visible: !!view.settings.settingsError; text: view.settings.settingsError; tone: view.desk.red }
-        // Discoverability, faint and in the strip: the two keys everyone needs.
-        // On the wallpaper SUPER+D opens the desktop view; in that view it closes it.
-        Tag {
-          text: "SETTINGS"
-          tone: view.settingsOpen ? view.desk.cyan : view.textFaint
-          MouseArea { anchors.fill: parent; enabled: view.interactive; cursorShape: Qt.PointingHandCursor; onClicked: view.settingsOpen = !view.settingsOpen }
-        }
-        Tag {
-          text: !view.privacyMode ? "PRIVACY" : (view.settings.privacyUnlockCount > 0 ? "PRIVACY ON · " + view.settings.privacyUnlockCount + "/" + view.settings.privacyUnlockNeeded : "PRIVACY ON")
-          tone: view.privacyMode ? view.desk.yellow : view.textFaint
-          MouseArea { anchors.fill: parent; enabled: view.interactive; cursorShape: Qt.PointingHandCursor; onClicked: view.settings.togglePrivacyMode() }
-        }
-        Tag {
-          text: view.settings.webEnabled ? (view.settings.webReady ? "WEB ON" : (view.settings.webStarting ? "WEB …" : "WEB FAILED")) : "WEB"
-          tone: view.settings.webReady ? view.desk.green : (view.settings.webFailed ? view.desk.yellow : view.textFaint)
-          // Off: open SETTINGS, where the setup gates live. On: turn WEB off.
-          MouseArea { anchors.fill: parent; enabled: view.interactive; cursorShape: Qt.PointingHandCursor; onClicked: { if (view.settings.webEnabled) view.settings.setWebEnabled(false); else view.settingsOpen = true } }
-        }
-        Tag { text: view.keyboardAvailable ? "SUPER+I HIDE DESK · SUPER+D / ESC CLOSE" : "SUPER+I HIDE DESK · SUPER+D SHOW OVER WINDOWS"; tone: view.textFaint }
-        // Keyboard shortcuts only reach the overlay (the wallpaper layer has no keyboard focus).
-        Tag { visible: view.keyboardAvailable; text: "1–9, 0 MODULES · J/K SESSION · ENTER FOCUS · A CLEAR"; tone: view.textFaint }
-        Tag {
-          visible: view.desk.bunChecked && !view.desk.bunAvailable
-          text: "⚠ " + view.desk.missingDependencyHint
-          tone: view.desk.red
+          Repeater {
+            model: view.moduleStripSections
+            delegate: SectionChip { required property var modelData; section: modelData }
+          }
+          Tag {
+            visible: view.projectFilter !== ""
+            text: "PROJECT · " + view.projectFilter.replace(/^.*\//, "") + " ×"
+            tone: view.desk.cyan
+            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: view.projectFilter = "" }
+          }
+          Tag { visible: !!view.settings.settingsError; text: view.settings.settingsError; tone: view.desk.red }
+          // Discoverability, faint and in the strip: the two keys everyone needs.
+          // On the wallpaper SUPER+D opens the desktop view; in that view it closes it.
+          Tag {
+            text: "SETTINGS"
+            tone: view.settingsOpen ? view.desk.cyan : view.textFaint
+            MouseArea { anchors.fill: parent; enabled: view.interactive; cursorShape: Qt.PointingHandCursor; onClicked: view.settingsOpen = !view.settingsOpen }
+          }
+          // Cycles always → compact → overlay → hover → never. One chip, because
+          // the row is already the thing a small desk is trying to get back.
+          Tag {
+            text: "STRIP · " + view.settings.moduleStrip.toUpperCase()
+            tone: view.textFaint
+            MouseArea { anchors.fill: parent; enabled: view.interactive; cursorShape: Qt.PointingHandCursor; onClicked: view.settings.cycleModuleStrip() }
+          }
+          Tag {
+            text: !view.privacyMode ? "PRIVACY" : (view.settings.privacyUnlockCount > 0 ? "PRIVACY ON · " + view.settings.privacyUnlockCount + "/" + view.settings.privacyUnlockNeeded : "PRIVACY ON")
+            tone: view.privacyMode ? view.desk.yellow : view.textFaint
+            MouseArea { anchors.fill: parent; enabled: view.interactive; cursorShape: Qt.PointingHandCursor; onClicked: view.settings.togglePrivacyMode() }
+          }
+          Tag {
+            text: view.settings.webEnabled ? (view.settings.webReady ? "WEB ON" : (view.settings.webStarting ? "WEB …" : "WEB FAILED")) : "WEB"
+            tone: view.settings.webReady ? view.desk.green : (view.settings.webFailed ? view.desk.yellow : view.textFaint)
+            // Off: open SETTINGS, where the setup gates live. On: turn WEB off.
+            MouseArea { anchors.fill: parent; enabled: view.interactive; cursorShape: Qt.PointingHandCursor; onClicked: { if (view.settings.webEnabled) view.settings.setWebEnabled(false); else view.settingsOpen = true } }
+          }
+          // The legend under the cards repeats these. compact drops them so the
+          // enabled sections, SETTINGS and this chip fit on one line at 1280.
+          Tag {
+            visible: view.settings.moduleStrip !== "compact"
+            text: view.keyboardAvailable ? "SUPER+I HIDE DESK · SUPER+D / ESC CLOSE" : "SUPER+I HIDE DESK · SUPER+D SHOW OVER WINDOWS"
+            tone: view.textFaint
+          }
+          // Keyboard shortcuts only reach the overlay (the wallpaper layer has no keyboard focus).
+          Tag {
+            visible: view.keyboardAvailable && view.settings.moduleStrip !== "compact"
+            text: "1–9, 0 MODULES · J/K SESSION · ENTER FOCUS · A CLEAR"
+            tone: view.textFaint
+          }
+          Tag {
+            visible: view.desk.bunChecked && !view.desk.bunAvailable
+            text: "⚠ " + view.desk.missingDependencyHint
+            tone: view.desk.red
+          }
         }
       }
 
