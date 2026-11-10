@@ -630,6 +630,30 @@ ColumnLayout {
           }
         }
       }
+      // The strip's own way back. `never` hides the chip row everywhere,
+      // including the STRIP chip that cycles the modes, so without this the
+      // only route out was a command typed in a terminal.
+      Text { textFormat: Text.PlainText; text: "MODULE STRIP"; color: root.dim; font.family: root.mono; font.pixelSize: Style.font.caption; font.bold: true; font.letterSpacing: 1.4; Layout.topMargin: Style.spacing.sm }
+      Flow {
+        Layout.fillWidth: true
+        Layout.minimumWidth: 0
+        spacing: Style.spacing.md
+        Repeater {
+          model: root.settings.moduleStrips
+          delegate: Text {
+            id: stripChoice
+            required property string modelData
+            readonly property bool current: root.settings.moduleStrip === modelData
+            textFormat: Text.PlainText
+            text: (current ? "● " : "○ ") + modelData.toUpperCase()
+            color: current ? root.green : root.faint
+            font.family: root.mono
+            font.pixelSize: Style.font.caption
+            font.bold: current
+            MouseArea { anchors.fill: parent; cursorShape: Qt.PointingHandCursor; onClicked: root.settings.setModuleStrip(stripChoice.modelData) }
+          }
+        }
+      }
     }
   }
 }

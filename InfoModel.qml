@@ -296,6 +296,30 @@ Item {
     if (collector.running || bunProbe.running) return
     collector.running = true
   }
+  // A collector that never finishes used to freeze the desk for good: every
+  // refresh returns early while `collector.running` is true, so one hung
+  // child (a git or docker call on a dead mount, a wedged socket) stopped
+  // all updates until the shell was restarted, with nothing on screen saying
+  // so. A cold first poll takes about ten seconds; a minute is a hang.
+  // Stop it, say so in the error line, and the next tick starts a new one.
+  Timer {
+    id: collectorWatchdog
+    interval: 60000
+    running: collector.running
+    repeat: false
+    onTriggered: {
+      if (!collector.running) return
+      collector.fail("collector did not finish in 60 s and was stopped")
+      collectorKill.restart()
+    }
+  }
+  // SIGTERM (running = false) is polite; a process stuck on I/O may ignore it.
+  Timer {
+    id: collectorKill
+    interval: 3000
+    repeat: false
+    onTriggered: if (collector.running && typeof collector.signal === "function") collector.signal(9)
+  }
   function hardRefresh() {
     if (!root.active) return
     root.forceRefreshArmed = true

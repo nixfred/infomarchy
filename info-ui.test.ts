@@ -1391,3 +1391,27 @@ describe("the monitor-move guard survives an Omarchy without ScreenMoveRemap", (
     }
   });
 });
+
+describe("a hung collector cannot freeze the desk", () => {
+  test("a watchdog stops a collector that runs past a minute, through the same failure path as a bad frame", () => {
+    const watchdog = model.match(/Timer \{\s*id: collectorWatchdog[\s\S]*?\n  \}/)?.[0] || "";
+    expect(watchdog).toContain("running: collector.running");
+    expect(watchdog).toContain("repeat: false");
+    expect(Number(watchdog.match(/interval: (\d+)/)?.[1])).toBeGreaterThanOrEqual(45000);
+    expect(watchdog).toContain('collector.fail("collector did not finish');
+    expect(watchdog).toContain("collectorKill.restart()");
+  });
+
+  test("a process that ignores SIGTERM is killed, and only when the API exists", () => {
+    const kill = model.match(/Timer \{\s*id: collectorKill[\s\S]*?\n  \}/)?.[0] || "";
+    expect(kill).toContain("collector.running");
+    expect(kill).toContain('typeof collector.signal === "function"');
+    expect(kill).toContain("collector.signal(9)");
+  });
+
+  test("a failure frees the refresh guard: fail() stops the process, and refresh only skips while one is running", () => {
+    expect(model).toMatch(/function fail\(message\) \{[\s\S]*?if \(running\) running = false/);
+    expect(model).toContain("if (!root.active || collector.running || bunProbe.running) return");
+  });
+});
+

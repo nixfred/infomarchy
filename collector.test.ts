@@ -2728,7 +2728,7 @@ describe("topic refinement never holds the snapshot", () => {
     const yes = () => true, no = () => false;
     expect(topicWorkerAlive({ pid: 4242, at: stamp - 5_000 }, stamp, yes)).toBe(true);
     expect(topicWorkerAlive({ pid: 4242, at: stamp - 5_000 }, stamp, no)).toBe(false);
-    expect(topicWorkerAlive({ pid: 4242, at: stamp - 90_000 }, stamp, yes)).toBe(false);
+    expect(topicWorkerAlive({ pid: 4242, at: stamp - 120_000 }, stamp, yes)).toBe(false);
     expect(topicWorkerAlive({ pid: 1, at: stamp }, stamp, yes)).toBe(false);
     expect(topicWorkerAlive({ pid: "4242", at: "soon" }, stamp, yes)).toBe(false);
     expect(topicWorkerAlive(null, stamp, yes)).toBe(false);

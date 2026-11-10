@@ -1501,8 +1501,10 @@ export function topicRefinementAllowed(env = process.env): boolean {
 // and the wallpaper and the overlay no longer each pay for the same call.
 const TOPICS_FILE = "topics.json";
 const TOPICS_LOCK = "topics.lock";
-const TOPIC_WORKER_TIMEOUT_MS = 15_000;
-const TOPIC_WORKER_MAX_MS = 60_000;
+// Nobody waits on the worker, and a shared Ollama (another app chatting at 5-25 s a
+// call) queues a reword behind it, so give it room before calling it a failure.
+const TOPIC_WORKER_TIMEOUT_MS = 30_000;
+const TOPIC_WORKER_MAX_MS = 90_000;
 const MAX_TOPIC_REQUESTS = 6;
 export type TopicJob = { key: string; fingerprint: string; model: string; prompt: string };
 

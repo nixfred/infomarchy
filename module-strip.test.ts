@@ -131,3 +131,20 @@ describe("module strip mode", () => {
     expect(overlay).toContain("function onSettingsRequestChanged() { infoView.settingsOpen = true }");
   });
 });
+
+describe("the strip can always be brought back from the drawer", () => {
+  const body = readFileSync(join(import.meta.dir, "SettingsBody.qml"), "utf8");
+  test("the drawer lists every mode and writes through setModuleStrip", () => {
+    expect(body).toContain('text: "MODULE STRIP"');
+    expect(body).toContain("model: root.settings.moduleStrips");
+    expect(body).toContain("root.settings.setModuleStrip(stripChoice.modelData)");
+    expect(body).toContain('root.settings.moduleStrip === modelData');
+  });
+  test("the drawer is not itself gated by the strip mode, so `never` stays recoverable", () => {
+    const row = body.slice(body.indexOf('text: "MODULE STRIP"'));
+    expect(row).not.toContain("moduleStripShown");
+    expect(settings).toContain('if (mode === "never") return false');
+    expect(overlay).toContain("function openSettings");
+  });
+});
+
