@@ -763,20 +763,107 @@ function info(pid: number): Proc | null {
 // Hermes runs a launcher, an Electron app and a backend as separate processes
 // and records the live session against the backend's pid, not the launcher the
 // card is built from. Read the lease file and match on the agent's own tree.
+function hermesLeaseEntries(raw: unknown): any[] {
+  const entries = (raw && typeof raw === "object" && Array.isArray((raw as any).entries)) ? (raw as any).entries : [];
+  return entries.slice(0, MAX_COLLECTION_ITEMS).filter((entry: any) => entry && typeof entry === "object");
+}
+// Gateway chats key their session by route, e.g.
+// "agent:main:local:dm:local-<64 hex>": colons, and longer than the
+// 128-character ids the other providers use.
+export function hermesSessionId(value: unknown): string {
+  const id = String(value || "").trim();
+  return /^[A-Za-z0-9][A-Za-z0-9_:-]{7,255}$/.test(id) ? id : "";
+}
 export function hermesSessionByPid(raw: unknown): Map<number, string> {
   const byPid = new Map<number, string>();
-  const entries = (raw && typeof raw === "object" && Array.isArray((raw as any).entries)) ? (raw as any).entries : [];
-  for (const entry of entries.slice(0, MAX_COLLECTION_ITEMS)) {
-    if (!entry || typeof entry !== "object") continue;
-    const id = cleanSessionId(entry.session_id);
+  for (const entry of hermesLeaseEntries(raw)) {
+    const id = hermesSessionId(entry.session_id);
     const pid = Number(entry.pid);
     if (id && Number.isInteger(pid) && pid > 0) byPid.set(pid, id);
   }
   return byPid;
 }
-function hermesSessions(): Map<number, string> {
+// The gateway holds a chat's lease only while that chat runs a turn, so a
+// gateway pid with a lease is busy right now.
+export function hermesTurnPids(raw: unknown): Set<number> {
+  const pids = new Set<number>();
+  for (const entry of hermesLeaseEntries(raw)) {
+    const pid = Number(entry.pid);
+    if (String(entry.surface || "").startsWith("gateway") && hermesSessionId(entry.session_id) && Number.isInteger(pid) && pid > 0)
+      pids.add(pid);
+  }
+  return pids;
+}
+// A gateway chat stays open in state.db (ended_at NULL) between turns, while
+// its lease lasts only one turn. Open chats active within the last day keep
+// the gateway on the desk; the view's quiet rule hides it after the usual
+// idle window, the same as any other card.
+export const HERMES_CHAT_WINDOW_MS = 24 * 3600_000;
+export function hermesOpenGatewayChats(rows: unknown, stamp = now): string[] {
+  const list = Array.isArray(rows) ? rows.slice(0, MAX_COLLECTION_ITEMS) : [];
+  return list
+    .map((row: any) => ({ id: cleanSessionId(row?.id), key: hermesSessionId(row?.session_key), at: hermesTimestampMs(row?.last_activity_at) }))
+    .filter(chat => chat.id && chat.key && chat.at && stamp - chat.at <= HERMES_CHAT_WINDOW_MS && chat.at <= stamp + 60_000)
+    .sort((a, b) => b.at - a.at)
+    .map(chat => chat.id);
+}
+export function hermesIsGateway(cmd: string[]): boolean {
+  const args = hermesBootstrapArgs(cmd);
+  return !!args && (args.find(a => !a.startsWith("-")) || "") === "gateway";
+}
+function hermesGatewayChats(): string[] {
   const home = process.env.HERMES_HOME || join(HOME, ".hermes");
-  return hermesSessionByPid(readJson(join(home, "runtime/active_sessions.json")));
+  const path = join(home, "state.db");
+  try { if (!lstatSync(path).isFile()) return []; } catch { return []; }
+  let db: Database | null = null;
+  try {
+    db = new Database(path, { readonly: true });
+    return hermesOpenGatewayChats(db.query(`
+      SELECT id, session_key, last_activity_at FROM sessions
+       WHERE ended_at IS NULL AND session_key IS NOT NULL
+         AND ifnull(archived, 0) = 0 AND ifnull(hidden, 0) = 0
+         AND ifnull(source, '') NOT IN ('cron')
+       ORDER BY last_activity_at DESC LIMIT 50
+    `).all());
+  } catch { return []; } finally { try { db?.close(); } catch {} }
+}
+// Recent Tasks leaves out hidden sessions, and Hermes Desktop's Bot Chat is
+// one, so its card never got a last-prompt time and the quiet rule hid it as
+// idle since the backend started. Read only the time of each live card's last
+// prompt (never its text) straight from state.db.
+export function attachHermesPromptTimes(sessions: any[], lastPromptAt: Map<string, number>): any[] {
+  for (const session of sessions) {
+    if (session?.provider !== "hermes" || Number(session.topicAt) > 0) continue;
+    const ids = Array.isArray(session.sessionIds) ? session.sessionIds : [];
+    const at = Math.max(0, ...ids.map((id: any) => lastPromptAt.get(String(id)) || 0));
+    if (at > 0) session.topicAt = at;
+  }
+  return sessions;
+}
+function hermesLastPromptTimes(sessions: any[]): Map<string, number> {
+  const out = new Map<string, number>();
+  const ids = [...new Set(sessions.filter(s => s?.provider === "hermes")
+    .flatMap(s => (Array.isArray(s.sessionIds) ? s.sessionIds : []).map((id: any) => cleanSessionId(id)).filter(Boolean)))].slice(0, 64);
+  if (!ids.length) return out;
+  const home = process.env.HERMES_HOME || join(HOME, ".hermes");
+  const path = join(home, "state.db");
+  try { if (!lstatSync(path).isFile()) return out; } catch { return out; }
+  let db: Database | null = null;
+  try {
+    db = new Database(path, { readonly: true });
+    const rows = db.query(`SELECT session_id, max(timestamp) AS ts FROM messages
+       WHERE role = 'user' AND ifnull(active, 1) = 1 AND session_id IN (${ids.map(() => "?").join(",")})
+       GROUP BY session_id`).all(...ids) as any[];
+    for (const row of rows) {
+      const ts = hermesTimestampMs(row.ts);
+      if (ts && plausibleTimestamp(ts) && ts <= now + 60_000) out.set(String(row.session_id), ts);
+    }
+  } catch {} finally { try { db?.close(); } catch {} }
+  return out;
+}
+function hermesLeases(): unknown {
+  const home = process.env.HERMES_HOME || join(HOME, ".hermes");
+  return readJson(join(home, "runtime/active_sessions.json"));
 }
 
 // provider detection from argv — match the launcher name, not the runtime
@@ -827,7 +914,32 @@ export function cursorIsWorker(cmd: string[], environ = ""): boolean {
   return true;
 }
 const INTERPRETERS = /(^|\/)(node|nodejs|bun|deno|python[0-9.]*|uv|npx|bunx|sh|bash|zsh|fish|env)$/;
+const HERMES_SERVICE_COMMANDS = /^(gateway|proxy|cron|send|webhook|slack|whatsapp|whatsapp-cloud|peer|sync|logs|dashboard|serve|desktop|mcp|peers)$/;
+// Hermes's installer writes a `hermes` shim that execs
+// `python3 -I -c '<bootstrap>' [args]`, so no argv token names the program
+// and the launcher-name match below never fires. Recognise the bootstrap by
+// the entry point it ends in and return the user's arguments after it.
+export function hermesBootstrapArgs(cmd: string[]): string[] | null {
+  if (!/(^|\/)python[0-9.]*$/.test(cmd[0] || "")) return null;
+  const c = cmd.indexOf("-c");
+  if (c < 1 || c > 3) return null;
+  if (!/from hermes_cli\.main import main/.test(cmd[c + 1] || "")) return null;
+  return cmd.slice(c + 2);
+}
+// A Hermes process whose own lease file says it hosts a live session is a
+// session, whatever its subcommand: Hermes Desktop's conversations run inside
+// a `hermes serve` backend started over SSH, which providerOf rightly treats
+// as a service. The argv check guards against a stale lease on a reused pid.
+export function hermesLeaseProvider(cmd: string[], pid: number, leases: Map<number, string>): string | null {
+  if (!leases.has(pid)) return null;
+  return hermesBootstrapArgs(cmd) || cmd.some(a => /hermes_cli|(^|\/)hermes$/.test(a)) ? "hermes" : null;
+}
 export function providerOf(cmd: string[]): string | null {
+  const hermesArgs = hermesBootstrapArgs(cmd);
+  if (hermesArgs) {
+    const sub = hermesArgs.find(a => !a.startsWith("-")) || "";
+    return HERMES_SERVICE_COMMANDS.test(sub) ? null : "hermes";
+  }
   // Only argv[0] identifies a program. argv[1..2] count solely when argv[0]
   // is an interpreter/launcher, otherwise `cat /tmp/claude` or
   // `vim notes/codex` becomes a phantom agent with repo scans and alerts.
@@ -849,7 +961,7 @@ export function providerOf(cmd: string[]): string | null {
       if (name === "hermes") {
         const mod = cmd[0] && /(^|\/)(python[0-9.]*)$/.test(cmd[0]) && cmd[1] === "-m";
         if (mod && /(^|\/)hermes_cli\.main$/.test(cmd[2] || "") && cmd[3]
-            && /^(gateway|proxy|cron|send|webhook|slack|whatsapp|whatsapp-cloud|peer|cron|sync|logs|dashboard|serve|desktop|mcp|peers)$/.test(cmd[3])) return null;
+            && HERMES_SERVICE_COMMANDS.test(cmd[3])) return null;
       }
       // Grok Bot is Electron: the zygote/renderer/gpu/utility helpers all carry
       // the same argv[0] as the browser process, and the local-exec daemon runs
@@ -1746,11 +1858,16 @@ async function liveSessions(pids: number[]) {
   // is inferred from a terminal title or a systemd inhibitor.
   const cursorBusyByPid = new Map<number, boolean>();
   const [gpuByPid, tmux, claudeRegistry] = await Promise.all([gpuMemoryByPid(), tmuxState(winByPid, pids), claudeAgents()]);
-  const hermesByPid = hermesSessions();
+  const leases = hermesLeases();
+  const hermesByPid = hermesSessionByPid(leases);
+  const hermesTurns = hermesTurnPids(leases);
+  const gatewayChats = hermesGatewayChats();
   const herdrClients = herdrState(winByPid);
   const boomuxClients = boomuxState(winByPid);
   for (const pid of pids) {
-    const prov = providerOf(cmdByPid.get(pid) || []); if (!prov) continue;
+    const cmd = cmdByPid.get(pid) || [];
+    const prov = providerOf(cmd) || hermesLeaseProvider(cmd, pid, hermesByPid)
+      || (gatewayChats.length && hermesIsGateway(cmd) ? "hermes" : null); if (!prov) continue;
     const p = info(pid); if (!p) continue;
     // skip children of an already-reported agent process (subagents, helpers)
     let anc = info(p.ppid), child = false;
@@ -1856,6 +1973,10 @@ async function liveSessions(pids: number[]) {
         const id = hermesByPid.get(child);
         if (id && !sessionIds.includes(id)) { sessionIds.unshift(id); break; }
       }
+    // state.db ids, newest first, so the chat's own prompts give the card its
+    // topic and its last-activity time.
+    if (prov === "hermes" && hermesIsGateway(p.cmd))
+      for (const id of [...gatewayChats].reverse()) if (!sessionIds.includes(id)) sessionIds.unshift(id);
     // A reused pid with a fresh process must not inherit the old baseline.
     const agentKey = `${p.pid}:${Math.round(p.start)}`;
     currentAgentRaw[agentKey] = sample.ticks;
@@ -1901,7 +2022,7 @@ async function liveSessions(pids: number[]) {
       registryBusy: s._registryBusy,
       transcriptBusy: cursorBusyByPid.has(s.pid) ? cursorBusyByPid.get(s.pid) : null,
       titleBusy,
-      turnBusy: turnBusy.has(s.pid),
+      turnBusy: turnBusy.has(s.pid) || (s.provider === "hermes" && hermesTurns.has(s.pid)),
     });
     if (!s.busy && s.window && titleLooksBusy(s.window.title) && s.provider === "grok")
       s.window = { ...s.window, title: "" };
@@ -3906,6 +4027,7 @@ async function runCollector() {
   for (const entry of recent) entry.activityCell = activityCellIndex(entry.ts, heatDays);
   inferSessionIdsFromRecent(sessions, recent);
   attachSessionTopics(sessions, recent);
+  attachHermesPromptTimes(sessions, hermesLastPromptTimes(sessions));
   attachGrokBotRoster(sessions, grokBot);
   attachStaleness(sessions);
   const topicSummaries = await refineSessionTopics(sessions, recent, ollama);
