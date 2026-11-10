@@ -1353,3 +1353,41 @@ describe("background work stays off while the desk is hidden", () => {
     expect(read("Overlay.qml")).toContain("if (event.modifiers & (Qt.ControlModifier | Qt.AltModifier)) return");
   });
 });
+
+describe("the monitor-move guard survives an Omarchy without ScreenMoveRemap", () => {
+  // Omarchy dropped ScreenMoveRemap for Hyprland 0.57 (basecamp/omarchy#17229).
+  // QML refuses to load a file that names an unknown type, so naming it in the
+  // service or the overlay stops the whole plugin on that Omarchy ("service
+  // plugin load failed ... ScreenMoveRemap is not a type", #48). Omarchy still
+  // ships and uses the pulse on Hyprland 0.56, so the type is reached through a
+  // Loader by URL: used where it exists, off where it does not.
+  const guard = readFileSync(join(import.meta.dir, "RemapGuard.qml"), "utf8");
+  const omarchyGuard = readFileSync(join(import.meta.dir, "OmarchyScreenMoveRemap.qml"), "utf8");
+
+  test("neither the service nor the overlay names the Omarchy type or imports qs.Ui", () => {
+    for (const source of [service, overlay]) {
+      expect(source).not.toContain("ScreenMoveRemap");
+      expect(source).not.toMatch(/^import qs\.Ui$/m);
+    }
+  });
+
+  test("only the one file that is loaded by URL names it", () => {
+    expect(omarchyGuard).toMatch(/^import qs\.Ui$/m);
+    expect(omarchyGuard).toMatch(/^\s*ScreenMoveRemap \{/m);
+    expect(guard).not.toContain("ScreenMoveRemap {");
+    expect(guard).not.toMatch(/^import qs\.Ui$/m);
+    expect(guard).toContain('source: "OmarchyScreenMoveRemap.qml"');
+  });
+
+  test("without the type the guard is simply off, never a stuck-hidden surface", () => {
+    expect(guard).toContain("readonly property bool remapping: loader.item ? loader.item.remapping : false");
+  });
+
+  test("both surfaces still fold the pulse into their visibility", () => {
+    expect(service).toMatch(/visible: dashboardSettings\.ready && !remapGuard\.remapping && /);
+    expect(overlay).toContain("visible: root.opened && !remapGuard.remapping");
+    for (const source of [service, overlay]) {
+      expect(source).toMatch(/RemapGuard \{\s*id: remapGuard\s*window: panel\s*\}/);
+    }
+  });
+});

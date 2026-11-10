@@ -93,6 +93,15 @@ const CEILINGS: Record<string, number> = {
   // setModuleStrip / getModuleStrip read dashboardSettings from the overlay
   // root. Same unqualified outer-id false positive as the hotkeys here.
   "Overlay.qml": 33,
+  // The Omarchy type is reached through a Loader by URL; on an Omarchy without
+  // ScreenMoveRemap the one file that names it has version-dependent findings,
+  // filtered below, and nothing else.
+  "OmarchyScreenMoveRemap.qml": 0,
+  // 2: Loader.item is a bare QObject to qmllint, so reading `remapping` from it
+  // and handing it `window` read as missing properties. Both exist on the
+  // loaded file; typing them would mean naming that file, which is the thing
+  // this indirection avoids.
+  "RemapGuard.qml": 2,
   "WaveWallpaper.qml": 0,
   // Settings drawer (#25): dynamic Style properties qmllint sees as QObject,
   // modelData reads inside nested delegate children, and Process exit-status
@@ -118,6 +127,12 @@ const VERSION_DEPENDENT: [RegExp, string | null][] = [
   [/Member "isVideoPath" not found on type "Util" \[missing-property\]$/, null],
   [/BackgroundMedia was not found\..*\[import\]$/, "BackgroundWallpaper.qml"],
   [/Unused import \[unused-imports\]$/, "BackgroundWallpaper.qml"],
+  // Same shape for the monitor-move guard: ScreenMoveRemap is gone from qs.Ui on an
+  // Omarchy built for Hyprland 0.57, and the Loader in RemapGuard.qml is what keeps
+  // that survivable. Matched to the one file that names the type.
+  [/ScreenMoveRemap was not found\..*\[import\]$/, "OmarchyScreenMoveRemap.qml"],
+  [/Unused import \[unused-imports\]$/, "OmarchyScreenMoveRemap.qml"],
+  [/Unknown component\..*ScreenMoveRemap.*\[unresolved-type\]$/, "OmarchyScreenMoveRemap.qml"],
   // Qt 6.12's qmllint cannot see inside Style.spacing / Style.font, which are
   // anonymous QtObjects in Omarchy's Commons/Style.qml. Every token below exists
   // at runtime (284 reads across the plugin); only the linter's view changed.

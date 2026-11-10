@@ -5,7 +5,6 @@ import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
 import qs.Commons as Commons
-import qs.Ui
 import "bar-insets.js" as BarInsets
 
 // Background-layer host. Replaces omarchy.background (manifest clonedFrom), so
@@ -387,7 +386,9 @@ Scope {
       readonly property bool firstScreen: Quickshell.screens.length > 0
         && String(Quickshell.screens[0].name || "") === String(modelData.name || "")
 
-      ScreenMoveRemap {
+      // Re-places this surface when its monitor moves. Loaded by file, see
+      // RemapGuard.qml: Omarchy dropped the type it wraps for Hyprland 0.57.
+      RemapGuard {
         id: remapGuard
         window: panel
       }

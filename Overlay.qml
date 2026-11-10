@@ -3,7 +3,6 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
-import qs.Ui
 
 // Summonable fullscreen twin of the desk, for when windows cover the
 // wallpaper. Bind e.g. SUPER+D → `omarchy-shell shell toggle nixfred.infomarchy`.
@@ -81,7 +80,9 @@ Scope {
       // Respect the bar's reserved strip instead of covering it.
       exclusionMode: ExclusionMode.Normal
 
-      ScreenMoveRemap {
+      // Re-places this surface when its monitor moves (undock). Loaded by
+      // file, see RemapGuard.qml.
+      RemapGuard {
         id: remapGuard
         window: panel
       }
