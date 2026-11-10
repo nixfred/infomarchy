@@ -2936,10 +2936,7 @@ function piHistory(root = join(HOME, ".pi", "agent", "sessions"), provider = "pi
 // runtime.user_intent.accepted record whose semantic_kind is "chat" on the main
 // surface; its text is the text blocks of model_messages, and recorded_at is in
 // MICROseconds. This is the format the real binary writes (1.4.14, a headless
-// `muse exec --provider echo --json` run), not a guess. Token usage
-// (model_completed events) is deliberately not read: the only record seen came
-// from the echo provider and reports zeros, and Muse's own schema says whether
-// cached tokens sit inside or beside input tokens depends on the provider.
+// `muse exec --provider echo --json` run), not a guess.
 export function museUserPrompt(entry: any): { ts: number; text: string; session: string } | null {
   if (!entry || typeof entry !== "object" || entry.payload_type !== "runtime.user_intent.accepted") return null;
   const payload = entry.payload;
@@ -2958,6 +2955,32 @@ export function museWorkspaceRoot(entry: any): string {
   const root = entry.payload?.record?.workspace_root;
   return typeof root === "string" ? root : "";
 }
+// Token usage: model_completed events carry usage = {input_tokens,
+// cached_tokens, output_tokens, reasoning_tokens}. The record names no model, so
+// the breakdown has one row, "muse". Muse's schema says cached tokens sit inside
+// or beside input tokens depending on the provider; they are kept in their own
+// bucket (cache reads, which the desk's burn figure never counts) and never
+// added to input, so the worst case is that input runs high, not that a total
+// is invented. Subagent journals are not read, so this is the main sessions only.
+export function museUsageRow(entry: any, session: string): any | null {
+  if (!entry || typeof entry !== "object" || entry.payload_type !== "runtime.session") return null;
+  const event = entry.payload?.event;
+  if (!event || event.kind !== "model_completed" || !event.usage || typeof event.usage !== "object") return null;
+  const micros = Number(entry.recorded_at);
+  if (!Number.isFinite(micros) || micros <= 0) return null;
+  const u = event.usage;
+  return { provider: "muse", model: "muse", ts: Math.floor(micros / 1000), session,
+    input: u.input_tokens, output: u.output_tokens, reasoning: u.reasoning_tokens, cacheRead: u.cached_tokens, cacheWrite: 0 };
+}
+export function museUsageFromRows(rows: any[], stamp = now): any | null {
+  const real = (Array.isArray(rows) ? rows : []).filter(row => Number(row.input) + Number(row.output) + Number(row.reasoning) + Number(row.cacheRead) > 0);
+  // An all-zero record (the echo provider) is not a measurement; show nothing.
+  if (!real.length) return null;
+  const usage = opencodeUsageFromRows(real, stamp);
+  if (!usage) return null;
+  return { ...usage, id: "muse", name: "Muse", usageStatusText: "from Muse's local session logs; sign in to Muse for subscription limits" };
+}
+const museUsageRows: any[] = [];
 // Recent days only (the desk shows 7), a bounded number of sessions, and a
 // bounded read of each: Muse's session files carry large per-call records, so a
 // short session is already ~150 KB.
@@ -3006,6 +3029,7 @@ function museHistory(root = join(process.env.XDG_DATA_HOME || join(HOME, ".local
       if (!text) continue;
       const cwd = workspaceOf(text) || workspaceOf(readRegularFileHead(file, 65536) || "");
       for (const line of text.split("\n")) {
+        if (line.includes('"model_completed"')) { const row = museUsageRow(parseJsonBounded(line, 4096, 12), id); if (row) museUsageRows.push(row); continue; }
         if (!line.includes('"runtime.user_intent.accepted"')) continue;
         const prompt = museUserPrompt(parseJsonBounded(line, 4096, 12));
         if (!prompt) continue;
@@ -3296,7 +3320,7 @@ export function opencodeUsageFromRows(rows: any[], stamp = now): any | null {
     const provider = uiString(row?.provider, 48), model = uiString(row?.model, 48);
     const ts = Number(row?.ts || 0);
     if (!provider || !model || !Number.isFinite(ts) || ts <= 0) continue;
-    const key = `${provider}/${model}`;
+    const key = provider === model ? model : `${provider}/${model}`;
     const input = count(row?.input), output = count(row?.output);
     const reasoning = count(row?.reasoning), cacheRead = count(row?.cacheRead), cacheWrite = count(row?.cacheWrite);
     const burn = input + output + reasoning + cacheWrite;
@@ -4054,6 +4078,7 @@ function agentsUsage() {
   }
   // Same rule: a real Omarchy cache always wins over what we can infer.
   if (!out.opencode) { const oc = opencodeUsage(); if (oc) out.opencode = normalizeUsage(oc); }
+  if (!out.muse) { const mu = museUsageFromRows(museUsageRows); if (mu) out.muse = normalizeUsage(mu); }
   return out;
 }
 

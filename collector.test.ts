@@ -9,7 +9,7 @@ import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSyn
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join, relative } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents, sessionStaleness, opencodeUsageFromRows, STALE_AFTER_MS, decodeBase32, grokBotLine, grokBotRow, grokBotAttention, attachGrokBotRoster, grokSessionUsage, usageModelBreakdown, windowMatchesProvider, hermesSessionByPid, validNetDevice, observationalGitCommand, observationalGitEnv, piUserText, piSessionIdFromName, grokTurnFromUpdate, foldGrokTurnsChunk, emptyGrokFileEntry, newestGrokFiles, grokEntryFromPrev, grokUsageFilesForPrev, cursorProjectPath, cursorUserText, cursorTimestamp, cursorTranscriptBusy, cursorIsWorker, cursorWorkspaceDir, cursorCurrentChat, sessionBusyState, hermesBootstrapArgs, hermesLeaseProvider, hermesSessionId, hermesTurnPids, hermesOpenGatewayChats, hermesIsGateway, HERMES_CHAT_WINDOW_MS, attachHermesPromptTimes, museUserPrompt, museWorkspaceRoot } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents, sessionStaleness, opencodeUsageFromRows, STALE_AFTER_MS, decodeBase32, grokBotLine, grokBotRow, grokBotAttention, attachGrokBotRoster, grokSessionUsage, usageModelBreakdown, windowMatchesProvider, hermesSessionByPid, validNetDevice, observationalGitCommand, observationalGitEnv, piUserText, piSessionIdFromName, grokTurnFromUpdate, foldGrokTurnsChunk, emptyGrokFileEntry, newestGrokFiles, grokEntryFromPrev, grokUsageFilesForPrev, cursorProjectPath, cursorUserText, cursorTimestamp, cursorTranscriptBusy, cursorIsWorker, cursorWorkspaceDir, cursorCurrentChat, sessionBusyState, hermesBootstrapArgs, hermesLeaseProvider, hermesSessionId, hermesTurnPids, hermesOpenGatewayChats, hermesIsGateway, HERMES_CHAT_WINDOW_MS, attachHermesPromptTimes, museUserPrompt, museWorkspaceRoot, museUsageRow, museUsageFromRows } from "./collector.ts";
 import { sessionEventId } from "./notification-events.ts";
 
 const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
@@ -3045,3 +3045,30 @@ describe("the local summary ignores the harness and the filler", () => {
   });
 });
 
+
+describe("Muse token usage", () => {
+  const completed = (usage: any, micros = 1_794_281_614_572_054) => ({ payload_type: "runtime.session", recorded_at: micros, payload: { kind: "run", event: { kind: "model_completed", usage } } });
+  test("reads model_completed usage and converts microseconds", () => {
+    const row = museUsageRow(completed({ input_tokens: 100, output_tokens: 20, reasoning_tokens: 5, cached_tokens: 60 }), "s1");
+    expect(row).toMatchObject({ provider: "muse", ts: 1_794_281_614_572, input: 100, output: 20, reasoning: 5, cacheRead: 60, session: "s1" });
+  });
+  test("ignores every other record, including goal attribution (it would double count)", () => {
+    expect(museUsageRow({ payload_type: "runtime.session", recorded_at: 1, payload: { event: { kind: "goal_usage_attribution", usage: { input_tokens: 9 } } } }, "s")).toBeNull();
+    expect(museUsageRow({ payload_type: "other", recorded_at: 1, payload: { event: { kind: "model_completed", usage: {} } } }, "s")).toBeNull();
+    expect(museUsageRow(completed({ input_tokens: 1 }, 0), "s")).toBeNull();
+    expect(museUsageRow(null, "s")).toBeNull();
+  });
+  test("an all-zero record (the echo provider) shows no Muse row", () => {
+    const zero = museUsageRow(completed({ input_tokens: 0, output_tokens: 0, reasoning_tokens: 0, cached_tokens: 0 }), "s");
+    expect(museUsageFromRows([zero])).toBeNull();
+    expect(museUsageFromRows([])).toBeNull();
+  });
+  test("sums into a card Omarchy would have written, cache outside the burn", () => {
+    const at = 1_794_281_614_572_054, stamp = Math.floor(at / 1000) + 1000;
+    const rows = [museUsageRow(completed({ input_tokens: 100, output_tokens: 20, reasoning_tokens: 5, cached_tokens: 60 }, at), "a"), museUsageRow(completed({ input_tokens: 10, output_tokens: 1, reasoning_tokens: 0, cached_tokens: 0 }, at), "b")];
+    const u = museUsageFromRows(rows, stamp);
+    expect(u).toMatchObject({ id: "muse", name: "Muse", ready: true, totalPrompts: 2, totalSessions: 2, todayTotalTokens: 136, limits: [] });
+    expect(u.modelUsage.muse).toMatchObject({ inputTokens: 110, outputTokens: 26, cacheReadInputTokens: 60 });
+    expect(Object.keys(u.todayTokensByModel)).toEqual(["muse"]);
+  });
+});

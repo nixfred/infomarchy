@@ -4,6 +4,9 @@ All notable changes to Infomarchy. The format follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Added
+- **Muse token usage.** When Omarchy has no Muse usage cache (Muse not signed in), the USAGE & LIMITS card now shows a Muse row built from `model_completed` events in Muse's own `session.jsonl` files: tokens today, a seven-day trend and the per-day totals. Cached tokens are kept in their own bucket and never added to input (Muse's schema says their placement depends on the provider), and the record names no model, so the breakdown has a single `muse` row. A record with all-zero usage, which is all the echo provider writes, shows no row rather than a zero. A real Omarchy cache still wins. Checked against a session file the real Muse binary wrote with the numbers filled in; not yet against a real model's record, which is what issue #26 is still waiting on. Subagent journals are not read.
+
 ## [1.5.1] — 2026-11-10
 
 A patch release about the desk staying live and cheap to run. The headline is a freeze that came from waiting on a local model; the rest is a watchdog for the next kind of hang, a way back from the hidden module strip, lighter polls and better fallback topics. Measurements are in the entries below, including the one that did not move.
