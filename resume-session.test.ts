@@ -10,6 +10,7 @@ describe("provider-specific session resume", () => {
     expect(resumeAgentCommand("opencode", "session-123")).toEqual(["opencode", "--session", "session-123"]);
     expect(resumeAgentCommand("pi", "01a079f4-d5cd-7401-b539-8d9e6d780c9f")).toEqual(["pi", "--session", "01a079f4-d5cd-7401-b539-8d9e6d780c9f"]);
     expect(resumeAgentCommand("omp", "01a1c1ca-d3cd-764c-95f5-d174eba5762e")).toEqual(["omp", "--resume", "01a1c1ca-d3cd-764c-95f5-d174eba5762e"]);
+    expect(resumeAgentCommand("muse", "01a1c384-aaff-74a1-931b-0188aee342e0")).toEqual(["muse", "resume", "01a1c384-aaff-74a1-931b-0188aee342e0"]);
   });
 
   test("rejects unsupported providers and unsafe identifiers", () => {

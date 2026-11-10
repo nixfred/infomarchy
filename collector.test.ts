@@ -4,7 +4,7 @@ import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSyn
 import { Database } from "bun:sqlite";
 import { tmpdir } from "os";
 import { join, relative } from "path";
-import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents, sessionStaleness, opencodeUsageFromRows, STALE_AFTER_MS, decodeBase32, grokBotLine, grokBotRow, grokBotAttention, attachGrokBotRoster, grokSessionUsage, usageModelBreakdown, windowMatchesProvider, hermesSessionByPid, validNetDevice, observationalGitCommand, observationalGitEnv, piUserText, piSessionIdFromName, grokTurnFromUpdate, foldGrokTurnsChunk, emptyGrokFileEntry, newestGrokFiles, grokEntryFromPrev, grokUsageFilesForPrev, cursorProjectPath, cursorUserText, cursorTimestamp, cursorTranscriptBusy, cursorIsWorker, cursorWorkspaceDir, cursorCurrentChat, sessionBusyState, hermesBootstrapArgs, hermesLeaseProvider, hermesSessionId, hermesTurnPids, hermesOpenGatewayChats, hermesIsGateway, HERMES_CHAT_WINDOW_MS, attachHermesPromptTimes } from "./collector.ts";
+import { providerOf, titleLooksBusy, cmdIsTurnInhibitor, sessionIdFrom, sessionHostsFromEnvironment, tmuxSocketFromEnvironment, parseTmuxPanes, parseTmuxClients, tmuxPaneForAncestors, linkRecentToLive, inferSessionIdsFromRecent, attachSessionTopics, localSessionSummary, cleanGeneratedSummary, activityCellIndex, parseExternalIpTrace, externalIpCacheFresh, frameSnapshot, parseJsonBounded, readRegularFileLimited, safePrompt, sessionPresentation, writePrivateStateFile, decodeProjectDir, dropPartialFirstLine, readHistoryTail, readRegularFileHead, rolloutSessionId, rolloutCwd, topicCacheHit, topicRetryBlocked, pruneTopicCache, reapStateTempFiles, parseGpuLine, parseDfRows, plausibleTimestamp, normalizeUsage, normalizeUsageLimit, ollamaHostIsLocal, topicRefinementAllowed, terminate, rateForModel, estimateValue, valueSummary, alignDailyTokens, localDayKey, loadPricing, todayValueEstimate, herdrSocketFromEnvironment, herdrClientPids, herdrWindowFor, boomuxClientShellId, boomuxWindowFor, backgroundDaemonKind, parseClaudeAgents, sessionStaleness, opencodeUsageFromRows, STALE_AFTER_MS, decodeBase32, grokBotLine, grokBotRow, grokBotAttention, attachGrokBotRoster, grokSessionUsage, usageModelBreakdown, windowMatchesProvider, hermesSessionByPid, validNetDevice, observationalGitCommand, observationalGitEnv, piUserText, piSessionIdFromName, grokTurnFromUpdate, foldGrokTurnsChunk, emptyGrokFileEntry, newestGrokFiles, grokEntryFromPrev, grokUsageFilesForPrev, cursorProjectPath, cursorUserText, cursorTimestamp, cursorTranscriptBusy, cursorIsWorker, cursorWorkspaceDir, cursorCurrentChat, sessionBusyState, hermesBootstrapArgs, hermesLeaseProvider, hermesSessionId, hermesTurnPids, hermesOpenGatewayChats, hermesIsGateway, HERMES_CHAT_WINDOW_MS, attachHermesPromptTimes, museUserPrompt, museWorkspaceRoot } from "./collector.ts";
 import { sessionEventId } from "./notification-events.ts";
 
 const testRoot = mkdtempSync(join(tmpdir(), "infomarchy-test-"));
@@ -2546,5 +2546,112 @@ describe("Grok billing backoff and mutual exclusion", () => {
     await refreshGrokBilling({ directory, enabled: true, force: true, fetchBilling: async () => { called = true; return null; }, readLog: () => "" });
     expect(called).toBe(false);
     expect(readFileSync(target, "utf8")).toBe("must survive");
+  });
+});
+
+// Muse writes sessions/YYYY/MM/DD/<session-id>/session.jsonl. These records use
+// the field names the real binary wrote (1.4.14, `muse exec --provider echo
+// --json`): a prompt is runtime.user_intent.accepted with semantic_kind "chat"
+// on the main surface, its text is in model_messages, and recorded_at is in
+// MICROseconds. Token usage is deliberately not read (see museUserPrompt).
+describe("Muse session history", () => {
+  const SID = "01a1c384-aaff-74a1-931b-0188aee342e0";
+  const intent = (text: string, micros: number, over: Record<string, any> = {}) => ({
+    schema_version: 1, sequence: 13, recorded_at: micros, record_type: "event", durability: "durable",
+    payload_type: "runtime.user_intent.accepted", payload_schema_version: 1,
+    payload: {
+      bindings: [], delivery_policy: "session_current", intent_id: "01a1c384-ac98-7c03-b12a-d58e03cec206",
+      model_messages: [{ content: [{ kind: "text", text }] }], refill_blocks: [{ kind: "text", text }],
+      semantic_kind: { kind: "chat" }, source_session_id: SID, surface: "main", wake_policy: "start_once", ...over,
+    },
+  });
+  const metadata = (workspace: string, micros: number) => ({
+    schema_version: 1, sequence: 2, recorded_at: micros, record_type: "event", durability: "durable",
+    payload_type: "runtime.session.metadata", payload_schema_version: 1,
+    payload: { kind: "metadata", record: { build: { semver: "1.4.14", sha: "dec7d7497f" }, provider_id: "echo", workspace_root: workspace } },
+  });
+
+  test("a typed prompt is read from model_messages, with microseconds turned into milliseconds", () => {
+    const got = museUserPrompt(intent("say hello", 1_794_281_614_509_745));
+    expect(got).toEqual({ ts: 1_794_281_614_509, text: "say hello", session: SID });
+    expect(museUserPrompt(intent("one", 1_000_000_000_000_000, { model_messages: [{ content: [{ kind: "text", text: "one" }, { kind: "image", data: "x" }, { kind: "text", text: "two" }] }] }))?.text).toBe("one\ntwo");
+  });
+
+  test("only what the user typed on the main surface counts", () => {
+    const micros = Date.now() * 1000;
+    expect(museUserPrompt(intent("x", micros, { semantic_kind: { kind: "reminder" } }))).toBeNull();
+    expect(museUserPrompt(intent("x", micros, { surface: "subagent" }))).toBeNull();
+    expect(museUserPrompt(intent("   ", micros))).toBeNull();
+    expect(museUserPrompt({ ...intent("x", micros), payload_type: "runtime.user_intent.materialized" })).toBeNull();
+    expect(museUserPrompt({ ...intent("x", micros), recorded_at: "soon" })).toBeNull();
+    expect(museUserPrompt(null)).toBeNull();
+    expect(museUserPrompt({ payload_type: "runtime.user_intent.accepted", payload: "text" })).toBeNull();
+  });
+
+  test("the working directory comes from the session metadata record only", () => {
+    expect(museWorkspaceRoot(metadata("/home/tester/Work", 1))).toBe("/home/tester/Work");
+    expect(museWorkspaceRoot(intent("x", 1))).toBe("");
+    expect(museWorkspaceRoot({ payload_type: "runtime.session.metadata", payload: { record: { workspace_root: 7 } } })).toBe("");
+  });
+
+  test("a real collector run lists Muse prompts, skips subagents, symlinks and non-sessions, and redacts", async () => {
+    const root = join(testRoot, "muse-home");
+    const day = join(root, ".local", "share", "muse", "sessions", "2026", "11", "09");
+    const now = Date.now() * 1000;
+    const write = (id: string, lines: any[], extra: string[] = []) => {
+      const dir = join(day, id);
+      mkdirSync(dir, { recursive: true });
+      // A 150 KB record of no interest sits between the lines, as in a real session.
+      writeFileSync(join(dir, "session.jsonl"), [JSON.stringify(lines[0]), JSON.stringify({ payload_type: "runtime.session", payload: { pad: "x".repeat(150_000) } }), ...lines.slice(1).map(l => JSON.stringify(l)), ...extra].join("\n") + "\n");
+      return dir;
+    };
+    const main = write(SID, [
+      metadata(join(root, "Work"), now),
+      intent("deploy with password: very-secret-value", now),
+      intent("inner reminder", now + 1, { semantic_kind: { kind: "reminder" } }),
+      intent("second prompt", now + 2000),
+    ]);
+    // Subagent sessions live inside the session and are never opened.
+    mkdirSync(join(main, "subagent", "01a1c384-aced-7e63-a2f7-ab2b85af3a0d"), { recursive: true });
+    writeFileSync(join(main, "subagent", "01a1c384-aced-7e63-a2f7-ab2b85af3a0d", "session.jsonl"), JSON.stringify(intent("subagent prompt", now)) + "\n");
+    // A symlinked session directory and a dot-directory are not sessions.
+    const outside = join(root, "outside", "01a1c384-bbbb-74a1-931b-0188aee342e1");
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "session.jsonl"), JSON.stringify(intent("planted prompt", now)) + "\n");
+    symlinkSync(outside, join(day, "01a1c384-bbbb-74a1-931b-0188aee342e1"));
+    // A real session directory whose session.jsonl is a symlink is skipped too.
+    const linked = join(day, "01a1c384-cccc-74a1-931b-0188aee342e2");
+    mkdirSync(linked, { recursive: true });
+    symlinkSync(join(outside, "session.jsonl"), join(linked, "session.jsonl"));
+    mkdirSync(join(day, ".msp-view-g6"), { recursive: true });
+    writeFileSync(join(day, ".msp-view-g6", "session.jsonl"), JSON.stringify(intent("hidden prompt", now)) + "\n");
+
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts")], {
+      env: { HOME: root, USER: "tester", XDG_STATE_HOME: join(root, "state"), PATH: "/usr/bin:/bin", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_CONTAINERS: "1", INFOMARCHY_SKIP_GITHUB: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = await new Response(proc.stdout).text();
+    expect(await proc.exited).toBe(0);
+    const snap = decodeFrames(output);
+    expect(snap.ai.providers.muse).toEqual({ present: true, prompts: 2, sessions: 1 });
+    const rows = snap.ai.recent.filter((r: any) => r.provider === "muse");
+    expect(rows.map((r: any) => r.text).sort()).toEqual(["deploy with password: [redacted]", "second prompt"]);
+    expect(rows[0]).toMatchObject({ session: SID, project: "~/Work" });
+    rmSync(root, { recursive: true, force: true });
+  });
+
+  test("no Muse data directory means the provider is absent, not an empty one", async () => {
+    const root = join(testRoot, "muse-none");
+    mkdirSync(root, { recursive: true });
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts")], {
+      env: { HOME: root, USER: "tester", XDG_STATE_HOME: join(root, "state"), PATH: "/usr/bin:/bin", INFOMARCHY_SKIP_EXTERNAL_IP: "1", INFOMARCHY_SKIP_CONTAINERS: "1", INFOMARCHY_SKIP_GITHUB: "1" },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    const output = await new Response(proc.stdout).text();
+    expect(await proc.exited).toBe(0);
+    expect(decodeFrames(output).ai.providers.muse).toEqual({ present: false });
+    rmSync(root, { recursive: true, force: true });
   });
 });

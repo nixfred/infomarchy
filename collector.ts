@@ -2735,6 +2735,96 @@ function piHistory(root = join(HOME, ".pi", "agent", "sessions"), provider = "pi
   return { present: true, prompts, sessions: sessionIds.size };
 }
 
+// Muse (Omarchy's agent) keeps one session.jsonl per session at
+// sessions/YYYY/MM/DD/<session-id>/session.jsonl, with its subagents under
+// subagent/<id>/ beside it. A prompt the user typed is a
+// runtime.user_intent.accepted record whose semantic_kind is "chat" on the main
+// surface; its text is the text blocks of model_messages, and recorded_at is in
+// MICROseconds. This is the format the real binary writes (1.4.14, a headless
+// `muse exec --provider echo --json` run), not a guess. Token usage
+// (model_completed events) is deliberately not read: the only record seen came
+// from the echo provider and reports zeros, and Muse's own schema says whether
+// cached tokens sit inside or beside input tokens depends on the provider.
+export function museUserPrompt(entry: any): { ts: number; text: string; session: string } | null {
+  if (!entry || typeof entry !== "object" || entry.payload_type !== "runtime.user_intent.accepted") return null;
+  const payload = entry.payload;
+  if (!payload || typeof payload !== "object" || payload.surface !== "main" || payload.semantic_kind?.kind !== "chat") return null;
+  const parts: string[] = [];
+  for (const message of (Array.isArray(payload.model_messages) ? payload.model_messages : []).slice(0, 8))
+    for (const block of (Array.isArray(message?.content) ? message.content : []).slice(0, 16))
+      if (block?.kind === "text" && typeof block.text === "string") parts.push(block.text);
+  const text = parts.join("\n").trim();
+  const micros = Number(entry.recorded_at);
+  if (!text || !Number.isFinite(micros)) return null;
+  return { ts: Math.floor(micros / 1000), text, session: cleanSessionId(payload.source_session_id) };
+}
+export function museWorkspaceRoot(entry: any): string {
+  if (!entry || typeof entry !== "object" || entry.payload_type !== "runtime.session.metadata") return "";
+  const root = entry.payload?.record?.workspace_root;
+  return typeof root === "string" ? root : "";
+}
+// Recent days only (the desk shows 7), a bounded number of sessions, and a
+// bounded read of each: Muse's session files carry large per-call records, so a
+// short session is already ~150 KB.
+const MUSE_HISTORY_DAYS = 14;
+const MUSE_MAX_SESSIONS = 24;
+const MUSE_FILE_BYTES = 1024 * 1024;
+function museHistory(root = join(process.env.XDG_DATA_HOME || join(HOME, ".local/share"), "muse", "sessions")) {
+  if (!existsSync(root)) return { present: false };
+  const isDir = (path: string) => { try { const state = lstatSync(path); return !state.isSymbolicLink() && state.isDirectory(); } catch { return false; } };
+  const numbered = (path: string, width: number) => ls(path).filter(name => new RegExp(`^\\d{${width}}$`).test(name)).sort().reverse();
+  const days: string[] = [];
+  for (const year of numbered(root, 4)) {
+    for (const month of numbered(join(root, year), 2)) {
+      for (const day of numbered(join(root, year, month), 2)) {
+        days.push(join(root, year, month, day));
+        if (days.length >= MUSE_HISTORY_DAYS) break;
+      }
+      if (days.length >= MUSE_HISTORY_DAYS) break;
+    }
+    if (days.length >= MUSE_HISTORY_DAYS) break;
+  }
+  const workspaceOf = (text: string) => {
+    for (const line of text.split("\n")) {
+      if (!line.includes('"runtime.session.metadata"')) continue;
+      const found = museWorkspaceRoot(parseJsonBounded(line, 4096, 12));
+      if (found) return found;
+    }
+    return "";
+  };
+  let prompts = 0;
+  let filesSeen = 0;
+  const sessionIds = new Set<string>();
+  for (const dayPath of days) {
+    if (!isDir(dayPath)) continue;
+    for (const name of ls(dayPath).sort().reverse()) {
+      if (filesSeen >= MUSE_MAX_SESSIONS) break;
+      // The directory name is the session id; "subagent" and dot-directories
+      // are not sessions the user typed into.
+      const id = cleanSessionId(name);
+      const dir = join(dayPath, name);
+      if (!id || id !== name || !isDir(dir)) continue;
+      const file = join(dir, "session.jsonl");
+      try { const state = lstatSync(file); if (state.isSymbolicLink() || !state.isFile()) continue; } catch { continue; }
+      filesSeen++;
+      const text = readHistoryTail(file, MUSE_FILE_BYTES);
+      if (!text) continue;
+      const cwd = workspaceOf(text) || workspaceOf(readRegularFileHead(file, 65536) || "");
+      for (const line of text.split("\n")) {
+        if (!line.includes('"runtime.user_intent.accepted"')) continue;
+        const prompt = museUserPrompt(parseJsonBounded(line, 4096, 12));
+        if (!prompt) continue;
+        prompts++;
+        sessionIds.add(id);
+        bump(prompt.ts, "muse"); cnt("muse", prompt.ts);
+        if (plausibleTimestamp(prompt.ts)) recent.push({ provider: "muse", ts: prompt.ts, project: shortPath(cwd), text: safePrompt(prompt.text), session: id });
+      }
+    }
+    if (filesSeen >= MUSE_MAX_SESSIONS) break;
+  }
+  return { present: true, prompts, sessions: sessionIds.size };
+}
+
 function opencodeHistory() {
   const dataRoot = process.env.XDG_DATA_HOME || join(HOME, ".local/share");
   const path = join(dataRoot, "opencode/opencode.db");
@@ -4018,7 +4108,7 @@ async function runCollector() {
     grokBillingAllowed() ? refreshGrokBilling() : undefined,
     claudeRefreshAllowed() ? refreshClaudeAuthIfNeeded() : undefined,
   ]);
-  const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory(), grokBot = grokBotHistory(), opencode = opencodeHistory(), pi = piHistory(), omp = piHistory(join(HOME, ".omp", "agent", "sessions"), "omp"), hermes = hermesHistory(), kimi = kimiHistory(), cursor = cursorHistory();
+  const claude = claudeHistory(), codex = codexHistory(), grok = grokHistory(), grokBot = grokBotHistory(), opencode = opencodeHistory(), pi = piHistory(), omp = piHistory(join(HOME, ".omp", "agent", "sessions"), "omp"), muse = museHistory(), hermes = hermesHistory(), kimi = kimiHistory(), cursor = cursorHistory();
   // Same priority as grok's own fallback below: a real cache (Omarchy's own
   // agents plugin) always wins over what we can read ourselves.
   const usage = agentsUsage();
@@ -4057,7 +4147,7 @@ async function runCollector() {
       attention: sessions.filter((s: any) => s.attention),
       events: notificationState.events,
       collisions: repoCollisions(sessions),
-      counts, providers: { claude, codex, grok, grokBot, opencode, pi, omp, hermes, kimi, cursor, ollama }, usage,
+      counts, providers: { claude, codex, grok, grokBot, opencode, pi, omp, muse, hermes, kimi, cursor, ollama }, usage,
       usageDays: heatDays.map(localDayKey),
       heatmap: { start: start7, days: heatDays, cells: heat.map(c => [c.n, c.p]) },
       github, gitea,

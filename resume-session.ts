@@ -13,6 +13,8 @@ const RESUME_COMMANDS: Record<string, (id: string) => string[]> = {
   opencode: id => ["opencode", "--session", id],
   pi: id => ["pi", "--session", id],
   omp: id => ["omp", "--resume", id],
+  // `muse resume <session-ref>`; the ref is an exact session UUID or a session name.
+  muse: id => ["muse", "resume", id],
   cursor: id => ["cursor-agent", "--resume", id],
 };
 
