@@ -209,7 +209,7 @@ test("every setting InfoSettings loads is one the patch writer accepts, and no c
     pinnedPrompts: { "claude:s:1": true }, seenChanges: { "/repo": "abc" }, notificationEvents: { "claude:1": Date.now() },
     notificationProviders: { claude: true }, sessionGroups: { "grok-bot": true },
     notificationsEnabled: true, quietHoursEnabled: true, dashboardVisible: true, privacyMode: true, webEnabled: false,
-    videoAudio: true, hideQuietSessions: true, selectedOllamaModel: "m", ollamaHost: "http://127.0.0.1:11434",
+    videoAudio: true, hideQuietSessions: true, wallpaperPassthrough: true, selectedOllamaModel: "m", ollamaHost: "http://127.0.0.1:11434",
     rightOrder: ["usage"], opsOrder: ["changes"], webNarrowOrder: ["sessions"], quietStartHour: 22, quietEndHour: 7,
     sessionQuietMinutes: 60, deskWorkspace: 5, webAccessMode: "manual", sessionSort: "terminal",
     manualHttps: { hostname: "192.168.1.20", bind: "192.168.1.20", port: 8789, certPath: "/c.pem", keyPath: "/k.pem", fingerprint: "ab".repeat(32) },

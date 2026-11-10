@@ -232,6 +232,28 @@ describe("a video wallpaper plays instead of showing nothing", () => {
     expect(wallpaper).toContain("value: root.playbackWanted && !panel.fullscreenHere");
     expect(overlay).toContain("active: root.videoBackground && root.opened");
   });
+
+});
+
+describe("wallpaper passthrough is opt-in (#43)", () => {
+  const wallpaper = readFileSync(join(import.meta.dir, "Infomarchy.qml"), "utf8");
+  test("passthrough does not paint a wallpaper and sits above the background layer", () => {
+    expect(wallpaper).toContain("color: dashboardSettings.wallpaperPassthrough ? \"transparent\" : infoModel.themeBackground");
+    expect(wallpaper).toContain("WlrLayershell.layer: dashboardSettings.wallpaperPassthrough ? WlrLayer.Bottom : WlrLayer.Background");
+    expect(wallpaper).toContain("visible: !root.videoBackground && !dashboardSettings.wallpaperPassthrough");
+    expect(wallpaper).toContain("active: root.videoBackground && !dashboardSettings.wallpaperPassthrough");
+    expect(wallpaper).toContain("visible: dashboardSettings.ready && dashboardSettings.wallpaperPassthrough && dashboardSettings.dashboardVisible");
+    expect(wallpaper).toContain("opacity: Math.max(0, Math.min(1, 1 - root.wallpaperOpacity))");
+  });
+
+  test("passthrough is off by default, and off keeps the original layer, colour and wallpaper", () => {
+    expect(settings).toContain("property bool wallpaperPassthrough: false");
+    expect(settings).toContain("wallpaperPassthrough = !!(parsed && parsed.wallpaperPassthrough === true)");
+    expect(settings).toMatch(/catch \(e\) \{[\s\S]*?wallpaperPassthrough = false/);
+    // With the flag off, every branch pinned above reduces to the original value;
+    // the surface only waits for settings so a saved flag picks the right layer.
+    expect(wallpaper).toContain("visible: dashboardSettings.ready && !remapGuard.remapping && !(dashboardSettings.wallpaperPassthrough && !dashboardSettings.dashboardVisible)");
+  });
 });
 
 describe("background sessions are reachable", () => {

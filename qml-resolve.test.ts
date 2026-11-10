@@ -36,7 +36,9 @@ const CEILINGS: Record<string, number> = {
   // same PanelWindow, the same false positive again.
   // +1 (#25): the Web Mode listener Process has an onExited handler, the
   // same exit-status metadata warning every other Process handler produces.
-  "Infomarchy.qml": 33,
+  // +8 (#43): the wallpaperPassthrough guards read dashboardSettings from
+  // inside the same PanelWindow, the same false positive again.
+  "Infomarchy.qml": 41,
   "InfoModel.qml": 6,
   // 3 (#25): the settings writer, the RETRY SETUP launcher and the WEB
   // prerequisite check are Processes with onExited handlers, which qmllint
