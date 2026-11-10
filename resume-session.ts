@@ -12,6 +12,7 @@ const RESUME_COMMANDS: Record<string, (id: string) => string[]> = {
   hermes: id => ["hermes", "--resume", id],
   opencode: id => ["opencode", "--session", id],
   pi: id => ["pi", "--session", id],
+  omp: id => ["omp", "--resume", id],
   cursor: id => ["cursor-agent", "--resume", id],
 };
 
