@@ -23,6 +23,17 @@ function boundedPath(value: unknown): string {
   return String(value || "").replace(/[\u0000-\u001f\u007f]/g, " ").slice(0, 180).trim();
 }
 
+function addFile(state: RepoState, raw: unknown): void {
+  const path = boundedPath(raw);
+  if (path && !state.files.includes(path)) state.files.push(path);
+}
+
+// `# branch.oid <sha>` is the commit HEAD points at; "(initial)" on a repository with no commits.
+export function statusHeadOid(text: string): string {
+  const match = String(text || "").match(/^# branch\.oid ([0-9a-f]{7,64})$/m);
+  return match ? match[1] : "";
+}
+
 export function parseGitStatus(text: string): RepoState | null {
   if (!text.trim()) return null;
   const state: RepoState = { branch: "", upstream: "", ahead: 0, behind: 0, dirty: 0, staged: 0, untracked: 0, conflicts: 0, files: [] };
@@ -36,16 +47,16 @@ export function parseGitStatus(text: string): RepoState | null {
       state.dirty++;
       const fields = line.split(" "), xy = fields[1] || "..";
       if (xy[0] !== ".") state.staged++;
-      const path = boundedPath(fields.slice(line[0] === "2" ? 9 : 8).join(" ").split("\t")[0]);
-      if (path && state.files.length < 12 && !state.files.includes(path)) state.files.push(path);
+      // Only the first dozen paths are kept, so only those are cleaned: a
+      // checkout with tens of thousands of changes still has to be counted
+      // every poll, and the counting must not pay for paths nobody will see.
+      if (state.files.length < 12) addFile(state, fields.slice(line[0] === "2" ? 9 : 8).join(" ").split("\t")[0]);
     } else if (/^\? /.test(line)) {
       state.dirty++; state.untracked++;
-      const path = boundedPath(line.slice(2));
-      if (path && state.files.length < 12 && !state.files.includes(path)) state.files.push(path);
+      if (state.files.length < 12) addFile(state, line.slice(2));
     } else if (/^u /.test(line)) {
       state.dirty++; state.conflicts++;
-      const path = boundedPath(line.split(" ").slice(10).join(" "));
-      if (path && state.files.length < 12 && !state.files.includes(path)) state.files.push(path);
+      if (state.files.length < 12) addFile(state, line.split(" ").slice(10).join(" "));
     }
   }
   return state.branch || state.dirty ? state : null;

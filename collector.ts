@@ -6,17 +6,18 @@
 
 import {
   chmodSync, closeSync, constants, existsSync, fstatSync, fsyncSync, lstatSync,
-  mkdirSync, openSync, readlinkSync, readdirSync, readSync, renameSync,
+  mkdirSync, openSync, readlinkSync, readdirSync, readSync, realpathSync, renameSync,
   unlinkSync, writeSync,
 } from "fs";
 import { randomUUID } from "crypto";
-import { join, basename } from "path";
+import { setPriority } from "os";
+import { join, basename, dirname } from "path";
 import { isIP } from "net";
 import { Database } from "bun:sqlite";
 import { localDayIndex, localDayStarts } from "./history-time";
 import { githubFetchEnabled, githubRefreshDue, githubRepoFromRemote, githubSnapshot, parseGithubStoreText, refreshGithubActivity } from "./github-activity";
 import { giteaConfig, giteaRefreshDue, giteaSnapshot, parseGiteaStore, refreshGiteaActivity } from "./gitea-activity";
-import { attentionSignal, parseCommitSummary, parseDiffNumstat, parseGitStatus, projectHealth, repoCollisions, workspaceGroups, resourceDelta, limitForecast } from "./ai-ops";
+import { attentionSignal, parseCommitSummary, parseDiffNumstat, parseGitStatus, statusHeadOid, projectHealth, repoCollisions, workspaceGroups, resourceDelta, limitForecast } from "./ai-ops";
 import { deriveNotificationEvents } from "./notification-events";
 import { containerEngine, containerListArgv, parseContainerList } from "./container-control";
 import { fleetEnabled, fleetHostsFromEnv, fleetRefreshDue, fleetSnapshot, parseFleetStoreText, refreshFleet } from "./fleet-remote";
@@ -1436,7 +1437,6 @@ export function attachStaleness(sessions: any[], stamp = now): any[] {
 // A generate call that times out must NOT be cached as if it had succeeded:
 // the local fallback would be pinned against this fingerprint forever and the
 // model would never be consulted again. Record a short retry backoff instead.
-const TOPIC_TIMEOUT_MS = 6000;
 const TOPIC_RETRY_MS = 60_000;
 // Entries written before the failure-marker fix are shape-identical to good
 // ones: they hold a local fallback in `summary` as though the model had
@@ -1487,52 +1487,168 @@ export function topicRefinementAllowed(env = process.env): boolean {
   if (env.INFOMARCHY_SKIP_REFINEMENT === "1") return false;
   return env.INFOMARCHY_ALLOW_REMOTE_OLLAMA === "1" || ollamaHostIsLocal(env.OLLAMA_HOST);
 }
-async function refineSessionTopics(sessions: any[], recentEntries: any[], ollama: any): Promise<Record<string, any>> {
-  const previous = prev.topicSummaries && typeof prev.topicSummaries === "object" ? prev.topicSummaries : {};
-  const next: Record<string, any> = {};
-  for (const [key, entry] of Object.entries(previous)) if (entry && (entry as any).v === TOPIC_CACHE_VERSION) next[key] = entry;
-  const liveKeys = new Set<string>();
-  const model = topicRefinementAllowed() ? String((ollama.loaded || [])[0]?.name || "") : "";
-  const host = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
-  const base = host.startsWith("http") ? host : "http://" + host;
-  // Never fan out an unbounded number of generate requests at one local model.
-  const MAX_TOPIC_REQUESTS = 6;
-  let requests = 0;
-  await Promise.all(sessions.map(async session => {
+// Topic refinement is asked for in the background and never waited for. A
+// snapshot used to block on the local model: every poll that found a session
+// with new prompts held the whole desk on /api/generate for up to the request
+// timeout, and a slow or wedged Ollama turned that into a frozen desk. Measured
+// on gus, with the loaded model not answering: roughly every third poll took
+// 6.6-8 s instead of 0.7 s at the same CPU, because the process was only
+// waiting, and the desk drew nothing new for that long. The local summary is
+// already on the card, so the model's rewording is an upgrade and nothing
+// waits for it: this run plans the work, hands it to a detached worker
+// (`collector.ts --refine-topics`) and moves on. The worker writes
+// topics.json, which every instance reads, so the next poll shows the result,
+// and the wallpaper and the overlay no longer each pay for the same call.
+const TOPICS_FILE = "topics.json";
+const TOPICS_LOCK = "topics.lock";
+const TOPIC_WORKER_TIMEOUT_MS = 15_000;
+const TOPIC_WORKER_MAX_MS = 60_000;
+const MAX_TOPIC_REQUESTS = 6;
+export type TopicJob = { key: string; fingerprint: string; model: string; prompt: string };
+
+export function parseTopicCache(text: string | null): Record<string, any> {
+  const parsed = parseJsonBounded(text || "", 4096, 4);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+  const cache: Record<string, any> = {};
+  for (const [key, entry] of Object.entries(parsed).slice(0, 128))
+    if (entry && typeof entry === "object" && (entry as any).v === TOPIC_CACHE_VERSION) cache[key] = entry;
+  return cache;
+}
+
+function topicPrompt(session: any, entries: any[]): string {
+  return "Summarize the current work as a specific 3-7 word gerund phrase. Do not quote a request. No punctuation or preamble.\nProject: " +
+    topicProjectLabel(session) + "\nRecent requests:\n" + entries.map(entry => "- " + String(entry.text || "").slice(0, 320)).join("\n");
+}
+
+// Applies every cached rewording to its session and returns what is still
+// missing. Pure apart from `session.topic`, so it is testable without a model.
+export function planTopicJobs(sessions: any[], recentEntries: any[], cache: Record<string, any>, model: string, stamp: number): TopicJob[] {
+  const jobs: TopicJob[] = [];
+  if (!model) return jobs;
+  for (const session of sessions) {
     const entries = exactSessionEntries(session, recentEntries);
-    if (!entries.length) return;
+    if (!entries.length) continue;
     const ids = (session.sessionIds || []).map((value: any) => cleanSessionId(value)).filter(Boolean);
     const key = `${session.provider}:${ids[0] || session.pid}`;
-    liveKeys.add(key);
-    if (!model) return;
     const fingerprint = String(Bun.hash(JSON.stringify(entries.map(entry => [entry.ts, entry.text]))));
-    const cached = previous[key];
+    const cached = cache[key];
     const hit = topicCacheHit(cached, fingerprint, model);
-    if (hit) { session.topic = hit; return; }
-    if (topicRetryBlocked(cached, fingerprint, model, now)) return;
-    if (++requests > MAX_TOPIC_REQUESTS) return;
-    let generated = "";
-    try {
-      const prompt = "Summarize the current work as a specific 3-7 word gerund phrase. Do not quote a request. No punctuation or preamble.\nProject: " +
-        topicProjectLabel(session) + "\nRecent requests:\n" + entries.map(entry => "- " + String(entry.text || "").slice(0, 320)).join("\n");
-      const response = await fetch(base + "/api/generate", {
-        method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(TOPIC_TIMEOUT_MS),
-        body: JSON.stringify({ model, prompt, stream: false, options: { temperature: 0.1, num_predict: 20 } }),
-      });
-      const text = response.ok ? await boundedStream(response.body, 64 * 1024) : null;
-      const payload = text === null ? null : parseJsonBounded(text, 256, 6);
-      generated = payload && typeof payload === "object" ? cleanGeneratedSummary(payload.response) : "";
-    } catch {}
-    if (generated) {
-      session.topic = generated;
-      next[key] = { v: TOPIC_CACHE_VERSION, fingerprint, model, summary: generated, checkedAt: now };
-    } else {
-      // Keep the local summary on screen, but remember this as a FAILURE so a
-      // later tick retries once the backoff expires.
-      next[key] = { v: TOPIC_CACHE_VERSION, fingerprint, model, failedAt: now, checkedAt: now };
-    }
-  }));
-  return pruneTopicCache(next, liveKeys);
+    if (hit) { session.topic = hit; continue; }
+    if (topicRetryBlocked(cached, fingerprint, model, stamp)) continue;
+    // Never queue an unbounded number of generate requests at one local model.
+    if (jobs.length >= MAX_TOPIC_REQUESTS) continue;
+    jobs.push({ key, fingerprint, model, prompt: topicPrompt(session, entries) });
+  }
+  return jobs;
+}
+
+// The worker takes its work from its parent over stdin, so it is validated like
+// any other input: bounded count, bounded strings, no control characters.
+export function parseTopicJobs(text: string): TopicJob[] {
+  const parsed = parseJsonBounded(String(text || ""), 256, 4);
+  if (!Array.isArray(parsed)) return [];
+  const jobs: TopicJob[] = [];
+  const plain = (value: unknown, max: number) => typeof value === "string" && value.length > 0 && value.length <= max && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value);
+  for (const item of parsed.slice(0, MAX_TOPIC_REQUESTS)) {
+    if (!item || typeof item !== "object") continue;
+    const { key, fingerprint, model, prompt } = item as any;
+    if (!plain(key, 200) || !plain(fingerprint, 40) || !plain(model, 128) || !plain(prompt, 6000)) continue;
+    jobs.push({ key, fingerprint, model, prompt });
+  }
+  return jobs;
+}
+
+export function topicWorkerAlive(lock: any, stamp: number, isAlive: (pid: number) => boolean): boolean {
+  const pid = Number(lock?.pid), at = Number(lock?.at);
+  return Number.isInteger(pid) && pid > 1 && Number.isFinite(at) && at > 0
+    && stamp - at < TOPIC_WORKER_MAX_MS + 5000 && stamp >= at - 1000 && isAlive(pid);
+}
+function processAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (error: any) { return error?.code === "EPERM"; }
+}
+
+// Runs the jobs one at a time (one local model, one request) and saves after
+// each, so a partial batch still shows up on the next poll. The first failure
+// means the model is slow or wedged: the rest are stamped failed without being
+// asked, so a sick Ollama costs one timeout per backoff window, not six.
+export async function runTopicJobs(jobs: TopicJob[], io: {
+  generate: (job: TopicJob) => Promise<string>;
+  load: () => Record<string, any>;
+  save: (cache: Record<string, any>) => void;
+  clock: () => number;
+}): Promise<{ generated: number; failed: number; skipped: number }> {
+  const result = { generated: 0, failed: 0, skipped: 0 };
+  let broken = false;
+  for (const job of jobs) {
+    const cache = io.load();
+    // Another worker (the other desk's) may have finished this one already.
+    if (topicCacheHit(cache[job.key], job.fingerprint, job.model)) { result.skipped++; continue; }
+    const summary = broken ? "" : await io.generate(job);
+    const stamp = io.clock();
+    if (summary) { cache[job.key] = { v: TOPIC_CACHE_VERSION, fingerprint: job.fingerprint, model: job.model, summary, checkedAt: stamp }; result.generated++; }
+    else { broken = true; cache[job.key] = { v: TOPIC_CACHE_VERSION, fingerprint: job.fingerprint, model: job.model, failedAt: stamp, checkedAt: stamp }; result.failed++; }
+    io.save(pruneTopicCache(cache, new Set(jobs.map(item => item.key))));
+  }
+  return result;
+}
+
+async function generateTopic(base: string, job: TopicJob): Promise<string> {
+  try {
+    const response = await fetch(base + "/api/generate", {
+      method: "POST", headers: { "content-type": "application/json" }, signal: AbortSignal.timeout(TOPIC_WORKER_TIMEOUT_MS),
+      body: JSON.stringify({ model: job.model, prompt: job.prompt, stream: false, options: { temperature: 0.1, num_predict: 20 } }),
+    });
+    const text = response.ok ? await boundedStream(response.body, 64 * 1024) : null;
+    const payload = text === null ? null : parseJsonBounded(text, 256, 6);
+    return payload && typeof payload === "object" ? cleanGeneratedSummary(payload.response) : "";
+  } catch { return ""; }
+}
+
+async function startTopicWorker(jobs: TopicJob[]): Promise<void> {
+  const lock = parseJsonBounded(readRegularFileLimited(join(STATE_DIR, TOPICS_LOCK), 512) || "", 16, 2);
+  if (topicWorkerAlive(lock, now, processAlive)) return;
+  try {
+    // Detached with stdout and stderr on /dev/null: the worker outlives this
+    // process and must never hold the pipe the shell is reading our frame from.
+    const child = Bun.spawn([process.execPath, import.meta.path, "--refine-topics"], { stdin: "pipe", stdout: "ignore", stderr: "ignore", detached: true });
+    // Written before the jobs are handed over: the worker cannot start until
+    // its stdin closes, so it can never finish ahead of its own lock.
+    writePrivateStateFile(STATE_DIR, TOPICS_LOCK, JSON.stringify({ pid: child.pid, at: now }));
+    child.stdin.write(JSON.stringify(jobs));
+    await child.stdin.end();
+    child.unref();
+  } catch {}
+}
+
+async function topicWorkerMain(): Promise<void> {
+  // Checked again here: the environment this worker inherited is the one that
+  // decides whether prompt text may leave for this Ollama host.
+  if (!topicRefinementAllowed()) return;
+  const jobs = parseTopicJobs(await boundedStream(Bun.stdin.stream(), 128 * 1024) || "");
+  if (!jobs.length) return;
+  const host = process.env.OLLAMA_HOST || "http://127.0.0.1:11434";
+  const base = host.startsWith("http") ? host : "http://" + host;
+  const killer = setTimeout(() => process.exit(0), TOPIC_WORKER_MAX_MS);
+  try {
+    await runTopicJobs(jobs, {
+      generate: job => generateTopic(base, job),
+      load: () => parseTopicCache(readRegularFileLimited(join(STATE_DIR, TOPICS_FILE), 256 * 1024)),
+      save: cache => { try { writePrivateStateFile(STATE_DIR, TOPICS_FILE, JSON.stringify(cache)); } catch {} },
+      clock: () => Date.now(),
+    });
+  } finally {
+    clearTimeout(killer);
+    const lock = parseJsonBounded(readRegularFileLimited(join(STATE_DIR, TOPICS_LOCK), 512) || "", 16, 2);
+    if (Number(lock?.pid) === process.pid) try { unlinkSync(join(STATE_DIR, TOPICS_LOCK)); } catch {}
+  }
+}
+
+async function refineSessionTopics(sessions: any[], recentEntries: any[], ollama: any): Promise<void> {
+  const model = topicRefinementAllowed() ? String((ollama.loaded || [])[0]?.name || "") : "";
+  if (!model) return;
+  const cache = parseTopicCache(readRegularFileLimited(join(STATE_DIR, TOPICS_FILE), 256 * 1024));
+  const jobs = planTopicJobs(sessions, recentEntries, cache, model, now);
+  if (jobs.length) await startTopicWorker(jobs);
 }
 
 export function inferSessionIdsFromRecent(sessions: any[], recentEntries: any[]): void {
@@ -1608,26 +1724,63 @@ async function githubCiState(cwd: string): Promise<any> {
   return result;
 }
 
+// The repository a directory belongs to, found the way git finds it: the
+// nearest ancestor holding a `.git` (a directory, or the file a worktree and a
+// submodule keep), taken from the real path because git reports the physical
+// one. That is `git rev-parse --show-toplevel` for these layouts without a
+// process, and the answer is only used when `git status` proved it is a repo.
+export function repoRootFromFs(cwd: string, has: (path: string) => boolean = existsSync): string {
+  let dir: string;
+  try { dir = realpathSync(cwd); } catch { return ""; }
+  for (let depth = 0; depth < 64; depth++) {
+    if (has(join(dir, ".git"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return "";
+    dir = parent;
+  }
+  return "";
+}
+// A commit never changes, so its summary is kept by hash across polls instead
+// of asking git for the same line every few seconds. Carried in prev-*.json.
+const COMMIT_CACHE_LIMIT = 48;
+const prevCommits: Record<string, any> = prev.commitCache && typeof prev.commitCache === "object" && !Array.isArray(prev.commitCache) ? prev.commitCache : {};
+const currentCommits: Record<string, any> = {};
+export function commitCacheEntry(value: any, oid: string): any {
+  return value && typeof value === "object" && value.hash === oid && typeof value.short === "string" && Number.isFinite(value.committedAt) && typeof value.subject === "string" ? value : null;
+}
+// One `git status` already says whether this is a repository, its branch, its
+// HEAD and what changed, so it goes first and everything else is conditional:
+// the numstat only when a tracked file changed (untracked files are not in
+// `git diff HEAD`), and the commit line only for a HEAD not seen before. A
+// clean repository on a known commit now costs one process per poll, not four.
 async function repoState(cwd: string) {
   if (!cwd) return { root: "", state: null, changes: null, ci: null };
-  const [root, status, diff, commitLine, ci, remote] = await Promise.all([
-    observationalGit(cwd, ["rev-parse", "--show-toplevel"], 700),
-    observationalGit(cwd, ["status", "--porcelain=v2", "--branch"], 900),
-    observationalGit(cwd, ["diff", "--no-ext-diff", "--no-textconv", "--numstat", "HEAD", "--"], 900),
-    observationalGit(cwd, ["log", "-1", "--format=%H%x09%h%x09%ct%x09%s"], 700),
-    githubCiState(cwd),
+  const ciPromise = githubCiState(cwd);
+  const status = await observationalGit(cwd, ["status", "--porcelain=v2", "--branch"], 900);
+  const parsed = parseGitStatus(status);
+  const oid = statusHeadOid(status);
+  const known = oid ? commitCacheEntry(prevCommits[oid], oid) : null;
+  const repoLike = !!status.trim();
+  const [root, diff, commitLine, ci, remote] = await Promise.all([
+    repoRootFromFs(cwd) || (repoLike ? observationalGit(cwd, ["rev-parse", "--show-toplevel"], 700) : Promise.resolve("")),
+    repoLike && parsed && parsed.dirty > parsed.untracked ? observationalGit(cwd, ["diff", "--no-ext-diff", "--no-textconv", "--numstat", "HEAD", "--"], 900) : Promise.resolve(""),
+    repoLike && !known ? observationalGit(cwd, ["log", "-1", "--format=%H%x09%h%x09%ct%x09%s"], 700) : Promise.resolve(""),
+    ciPromise,
     // Only asked for, and only used, when the directory name is an opaque id.
     // A worktree shares its config with the repo it came from, so this answers
     // even for a bare .git the operator never sees.
-    opaqueProjectName(basename(cwd)) ? observationalGit(cwd, ["config", "--get", "remote.origin.url"], 700) : Promise.resolve(""),
+    repoLike && opaqueProjectName(basename(cwd)) ? observationalGit(cwd, ["config", "--get", "remote.origin.url"], 700) : Promise.resolve(""),
   ]);
-  const state = parseGitStatus(status), stats = parseDiffNumstat(diff), commit = parseCommitSummary(commitLine);
+  const commitFromGit = parseCommitSummary(commitLine);
+  const commitKnown = known ? { hash: known.hash, short: known.short, committedAt: known.committedAt, subject: known.subject } : commitFromGit;
+  if (commitKnown && commitKnown.hash) currentCommits[commitKnown.hash] = commitKnown;
+  const state = parsed, stats = parseDiffNumstat(diff), commit = commitKnown;
   // Status and numstat cannot tell one edit from another edit of the same
   // size; fold in the mtimes of the reported paths so "seen" tracks content.
   const stamps = (state?.files || []).slice(0, 12).map(file => { try { return lstatSync(join(root.trim() || cwd, file)).mtimeMs; } catch { return 0; } });
   const fingerprint = String(Bun.hash(JSON.stringify([commit?.hash || "", status, diff, stamps])));
   return {
-    root: root.trim(), state, remoteName: repoNameFromRemote(remote),
+    root: repoLike ? root.trim() : "", state, remoteName: repoNameFromRemote(remote),
     changes: state || commit ? {
       fingerprint,
       count: state?.dirty || 0,
@@ -2072,7 +2225,18 @@ async function liveSessions(pids: number[]) {
 }
 
 // ---------------------------------------------------------------- AI history
+// Every redaction rule below needs one of these literals to match at all, so
+// text without any of them cannot change and skips the twelve-regex chain.
+// Each poll redacts every prompt it reads (about 7,700 on a busy desk, six in
+// a hundred of which mention anything credential-shaped), and the chain was
+// the largest single cost in the collector's own CPU. The test suite checks
+// this prefilter against the full chain on thousands of generated strings.
+const CREDENTIAL_HINT = /-----begin|eyj|:\/\/|akia|asia|aiza|xox|secret|token|password|passwd|api[_ -]?key|apikey|private_key|access_key|auth|sk[-_]|gh[opusr]_|github_pat_|xai-|glpat-|hf_|npm_|ntn_|crsr_/i;
 export function redactCredentials(value: unknown): string {
+  const text = String(typeof value === "object" ? "" : (value || ""));
+  return CREDENTIAL_HINT.test(text) ? redactCredentialsFull(text) : text;
+}
+export function redactCredentialsFull(value: unknown): string {
   return String(typeof value === "object" ? "" : (value || ""))
     // PEM blocks, JWTs, authenticated URLs, cloud-style keys and env-style
     // credential assignments. Best-effort by design: it cannot know every
@@ -4120,7 +4284,7 @@ async function runCollector() {
   attachHermesPromptTimes(sessions, hermesLastPromptTimes(sessions));
   attachGrokBotRoster(sessions, grokBot);
   attachStaleness(sessions);
-  const topicSummaries = await refineSessionTopics(sessions, recent, ollama);
+  await refineSessionTopics(sessions, recent, ollama);
   const notificationState = deriveNotificationEvents(prev.sessionNotifications, sessions);
   const linkedRecent = linkRecentToLive(recent, sessions);
   const weekRecentCount = linkedRecent.filter(entry => entry.activityCell >= 0).length;
@@ -4173,11 +4337,11 @@ async function runCollector() {
       net: { dev: netS.dev, rx: netS.rx, tx: netS.tx, rxRate: netS.rxRate, txRate: netS.txRate },
       agents: currentAgentRaw,
       externalIp: externalIpS,
-      topicSummaries,
       ciByRepo: currentCiByRepo,
       opencodeTotals: currentOpencodeTotals,
       grokUsageFiles: currentGrokUsageFiles,
       sessionNotifications: notificationState.tracked,
+      commitCache: Object.fromEntries(Object.entries(currentCommits).slice(0, COMMIT_CACHE_LIMIT)),
     }));
   } catch {}
   await emit(frameSnapshot(snapshot));
@@ -4191,6 +4355,14 @@ async function emit(text: string): Promise<void> {
   await Bun.write(Bun.stdout, text);
 }
 if (import.meta.main) {
+  // The desk is a background job: every poll, and every git/nvidia-smi/docker
+  // child it spawns, yields to whatever the person is doing at the keyboard.
+  // Children inherit the value, so one call covers the whole tree.
+  try { setPriority(0, 10); } catch {}
+  if (process.argv.includes("--refine-topics")) {
+    try { await topicWorkerMain(); } catch {}
+    process.exit(0);
+  }
   try { await runCollector(); }
   catch { try { await emit(protocolError("collector failed safely")); } catch {} }
   // Orphaned grandchildren of killed tools can hold our pipes open; a pending

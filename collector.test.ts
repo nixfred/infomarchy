@@ -1,3 +1,7 @@
+import { redactCredentials, redactCredentialsFull } from "./collector.ts";
+import { repoRootFromFs, commitCacheEntry } from "./collector.ts";
+import { statusHeadOid, parseGitStatus } from "./ai-ops.ts";
+import { parseTopicCache, planTopicJobs, parseTopicJobs, topicWorkerAlive, runTopicJobs } from "./collector.ts";
 import { parseGrokCreditsConfig, grokBillingFromUnifiedLog, grokObservedLimits, grokBillingRefreshDue, GROK_BILLING_REFRESH_MS, GROK_BILLING_FORCE_FLOOR_MS, forceRefreshRequested, grokBillingAllowed, claudeRefreshAllowed, usageCardVisible, claudeRefreshDue, withGrokObservedLimits, refreshGrokBilling, claudeOauthExpiredAt } from "./collector.ts";
 import { afterAll, describe, expect, test } from "bun:test";
 import { appendFileSync, chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "fs";
@@ -2653,5 +2657,305 @@ describe("Muse session history", () => {
     expect(await proc.exited).toBe(0);
     expect(decodeFrames(output).ai.providers.muse).toEqual({ present: false });
     rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe("topic refinement never holds the snapshot", () => {
+  const stamp = 1_800_000_000_000;
+  const entry = (session: string, text: string, ts = stamp - 1000) => ({ provider: "claude", session, text, ts });
+  const live = (id: string, extra: any = {}) => ({ provider: "claude", pid: 4242, session: id, sessionIds: [id], project: "infomarchy", cwd: "/home/u/infomarchy", ...extra });
+  const A = "aaaaaaaa-1111-2222-3333-444444444444", B = "bbbbbbbb-1111-2222-3333-444444444444";
+
+  test("a cached rewording is applied at once and nothing is queued for it", () => {
+    const sessions = [live(A)];
+    const entries = [entry(A, "fix the flaky collector test")];
+    const [job] = planTopicJobs([live(A)], entries, {}, "gemma3:12b", stamp);
+    expect(job.key).toBe("claude:" + A);
+    const cache = { [job.key]: { v: 2, fingerprint: job.fingerprint, model: "gemma3:12b", summary: "Fixing a flaky collector test", checkedAt: stamp } };
+    expect(planTopicJobs(sessions, entries, cache, "gemma3:12b", stamp)).toEqual([]);
+    expect((sessions[0] as any).topic).toBe("Fixing a flaky collector test");
+  });
+
+  test("a different model, new prompts or an old cache version ask again", () => {
+    const entries = [entry(A, "fix the flaky collector test")];
+    const [job] = planTopicJobs([live(A)], entries, {}, "gemma3:12b", stamp);
+    const good = { v: 2, fingerprint: job.fingerprint, model: "gemma3:12b", summary: "Fixing a flaky collector test", checkedAt: stamp };
+    expect(planTopicJobs([live(A)], entries, { [job.key]: good }, "qwen3:8b", stamp)).toHaveLength(1);
+    expect(planTopicJobs([live(A)], [entry(A, "now profile it")], { [job.key]: good }, "gemma3:12b", stamp)).toHaveLength(1);
+    expect(planTopicJobs([live(A)], entries, { [job.key]: { ...good, v: 1 } }, "gemma3:12b", stamp)).toHaveLength(1);
+  });
+
+  test("a recent failure backs off, and with no loaded model nothing is planned or changed", () => {
+    const entries = [entry(A, "fix the flaky collector test")];
+    const [job] = planTopicJobs([live(A)], entries, {}, "gemma3:12b", stamp);
+    const failed = { v: 2, fingerprint: job.fingerprint, model: "gemma3:12b", failedAt: stamp - 10_000, checkedAt: stamp - 10_000 };
+    expect(planTopicJobs([live(A)], entries, { [job.key]: failed }, "gemma3:12b", stamp)).toEqual([]);
+    expect(planTopicJobs([live(A)], entries, { [job.key]: failed }, "gemma3:12b", stamp + 120_000)).toHaveLength(1);
+    const sessions = [live(A, { topic: "Local words" })];
+    expect(planTopicJobs(sessions, entries, {}, "", stamp)).toEqual([]);
+    expect((sessions[0] as any).topic).toBe("Local words");
+  });
+
+  test("a session with no recorded prompts is skipped, and one batch is capped at six", () => {
+    expect(planTopicJobs([live(A)], [], {}, "gemma3:12b", stamp)).toEqual([]);
+    const ids = Array.from({ length: 9 }, (_, i) => "cccccccc-0000-0000-0000-00000000000" + i);
+    const sessions = ids.map((id, i) => live(id, { pid: 100 + i }));
+    const entries = ids.map(id => entry(id, "work on " + id));
+    expect(planTopicJobs(sessions, entries, {}, "gemma3:12b", stamp)).toHaveLength(6);
+  });
+
+  test("the job prompt carries the project and the requests, and a hostile cache file cannot smuggle entries in", () => {
+    const [job] = planTopicJobs([live(A)], [entry(A, "fix the flaky collector test")], {}, "gemma3:12b", stamp);
+    expect(job.prompt).toContain("Project: Infomarchy");
+    expect(job.prompt).toContain("- fix the flaky collector test");
+    expect(parseTopicCache(null)).toEqual({});
+    expect(parseTopicCache("[1,2,3]")).toEqual({});
+    expect(parseTopicCache("not json")).toEqual({});
+    const cache = parseTopicCache(JSON.stringify({ ok: { v: 2, summary: "x" }, old: { v: 1, summary: "x" }, junk: 5, nul: null }));
+    expect(Object.keys(cache)).toEqual(["ok"]);
+  });
+
+  test("worker input is bounded and shape-checked", () => {
+    const good = { key: "claude:" + A, fingerprint: "123456", model: "gemma3:12b", prompt: "Summarize" };
+    expect(parseTopicJobs(JSON.stringify([good]))).toEqual([good]);
+    expect(parseTopicJobs("nope")).toEqual([]);
+    expect(parseTopicJobs(JSON.stringify({ not: "a list" }))).toEqual([]);
+    expect(parseTopicJobs(JSON.stringify([{ ...good, prompt: "x".repeat(6001) }, { ...good, key: "" }, { ...good, model: 7 }, null, "str", { ...good, prompt: "bad\u0007bell" }]))).toEqual([]);
+    expect(parseTopicJobs(JSON.stringify(Array.from({ length: 20 }, () => good)))).toHaveLength(6);
+  });
+
+  test("a worker is alive only while its lock is fresh and its pid exists", () => {
+    const yes = () => true, no = () => false;
+    expect(topicWorkerAlive({ pid: 4242, at: stamp - 5_000 }, stamp, yes)).toBe(true);
+    expect(topicWorkerAlive({ pid: 4242, at: stamp - 5_000 }, stamp, no)).toBe(false);
+    expect(topicWorkerAlive({ pid: 4242, at: stamp - 90_000 }, stamp, yes)).toBe(false);
+    expect(topicWorkerAlive({ pid: 1, at: stamp }, stamp, yes)).toBe(false);
+    expect(topicWorkerAlive({ pid: "4242", at: "soon" }, stamp, yes)).toBe(false);
+    expect(topicWorkerAlive(null, stamp, yes)).toBe(false);
+    expect(topicWorkerAlive({ pid: 4242, at: stamp + 600_000 }, stamp, yes)).toBe(false);
+  });
+
+  const jobsFor = (n: number) => Array.from({ length: n }, (_, i) => ({ key: "claude:s" + i, fingerprint: "f" + i, model: "m", prompt: "p" + i }));
+  const io = (answers: string[], seed: Record<string, any> = {}) => {
+    const calls: string[] = [], saves: Record<string, any>[] = [];
+    let store: Record<string, any> = { ...seed }, tick = stamp;
+    return {
+      calls, saves, get store() { return store; },
+      generate: async (job: any) => { calls.push(job.key); return answers.shift() ?? ""; },
+      load: () => JSON.parse(JSON.stringify(store)),
+      save: (cache: Record<string, any>) => { store = cache; saves.push(cache); },
+      clock: () => ++tick,
+    };
+  };
+
+  test("the worker saves after every job so a partial batch still reaches the next poll", async () => {
+    const h = io(["Fixing the test", "Profiling the collector"]);
+    const result = await runTopicJobs(jobsFor(2), h);
+    expect(result).toEqual({ generated: 2, failed: 0, skipped: 0 });
+    expect(h.saves).toHaveLength(2);
+    expect(h.store["claude:s0"].summary).toBe("Fixing the test");
+    expect(h.store["claude:s1"].summary).toBe("Profiling the collector");
+    expect(h.store["claude:s1"].v).toBe(2);
+  });
+
+  test("the first failure stamps the whole batch failed without asking the model again", async () => {
+    const h = io(["", "never asked", "never asked"]);
+    const result = await runTopicJobs(jobsFor(3), h);
+    expect(result).toEqual({ generated: 0, failed: 3, skipped: 0 });
+    expect(h.calls).toEqual(["claude:s0"]);
+    for (const key of ["claude:s0", "claude:s1", "claude:s2"]) expect(h.store[key].failedAt).toBeGreaterThan(stamp);
+  });
+
+  test("the backoff the worker writes is the one the next poll honours", async () => {
+    const entries = [entry(A, "fix the flaky collector test"), entry(B, "profile the collector")];
+    const planned = planTopicJobs([live(A), live(B, { pid: 4243 })], entries, {}, "gemma3:12b", stamp);
+    expect(planned).toHaveLength(2);
+    const h = io([""]);
+    await runTopicJobs(planned, h);
+    expect(planTopicJobs([live(A), live(B, { pid: 4243 })], entries, h.store, "gemma3:12b", stamp + 10_000)).toEqual([]);
+    expect(planTopicJobs([live(A), live(B, { pid: 4243 })], entries, h.store, "gemma3:12b", stamp + 120_000)).toHaveLength(2);
+  });
+
+  test("a job another worker already finished is not asked for twice", async () => {
+    const seed = { "claude:s0": { v: 2, fingerprint: "f0", model: "m", summary: "Already done", checkedAt: stamp } };
+    const h = io(["Fresh"], seed);
+    const result = await runTopicJobs(jobsFor(2), h);
+    expect(result).toEqual({ generated: 1, failed: 0, skipped: 1 });
+    expect(h.calls).toEqual(["claude:s1"]);
+    expect(h.store["claude:s0"].summary).toBe("Already done");
+  });
+
+  async function fakeOllama(handler: (req: Request) => Response | Promise<Response>) {
+    const server = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: handler });
+    return { server, host: "http://127.0.0.1:" + server.port };
+  }
+  async function runWorker(state: string, host: string, jobs: unknown, extraEnv: Record<string, string> = {}) {
+    const proc = Bun.spawn([process.execPath, join(import.meta.dir, "collector.ts"), "--refine-topics"], {
+      stdin: "pipe", stdout: "ignore", stderr: "ignore",
+      env: { HOME: state, XDG_STATE_HOME: join(state, "xdg"), PATH: process.env.PATH || "", OLLAMA_HOST: host, ...extraEnv },
+    });
+    proc.stdin.write(JSON.stringify(jobs)); await proc.stdin.end();
+    await proc.exited;
+    const file = join(state, "xdg", "infomarchy", "topics.json");
+    return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
+  }
+
+  test("the real worker process turns a model answer into a cache entry and releases its lock", async () => {
+    const state = mkdtempSync(join(tmpdir(), "infomarchy-topic-worker-"));
+    const seen: any[] = [];
+    const { server, host } = await fakeOllama(async req => { seen.push(await req.json()); return Response.json({ response: "\"Profiling the collector.\"\n" }); });
+    try {
+      const cache = await runWorker(state, host, jobsFor(1));
+      expect(cache["claude:s0"].summary).toBe("Profiling the collector");
+      expect(seen[0].model).toBe("m");
+      expect(seen[0].stream).toBe(false);
+      expect(existsSync(join(state, "xdg", "infomarchy", "topics.lock"))).toBe(false);
+    } finally { server.stop(true); rmSync(state, { recursive: true, force: true }); }
+  });
+
+  test("the real worker refuses a host the operator did not allow, and the off switch", async () => {
+    const state = mkdtempSync(join(tmpdir(), "infomarchy-topic-worker-"));
+    let hits = 0;
+    const { server, host } = await fakeOllama(() => { hits++; return Response.json({ response: "Should not happen" }); });
+    try {
+      expect(await runWorker(state, host, jobsFor(1), { INFOMARCHY_SKIP_REFINEMENT: "1" })).toBeNull();
+      expect(await runWorker(state, "http://203.0.113.9:11434", jobsFor(1))).toBeNull();
+      expect(hits).toBe(0);
+    } finally { server.stop(true); rmSync(state, { recursive: true, force: true }); }
+  });
+});
+
+describe("the git probe costs one process for a clean repository", () => {
+  const sha = "0123456789abcdef0123456789abcdef01234567";
+  test("statusHeadOid reads the commit HEAD points at, and nothing for an empty repository", () => {
+    expect(statusHeadOid(`# branch.oid ${sha}\n# branch.head main\n`)).toBe(sha);
+    expect(statusHeadOid("# branch.oid (initial)\n# branch.head main\n")).toBe("");
+    expect(statusHeadOid("")).toBe("");
+    expect(statusHeadOid("1 .M N... 100644 100644 100644 a b # branch.oid " + sha)).toBe("");
+  });
+
+  test("a checkout with thousands of changes is counted but only a dozen paths are kept", () => {
+    const lines = ["# branch.oid " + sha, "# branch.head main"];
+    for (let i = 0; i < 5000; i++) lines.push("? new/file-" + i + ".ts");
+    for (let i = 0; i < 300; i++) lines.push("1 .M N... 100644 100644 100644 a b src/changed-" + i + ".ts");
+    lines.push("u UU N... 100644 100644 100644 100644 a b c conflict.ts");
+    const started = performance.now();
+    const state = parseGitStatus(lines.join("\n") + "\n")!;
+    const took = performance.now() - started;
+    expect(state.dirty).toBe(5301);
+    expect(state.untracked).toBe(5000);
+    expect(state.conflicts).toBe(1);
+    expect(state.files).toHaveLength(12);
+    expect(state.files[0]).toBe("new/file-0.ts");
+    expect(took).toBeLessThan(500);
+  });
+
+  test("the numstat is only needed when a tracked file changed", () => {
+    const onlyUntracked = parseGitStatus("# branch.oid " + sha + "\n# branch.head main\n? a.ts\n? b.ts\n")!;
+    expect(onlyUntracked.dirty).toBe(onlyUntracked.untracked);
+    const tracked = parseGitStatus("# branch.oid " + sha + "\n# branch.head main\n? a.ts\n1 .M N... 100644 100644 100644 a b c.ts\n")!;
+    expect(tracked.dirty).toBeGreaterThan(tracked.untracked);
+    const clean = parseGitStatus("# branch.oid " + sha + "\n# branch.head main\n")!;
+    expect(clean.dirty).toBe(0);
+  });
+
+  test("repoRootFromFs finds the nearest .git, resolves symlinks like git does, and stops at the top", () => {
+    const base = mkdtempSync(join(tmpdir(), "infomarchy-root-"));
+    try {
+      const repo = join(base, "repo"), nested = join(repo, "src", "deep"), plain = join(base, "plain"), work = join(base, "worktree");
+      mkdirSync(join(repo, ".git"), { recursive: true }); mkdirSync(nested, { recursive: true });
+      mkdirSync(plain, { recursive: true }); mkdirSync(work, { recursive: true });
+      writeFileSync(join(work, ".git"), "gitdir: /elsewhere/.git/worktrees/w\n");
+      const real = (p: string) => require("fs").realpathSync(p);
+      expect(repoRootFromFs(repo)).toBe(real(repo));
+      expect(repoRootFromFs(nested)).toBe(real(repo));
+      expect(repoRootFromFs(work)).toBe(real(work));
+      const link = join(base, "link");
+      symlinkSync(nested, link);
+      expect(repoRootFromFs(link)).toBe(real(repo));
+      expect(repoRootFromFs(join(base, "missing"))).toBe("");
+      expect(repoRootFromFs(plain, p => p === join("/", ".git") ? false : false)).toBe("");
+    } finally { rmSync(base, { recursive: true, force: true }); }
+  });
+
+  test("repoRootFromFs agrees with git on this very checkout", async () => {
+    const out = await new Response(Bun.spawn(["git", "-C", import.meta.dir, "rev-parse", "--show-toplevel"], { stdout: "pipe", stderr: "ignore" }).stdout).text();
+    if (out.trim()) expect(repoRootFromFs(import.meta.dir)).toBe(out.trim());
+  });
+
+  test("a cached commit is only trusted when it is the commit asked for and well formed", () => {
+    const entry = { hash: sha, short: "0123456", committedAt: 1_800_000_000_000, subject: "fix: something" };
+    expect(commitCacheEntry(entry, sha)).toBe(entry);
+    expect(commitCacheEntry(entry, "f".repeat(40))).toBeNull();
+    expect(commitCacheEntry({ ...entry, committedAt: "soon" }, sha)).toBeNull();
+    expect(commitCacheEntry({ ...entry, subject: 5 }, sha)).toBeNull();
+    expect(commitCacheEntry(null, sha)).toBeNull();
+    expect(commitCacheEntry("x", sha)).toBeNull();
+  });
+});
+
+describe("the credential prefilter changes nothing but the cost", () => {
+  // Deterministic generator: a seeded LCG picks pieces from a vocabulary of
+  // every shape each rule in the chain is written for, plus ordinary prose,
+  // so the prefilter is held to the full chain on mixed and borderline input.
+  // Secret-shaped pieces are assembled from fragments, as the rest of this file
+  // does, so a repository scanner never mistakes a fixture for a credential.
+  const j = (...parts: string[]) => parts.join("");
+  const pieces = [
+    "fix the flaky test", "why does it fail", " ", " ", "\n", "   ", ".", ",", ":", "=", "\"", "'", "-", "_", "/", "--",
+    j("-----BEGIN", " RSA PRIVATE", " KEY-----"), "MIIEvQIBADANBg", j("-----END", " RSA PRIVATE", " KEY-----"),
+    j("ey", "JhbGciOiJIUzI1NiJ9", ".", "ey", "JzdWIiOiIxMjM0NTY3ODkw", ".", "SflKxwRJSMeK", "KF2QT4fwpM"),
+    j("https://user:", "hunter2@example.com/path"), j("postgres://admin:", "s3cr3tpass@db:5432/app"), "http://example.com/x", "ssh://host",
+    j("AK", "IA", "IOSFODNN7EXAMPLE"), j("AS", "IA", "IOSFODNN7EXAMPLE"), j("AI", "za", "SyA-1234567890abcdefghijklmnop"), j("xo", "xb-", "123456789012-abcdefghij"),
+    j("MY_API_", "TOKEN=abcd1234efgh"), j("DB_PASS", "WORD='longpassword'"), j("SECRET", "_KEY=\"quoted value here\""), j("AWS_ACCESS_", "KEY=AK", "IAxxxxxxxxxxxxxxxx"), j("AUTH_", "HEADER=abcdefgh"), // gitleaks:allow (synthetic fixture, assembled from fragments)
+    j("sk", "-proj-", "abcdefghijklmnopqrstu"), j("sk", "-ant-", "abcdefghijklmnop12"), j("sk", "_live_", "abcdefghijklmnop12"), j("SK", "-TEST_", "ABCDEFGHIJKLMNOP"),
+    j("gh", "p_", "abcdefghijklmnopqrstuvwxyz0123"), j("github", "_pat_", "11ABCDEFG0abcdefghijkl"),
+    j("xa", "i-", "abcdefghijklmnopqrstuv"), j("glp", "at-", "abcdefghijklmnopqrst"), j("h", "f_", "abcdefghijklmnopqrstu"), j("np", "m_", "abcdefghijklmnopqrst"), j("nt", "n_", "abcdefghijklmnopqrstu"), j("cr", "sr_", "abcdefghijklmnopqrstu"),
+    "Authorization: Bearer abc.def.ghi", "authorization: basic dXNlcjpwYXNz", "--api-key sk-1234", "--token=abc123", "--password 'a b c'", "--secret xyz", "--access_token=abc",
+    "api key: abcd", "API_KEY = zzz", "apikey=1234", j("access token is gh", "p_x"), "auth token: t0k3n", "token: abc", "password: hunter2", "passwd=abc", "secret = shhh", "the token budget", "tokenizer", "keyboard", "author", "authentic",
+    "ASK-", "task-list", "flask_", "ghx_notatoken", "hf", "npm install", "sk", "eyJ", "AKIA", "xox", "://",
+  ];
+  function make(seed: number, count: number): string[] {
+    let x = seed >>> 0;
+    const next = () => { x = (Math.imul(x, 1664525) + 1013904223) >>> 0; return x / 4294967296; };
+    return Array.from({ length: count }, () => {
+      const n = 1 + Math.floor(next() * 8);
+      let out = "";
+      for (let i = 0; i < n; i++) out += pieces[Math.floor(next() * pieces.length)];
+      return out;
+    });
+  }
+
+  test("twenty thousand generated strings redact exactly as the full chain does", () => {
+    let redacted = 0;
+    for (const text of make(20261110, 20000)) {
+      const full = redactCredentialsFull(text);
+      if (full !== text) redacted++;
+      expect(redactCredentials(text)).toBe(full);
+    }
+    // the generator must actually exercise the rules, or the test proves nothing
+    expect(redacted).toBeGreaterThan(5000);
+  });
+
+  test("each piece on its own, case-folded and embedded in prose, matches the full chain", () => {
+    for (const piece of pieces) for (const text of [piece, piece.toUpperCase(), piece.toLowerCase(), "see " + piece + " here", "x" + piece, piece + "x"])
+      expect(redactCredentials(text)).toBe(redactCredentialsFull(text));
+  });
+
+  test("plain prose is returned untouched, and non-strings keep their old meaning", () => {
+    const prose = "Summarize the failing collector test and propose a fix for the slow poll";
+    expect(redactCredentials(prose)).toBe(prose);
+    expect(redactCredentials(undefined)).toBe("");
+    expect(redactCredentials(null)).toBe("");
+    expect(redactCredentials({ a: 1 })).toBe("");
+    expect(redactCredentials(0)).toBe("");
+    expect(redactCredentials(12345)).toBe("12345");
+  });
+
+  test("a prompt hundreds of kilobytes long is cheap when nothing in it looks like a credential", () => {
+    const huge = "a perfectly ordinary sentence about code. ".repeat(13000);
+    const started = performance.now();
+    expect(redactCredentials(huge)).toBe(huge);
+    expect(performance.now() - started).toBeLessThan(200);
   });
 });

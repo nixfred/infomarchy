@@ -4,6 +4,13 @@ All notable changes to Infomarchy. The format follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Fixed
+- **The desk no longer freezes while a local model is slow.** When Ollama had a model loaded, every poll that found a session with new prompts waited for `/api/generate` to reword its topic, up to six seconds, before it sent the snapshot, and the next poll could not start until it did. With a wedged model the desk stopped updating roughly every third poll: measured on the development machine, polls took 6.6 to 8 s instead of 0.7 s at the same CPU, because the process was only waiting. Rewording is now requested by a detached background worker (`collector.ts --refine-topics`) that writes a shared `topics.json`; the snapshot goes out immediately with the local summary and the model's wording appears on a later poll. The worker asks for one reword at a time, stops after the first failure so a sick model costs one timeout per minute instead of six, and the wallpaper and the overlay now share one answer instead of each asking.
+
+### Changed
+- **Lighter polls.** A clean repository on a commit the desk has already seen now costs one `git` process per poll instead of four (the commit line is remembered by hash, the repository root is found without a process, and the diff is only taken when a tracked file changed), a poll's 23 fewer process launches show up as a shorter wall time, and credential redaction skips the twelve-pattern chain for the 94% of prompts that contain nothing credential-shaped (the test suite holds it to the full chain on twenty thousand generated strings). Output is unchanged: a differential run of the old and new collector over ten live sessions compared every field, apart from timestamps and live CPU counters, and found no difference.
+- The collector and everything it launches now run at `nice 10`, so a poll yields to whatever you are typing into.
+
 ## [1.5.0] — 2026-11-10
 
 Everything since 1.4.1, about two months of work. Twelve community contributors are credited below (@afoxybouquet, @maku, @reverb256, @brentkearney, @TRIBUSeric, @KI_Vater, @shieldsworks, @RidgetopAi, @auggernaut, @TechLuddite, @GreyforgeLabs and @Tech0001), and the last five pull requests (#44, #47, #48, #49, #50) were merged together and checked in a Test Drive VM on Hyprland 0.56.2 before landing. The headlines: Web Mode over Tailscale or your own HTTPS certificate, FLEET and HERMES HOSTS for agents on other machines, an optional APPS module, Oh My Pi, Hermes and Muse sessions, a module strip that can leave the wallpaper, and an opt-in wallpaper passthrough. The two newest settings, `moduleStrip` and `wallpaperPassthrough`, default to today's behaviour. Muse token usage is not read yet (see its entry below).
