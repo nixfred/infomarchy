@@ -1315,15 +1315,26 @@ export function linkRecentToLive(recentEntries: any[], sessions: any[]): any[] {
 }
 
 const TOPIC_STOP_WORDS = new Set([
-  "about", "add", "after", "again", "also", "and", "are", "audit", "basically", "been", "being", "build", "can", "cards", "check", "could", "create", "does", "doesnt", "doing", "dont", "fix", "for", "from", "had", "hard", "has", "have", "implement", "in", "into", "is", "it", "its", "just", "last", "little", "make", "more", "need", "needed", "not", "of", "on", "only", "other", "part", "past", "please", "prompt", "prompts", "real", "really", "remove", "review", "screen", "short", "should", "some", "still", "summary", "than", "that", "the", "their", "them", "there", "these", "they", "this", "those", "through", "to", "very", "want", "was", "were", "what", "when", "where", "which", "while", "with", "work", "working", "would", "you", "your", "yours", "our", "ours", "its", "mine"
+  "able", "about", "add", "after", "again", "all", "also", "and", "any", "anything", "are", "ask", "asked", "asking", "asks", "audit", "basically", "been", "being", "build", "can", "cant", "cards", "chatgpt", "check", "claude", "codex", "could", "create", "did", "does", "doesnt", "doing", "done", "dont", "each", "even", "everything", "fable", "fix", "for", "from", "get", "give", "going", "good", "got", "gpt", "great", "had", "haiku", "hard", "has", "have", "help", "here", "how", "ill", "implement", "in", "into", "is", "isnt", "it", "its", "ive", "just", "know", "larry", "last", "let", "lets", "like", "little", "look", "made", "make", "makes", "making", "many", "maybe", "mine", "more", "most", "much", "need", "needed", "needs", "new", "nice", "not", "now", "of", "off", "okay", "on", "one", "only", "opus", "other", "our", "ours", "out", "over", "part", "past", "please", "prompt", "prompts", "real", "really", "remove", "review", "right", "screen", "see", "short", "should", "show", "some", "something", "sonnet", "still", "stuff", "summary", "sure", "take", "tell", "than", "that", "thats", "the", "their", "them", "then", "there", "theres", "these", "they", "thing", "things", "think", "this", "those", "through", "to", "too", "try", "two", "use", "used", "using", "very", "want", "wanted", "wants", "was", "way", "well", "were", "what", "when", "where", "which", "while", "who", "why", "will", "with", "wont", "work", "working", "works", "would", "yes", "you", "your", "youre", "yours"
 ]);
 
+// The last dotted segment of a directory name is usually the project
+// (`power.omarchy`), but for a domain or a version it is the suffix: the card
+// for `ddn.nixfred.com` read "Improving Com questions how" and `lmf4.1` read
+// "Improving 1 ...". Those take the first segment instead.
+const NAME_SUFFIXES = new Set(["com", "dev", "io", "org", "net", "app", "ai", "co", "sh", "so", "xyz", "me", "us", "tv", "fm", "cc", "gg"]);
+export function projectNameSegment(raw: string): string {
+  const parts = String(raw || "").split(".").filter(Boolean);
+  const last = parts.pop() || String(raw || "");
+  if (parts.length && (NAME_SUFFIXES.has(last.toLowerCase()) || /^\d+$/.test(last))) return parts[0];
+  return last;
+}
 function topicProjectLabel(session: any): string {
   const raw = String(session.project || session.cwd || "").replace(/\/$/, "").split("/").pop() || "";
   // A worktree id names nothing, so it must never become the subject of a
   // sentence about what the agent is doing.
   if (opaqueProjectName(raw)) return "";
-  const clean = raw.split(".").filter(Boolean).pop() || raw;
+  const clean = projectNameSegment(raw) || raw;
   return clean && clean !== "~" ? clean.replace(/[-_]+/g, " ").replace(/\b\w/g, c => c.toUpperCase()).replace(/\bAi\b/g, "AI") : "";
 }
 
@@ -1353,6 +1364,9 @@ export function localSessionSummary(session: any, entries: any[]): string {
   const scores = new Map<string, number>();
   entries.forEach((entry, index) => {
     const weight = Math.max(1, 5 - index);
+    // A slash command ("/model fable", "/fast") is the harness being driven,
+    // not the work being done, and used to surface as the topic's keywords.
+    if (/^\s*\/[a-z][\w:-]*(\s|$)/i.test(String(entry.text || ""))) return;
     for (const token of String(entry.text || "").toLowerCase().match(/[a-z][a-z0-9-]{2,}/g) || []) {
       const word = aliases[token] || token;
       if (TOPIC_STOP_WORDS.has(word) || /^\d+$/.test(word)) continue;
@@ -1375,10 +1389,25 @@ export function cleanGeneratedSummary(value: unknown): string {
     .replace(/\s+/g, " ").split(" ").slice(0, 8).join(" ").slice(0, 72).trim();
 }
 
+// Claude Code names every session. Most names are a default (the project
+// slug and two hex digits: `hypernix-98`) that says nothing, but a renamed or
+// auto-titled session reads like a sentence ("Repository list sorting by
+// priority"), which is a better line than the two keywords the local summary
+// can scrape from the prompts when no model is available to reword them. A
+// slug has no space and no capital; anything else is a title somebody (or
+// Claude) wrote.
+export function sessionTitleTopic(session: any): string {
+  if (session?.provider !== "claude") return "";
+  const name = String(session.name || "").replace(/\s+/g, " ").trim();
+  if (name.length < 4 || name.length > 160 || opaqueProjectName(name)) return "";
+  if (!/\s/.test(name) && name === name.toLowerCase()) return "";
+  return cleanGeneratedSummary(name);
+}
+
 export function attachSessionTopics(sessions: any[], recentEntries: any[]): any[] {
   for (const session of sessions) {
     const entries = exactSessionEntries(session, recentEntries);
-    session.topic = localSessionSummary(session, entries);
+    session.topic = sessionTitleTopic(session) || localSessionSummary(session, entries);
     session.topicAt = entries.length ? Number(entries[0].ts || 0) : 0;
   }
   return sessions;

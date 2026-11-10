@@ -1,3 +1,4 @@
+import { sessionTitleTopic, projectNameSegment } from "./collector.ts";
 import { redactCredentials, redactCredentialsFull } from "./collector.ts";
 import { repoRootFromFs, commitCacheEntry } from "./collector.ts";
 import { statusHeadOid, parseGitStatus } from "./ai-ops.ts";
@@ -2959,3 +2960,88 @@ describe("the credential prefilter changes nothing but the cost", () => {
     expect(performance.now() - started).toBeLessThan(200);
   });
 });
+
+describe("fallback topics say something when no model is available", () => {
+  test("a Claude title written like a sentence becomes the topic, a default slug does not", () => {
+    const c = (name: string, extra: any = {}) => ({ provider: "claude", name, ...extra });
+    expect(sessionTitleTopic(c("Repository list sorting by priority"))).toBe("Repository list sorting by priority");
+    expect(sessionTitleTopic(c("Hs-full-larry-plan and CLAUDE.md"))).toBe("Hs-full-larry-plan and CLAUDE.md");
+    expect(sessionTitleTopic(c("hypernix-98"))).toBe("");
+    expect(sessionTitleTopic(c("ddn-nixfred-com-9d"))).toBe("");
+    expect(sessionTitleTopic(c("nas-os-hex-prox-upgrade-os-from-plan-fil"))).toBe("");
+    expect(sessionTitleTopic(c("01M44FH4T8YW63W98ZCHT8FR2N"))).toBe("");
+    expect(sessionTitleTopic(c(""))).toBe("");
+    expect(sessionTitleTopic(c("ab"))).toBe("");
+    expect(sessionTitleTopic(c("x ".repeat(100)))).toBe("");
+    expect(sessionTitleTopic(c("  Fix   the   flaky\n test  "))).toBe("Fix the flaky test");
+  });
+
+  test("only Claude's own registry title is trusted: a bot name or another provider's name is not a topic", () => {
+    expect(sessionTitleTopic({ provider: "grokBot", name: "Release Notes Bot" })).toBe("");
+    expect(sessionTitleTopic({ provider: "codex", name: "Some Title Here" })).toBe("");
+    expect(sessionTitleTopic(null)).toBe("");
+    expect(sessionTitleTopic({})).toBe("");
+  });
+
+  test("a long title is cut like a generated one: eight words, never markup", () => {
+    const topic = sessionTitleTopic({ provider: "claude", name: "**Refactor** the _entire_ settings drawer so every control fits on one screen without scrolling" });
+    expect(topic.split(" ").length).toBeLessThanOrEqual(8);
+    expect(topic).not.toMatch(/[*_#]/);
+    expect(topic.length).toBeLessThanOrEqual(72);
+  });
+
+  test("attachSessionTopics prefers the title, and falls back to the prompts without one", () => {
+    const A = "aaaaaaaa-1111-2222-3333-444444444444";
+    const entries = [{ provider: "claude", session: A, text: "fix the flaky collector test", ts: Date.now() - 1000 }];
+    const base = { provider: "claude", pid: 1, session: A, sessionIds: [A], project: "infomarchy", cwd: "/home/u/infomarchy" };
+    const titled = attachSessionTopics([{ ...base, name: "Profiling the collector for stalls" }], entries)[0];
+    expect(titled.topic).toBe("Profiling the collector for stalls");
+    expect(titled.topicAt).toBeGreaterThan(0);
+    const slug = attachSessionTopics([{ ...base, name: "infomarchy-50" }], entries)[0];
+    expect(slug.topic).toMatch(/^Fixing Infomarchy /);
+    const none = attachSessionTopics([{ ...base, name: "Profiling the collector for stalls" }], [])[0];
+    expect(none.topic).toBe("Profiling the collector for stalls");
+  });
+
+  test("a domain or a version in the directory name no longer becomes the project label", () => {
+    expect(projectNameSegment("ddn.nixfred.com")).toBe("ddn");
+    expect(projectNameSegment("flox.dev")).toBe("flox");
+    expect(projectNameSegment("nixfredos.com")).toBe("nixfredos");
+    expect(projectNameSegment("lmf4.1")).toBe("lmf4");
+    expect(projectNameSegment("ladder.nixfred.com")).toBe("ladder");
+    // unchanged: a project suffix and a plain name
+    expect(projectNameSegment("power.omarchy")).toBe("omarchy");
+    expect(projectNameSegment("nas.os.hex.upgrade.fileshare")).toBe("fileshare");
+    expect(projectNameSegment("infomarchy")).toBe("infomarchy");
+    expect(projectNameSegment("")).toBe("");
+    const A = "bbbbbbbb-1111-2222-3333-444444444444";
+    const summary = localSessionSummary({ provider: "claude", session: A, sessionIds: [A], project: "ddn.nixfred.com" }, [{ text: "what questions should the chatbot ask", ts: 1 }]);
+    expect(summary).not.toContain("Com");
+    expect(summary).toContain("Ddn");
+  });
+});
+
+describe("the local summary ignores the harness and the filler", () => {
+  const A = "cccccccc-1111-2222-3333-444444444444";
+  const session = { provider: "claude", session: A, sessionIds: [A], project: "infomarchy" };
+  const say = (...texts: string[]) => localSessionSummary(session, texts.map((text, i) => ({ text, ts: 1000 - i })));
+
+  test("slash commands are not topics", () => {
+    expect(say("/model fable", "/fast")).toBe("");
+    expect(say("/model fable", "profile the collector stalls")).toMatch(/collector|stalls|profile/i);
+    expect(say("/model fable", "profile the collector stalls")).not.toMatch(/fable/i);
+    expect(say("/compact")).toBe("");
+  });
+
+  test("filler and assistant names never become keywords", () => {
+    const topic = say("larry can you look at the thing about the watchdog timer for the collector please");
+    expect(topic).not.toMatch(/\b(larry|thing|please|look)\b/i);
+    expect(topic).toMatch(/watchdog|timer|collector/i);
+  });
+
+  test("real work words survive", () => {
+    expect(say("fix the scrollbar drag in the recent tasks list")).toMatch(/scrolling|recent|tasks|list|drag/i);
+    expect(say("add selectable local model controls")).toMatch(/Building/);
+  });
+});
+
