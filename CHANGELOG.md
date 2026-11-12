@@ -4,8 +4,12 @@ All notable changes to Infomarchy. The format follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+## [1.5.2] — 2026-11-12
+
+A small release with one addition: a Muse token-usage reader for machines where Omarchy has no Muse usage cache. Nothing else changed.
+
 ### Added
-- **Muse token usage.** When Omarchy has no Muse usage cache (Muse not signed in), the USAGE & LIMITS card now shows a Muse row built from `model_completed` events in Muse's own `session.jsonl` files: tokens today, a seven-day trend and the per-day totals. Cached tokens are kept in their own bucket and never added to input (Muse's schema says their placement depends on the provider), and the record names no model, so the breakdown has a single `muse` row. A record with all-zero usage, which is all the echo provider writes, shows no row rather than a zero. A real Omarchy cache still wins. Checked against a session file the real Muse binary wrote with the numbers filled in; not yet against a real model's record, which is what issue #26 is still waiting on. Subagent journals are not read.
+- **Muse token usage.** (#26, @TRIBUSeric) When Omarchy has no Muse usage cache (Muse not signed in), the USAGE & LIMITS card now shows a Muse row built from `model_completed` events in Muse's own `session.jsonl` files: tokens today, a seven-day trend and the per-day totals. Cached tokens are kept in their own bucket and never added to input (Muse's schema says their placement depends on the provider), and the record names no model, so the breakdown has a single `muse` row. A record with all-zero usage, which is all the echo provider writes, shows no row rather than a zero. A real Omarchy cache still wins, and that cache is what a signed-in Muse produces, so this reader only matters without one. Checked against a session file the real Muse binary wrote with the numbers filled in, not against a real model's record, so a Muse row with odd numbers and no Omarchy cache is worth reporting. Subagent journals are not read.
 
 ## [1.5.1] — 2026-11-10
 
