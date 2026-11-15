@@ -1,0 +1,56 @@
+THANK YOU to everyone who has sent code, ideas and bug reports to infomarchy since my last thank you post!
+
+6 pull requests merged. 3 more people whose requests shaped what shipped. Here is every one of you, and exactly what you built.
+
+Where it stands: 1.5.2 is out. 137 stars, 25 forks, 45 pull requests merged from 16 people, 737 tests passing (603 at my last post).
+
+BRENT, brentkearney on GitHub
+3 pull requests, all about getting more of your agents onto the desk.
+
+Hermes: the desk now shows a card for every console hermes session, every Hermes Desktop backend, and the Hermes gateway while a chat is open. Brent worked out why each of them was invisible and fixed every cause.
+
+Oh My Pi: every running omp session gets a card with its topic, last prompt time and multiplexer host. Its prompts count in Recent Tasks, the activity heatmap and usage, and a closed session can be resumed.
+
+Hyprland 0.57: Brent found exactly why the plugin stopped loading on current omarchy (the ScreenMoveRemap type is gone) and sent the root cause with the fix.
+
+Thank you Brent!
+
+AFOXYBOUQUET on GitHub
+1 issue and 2 pull requests.
+
+Wallpaper passthrough: afoxybouquet runs a wallpaper plugin that crossfades photos through the day, and infomarchy was covering it. The issue laid out the layer ordering problem, then the PR fixed it. Turn it on and the wallpaper plugin underneath shows through, with the desk drawing only its cards on top. Off by default, with a test that pins the default path so nothing changes for anyone who skips it.
+
+SUPER+D overlay: sent as its own PR. The overlay now stays out of the bar's space, so the bar stays visible while the overlay is open.
+
+Thank you afoxybouquet!
+
+REVERB, reverb256 on GitHub
+3rd pull request: the module strip can now leave your wallpaper. 316 lines across 10 files. 5 modes: always, compact, overlay, hover and never. Compact shows only the sections you turned on, so on a 1280 by 800 desk with just MACHINE on, the strip fits one line instead of two. The STRIP chip cycles the modes, a command sets it, and settings still open when the strip is hidden.
+
+Reverb's first 2 were recognizing Hermes launched through python, and a desk that refreshes when something changes, not only on the timer.
+
+Thank you Reverb!
+
+MARTIN, maku on GitHub
+Wrote the issue behind Reverb's PR. On a 1920 by 1200 laptop at 1.5 scale, the module strip wrapped to 2 lines and sat on the wallpaper permanently. Martin gave the exact versions, the problem, a proposal for the modes, and asked for a way to open settings when the strip is hidden. All of it shipped.
+
+Thank you Martin!
+
+ERIC @EricStegemann
+Opened issue #26 two months ago: told me Muse is official in omarchy and gave me the exact path and layout of its session files. That is how the desk finds Muse sessions. Since then it grew Muse history (Recent Tasks, the activity heatmap, resume) and a Muse row in USAGE & LIMITS, and Eric tested it on his own machine and came back with a screenshot.
+
+Thank you for sticking with it Eric!
+
+MAURICE @KI_Vater
+Requested the HERMES HOSTS card on X: one row per remote Hermes host showing whether its gateway is connected, what it is working on right now, and how many approvals are pending. Read only. Nothing on the card can write to or control a remote host, and every row shows how old its data is.
+
+Thank you Maurice!
+
+None of these came from Larry or me. Every one made infomarchy better than we would have on our own. THANK YOU!
+
+If you are on X and I did not tag you, tell me your handle and I will tag you next time.
+
+https://omarchy.nixfred.com
+
+/Nix and Larry
+

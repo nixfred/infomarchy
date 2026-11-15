@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Infomarchy thank you graphic 2026-11-14</title>
+<style>
+  @font-face { font-family: "JBM"; src: url("file:///usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf"); font-weight: 400; }
+  @font-face { font-family: "JBM"; src: url("file:///usr/share/fonts/TTF/JetBrainsMonoNerdFont-Bold.ttf"); font-weight: 700; }
+  :root {
+    --bg: #04060b;
+    --panel: rgba(10, 18, 30, 0.84);
+    --line: rgba(0, 240, 255, 0.24);
+    --fg: #e4f3ff;
+    --dim: #7a97b3;
+    --cyan: #00f0ff;
+    --mag: #ff2bd6;
+    --acid: #39ff88;
+    --amber: #ffb340;
+    --ch: 16px;
+    --chs: 9px;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 1600px; height: 900px; }
+  body { background: var(--bg); font-family: "JBM", monospace; color: var(--fg); position: relative; overflow: hidden; }
+
+  .grid { position: absolute; inset: 0;
+    background-image: linear-gradient(rgba(0,240,255,.05) 1px, transparent 1px), linear-gradient(90deg, rgba(0,240,255,.05) 1px, transparent 1px);
+    background-size: 40px 40px; }
+  .horizon { position: absolute; left: -10%; right: -10%; bottom: -120px; height: 420px;
+    background-image: linear-gradient(rgba(255,43,214,.20) 1px, transparent 1px), linear-gradient(90deg, rgba(255,43,214,.20) 1px, transparent 1px);
+    background-size: 64px 40px; transform: perspective(500px) rotateX(62deg); transform-origin: bottom; opacity: .5; }
+  .glow1 { position: absolute; width: 900px; height: 900px; border-radius: 50%; top: -420px; left: -260px;
+    background: radial-gradient(circle, rgba(0,240,255,.20), transparent 62%); }
+  .glow2 { position: absolute; width: 900px; height: 900px; border-radius: 50%; bottom: -480px; right: -220px;
+    background: radial-gradient(circle, rgba(255,43,214,.22), transparent 62%); }
+  .scan { position: absolute; inset: 0; pointer-events: none;
+    background: repeating-linear-gradient(0deg, rgba(255,255,255,.026) 0 1px, transparent 1px 3px); }
+
+  .chamfer { clip-path: polygon(var(--ch) 0, 100% 0, 100% calc(100% - var(--ch)), calc(100% - var(--ch)) 100%, 0 100%, 0 var(--ch)); }
+  .chamfer-s { clip-path: polygon(var(--chs) 0, 100% 0, 100% calc(100% - var(--chs)), calc(100% - var(--chs)) 100%, 0 100%, 0 var(--chs)); }
+
+  .wrap { position: relative; padding: 34px 52px 26px; height: 100%; display: grid;
+    grid-template-columns: 1fr; grid-template-rows: auto auto 1fr auto; row-gap: 16px; }
+
+  /* header */
+  .head { display: flex; align-items: flex-end; justify-content: space-between; }
+  .kicker { font-size: 19px; letter-spacing: 6px; color: var(--mag); text-shadow: 0 0 14px rgba(255,43,214,.6); }
+  .title { font-size: 88px; font-weight: 700; letter-spacing: 8px; line-height: .95; margin-top: 8px;
+    color: var(--fg); text-shadow: 0 0 22px rgba(0,240,255,.55), 0 0 2px #fff; }
+  .title b { color: var(--cyan); font-weight: 700; }
+  .thanks { text-align: right; }
+  .thanks .big { font-size: 66px; font-weight: 700; letter-spacing: 6px; color: var(--mag); text-shadow: 0 0 22px rgba(255,43,214,.6); line-height: 1; }
+  .thanks .lbl { font-size: 16px; letter-spacing: 3px; color: var(--dim); margin-top: 9px; }
+  .thanks .lbl em { color: var(--acid); font-style: normal; }
+
+  /* stats */
+  .stats { display: grid; grid-template-columns: repeat(6, 1fr); gap: 14px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); padding: 12px 16px 13px; position: relative; }
+  .stat .row { display: flex; align-items: baseline; justify-content: space-between; }
+  .stat .n { font-size: 46px; font-weight: 700; line-height: 1; }
+  .stat .d { font-size: 18px; font-weight: 700; color: var(--acid); text-shadow: 0 0 10px rgba(57,255,136,.5); }
+  .stat .k { font-size: 13px; letter-spacing: 3px; color: var(--dim); margin-top: 8px; }
+  .stat .bar { position: absolute; left: 0; bottom: 0; height: 3px; width: 100%; }
+
+  /* contributor cards */
+  .cards { display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); gap: 14px; }
+  .card { background: var(--panel); border: 1px solid rgba(57,255,136,.38); padding: 15px 20px 14px; position: relative; display: flex; flex-direction: column; }
+  .card.req { border-color: rgba(255,43,214,.42); }
+  .card .top { display: flex; align-items: center; justify-content: space-between; }
+  .tag { font-size: 13px; letter-spacing: 3px; color: var(--acid); text-shadow: 0 0 10px rgba(57,255,136,.45); }
+  .req .tag { color: var(--mag); text-shadow: 0 0 10px rgba(255,43,214,.5); }
+  .cnt { font-size: 14px; font-weight: 700; letter-spacing: 1.5px; padding: 3px 10px 4px; border: 1px solid rgba(57,255,136,.5); color: var(--acid); }
+  .req .cnt { border-color: rgba(255,43,214,.55); color: var(--mag); }
+  .name { font-size: 36px; font-weight: 700; line-height: 1.05; margin-top: 9px; color: var(--fg); text-shadow: 0 0 14px rgba(0,240,255,.25); }
+  .who { font-size: 15px; color: var(--cyan); margin-top: 5px; letter-spacing: .5px; }
+  ul { list-style: none; margin-top: 11px; }
+  li { font-size: 17px; line-height: 1.28; padding: 4px 0 4px 18px; position: relative; color: var(--fg); }
+  li::before { content: ""; position: absolute; left: 0; top: 12px; width: 8px; height: 8px; background: var(--acid); box-shadow: 0 0 8px var(--acid); }
+  .req li::before { background: var(--mag); box-shadow: 0 0 8px var(--mag); }
+  li b { font-weight: 700; color: var(--cyan); }
+
+  .foot { display: flex; justify-content: space-between; align-items: center; }
+  .url { font-size: 24px; letter-spacing: 1px; }
+  .url b { color: var(--cyan); }
+  .legend { font-size: 14px; letter-spacing: 2px; color: var(--dim); }
+  .legend i { font-style: normal; color: var(--acid); }
+  .legend u { text-decoration: none; color: var(--mag); }
+  .chips { display: flex; gap: 10px; }
+  .chip { font-size: 13px; letter-spacing: 2.5px; padding: 8px 14px 9px; border: 1px solid var(--line); color: var(--dim); background: rgba(0,0,0,.35); }
+</style>
+</head>
+<body>
+  <div class="grid"></div><div class="horizon"></div><div class="glow1"></div><div class="glow2"></div>
+
+  <div class="wrap">
+    <div class="head">
+      <div>
+        <div class="kicker">OMARCHY PLUGIN · CONTRIBUTORS SINCE OCT 4</div>
+        <div class="title">INFO<b>MARCHY</b></div>
+      </div>
+      <div class="thanks">
+        <div class="big">THANK YOU</div>
+        <div class="lbl"><em>6</em> PULL REQUESTS · <em>3</em> MORE WHO SHAPED IT</div>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat chamfer-s"><div class="row"><div class="n" style="color:var(--amber)">137</div><div class="d">+16</div></div><div class="k">STARS</div><div class="bar" style="background:var(--amber);box-shadow:0 0 10px var(--amber)"></div></div>
+      <div class="stat chamfer-s"><div class="row"><div class="n" style="color:var(--cyan)">25</div><div class="d">+2</div></div><div class="k">FORKS</div><div class="bar" style="background:var(--cyan);box-shadow:0 0 10px var(--cyan)"></div></div>
+      <div class="stat chamfer-s"><div class="row"><div class="n" style="color:var(--mag)">16</div><div class="d">+2</div></div><div class="k">PEOPLE WITH CODE</div><div class="bar" style="background:var(--mag);box-shadow:0 0 10px var(--mag)"></div></div>
+      <div class="stat chamfer-s"><div class="row"><div class="n" style="color:var(--acid)">45</div><div class="d">+6</div></div><div class="k">PRS MERGED</div><div class="bar" style="background:var(--acid);box-shadow:0 0 10px var(--acid)"></div></div>
+      <div class="stat chamfer-s"><div class="row"><div class="n">737</div><div class="d">+134</div></div><div class="k">TESTS PASSING</div><div class="bar" style="background:var(--fg);box-shadow:0 0 10px var(--fg)"></div></div>
+      <div class="stat chamfer-s"><div class="row"><div class="n">1.5.2</div></div><div class="k">3 NEW RELEASES</div><div class="bar" style="background:var(--dim)"></div></div>
+    </div>
+
+    <div class="cards">
+      <div class="card chamfer">
+        <div class="top"><div class="tag">PULL REQUESTS</div><div class="cnt">3 PRS</div></div>
+        <div class="name">Brent</div>
+        <div class="who">brentkearney</div>
+        <ul>
+          <li><b>Hermes</b> sessions on the desk: console, Desktop, gateway chats</li>
+          <li><b>Oh My Pi</b> (omp) cards, heatmap and resume</li>
+          <li><b>Hyprland 0.57</b> load failure, root cause found</li>
+        </ul>
+      </div>
+
+      <div class="card chamfer">
+        <div class="top"><div class="tag">ISSUE + PULL REQUESTS</div><div class="cnt">2 PRS</div></div>
+        <div class="name">afoxybouquet</div>
+        <div class="who">issue #43 · #44 · #45</div>
+        <ul>
+          <li><b>Wallpaper passthrough:</b> your own wallpaper plugin shows through. Off by default</li>
+          <li><b>SUPER+D overlay</b> keeps the bar visible</li>
+        </ul>
+      </div>
+
+      <div class="card chamfer">
+        <div class="top"><div class="tag">PULL REQUEST</div><div class="cnt">3RD PR</div></div>
+        <div class="name">Reverb</div>
+        <div class="who">reverb256 · #50</div>
+        <ul>
+          <li><b>Module strip modes:</b> always, compact, overlay, hover, never</li>
+          <li>Compact fits one line at 1280 by 800</li>
+          <li>316 lines across 10 files</li>
+        </ul>
+      </div>
+
+      <div class="card req chamfer">
+        <div class="top"><div class="tag">ISSUE</div><div class="cnt">#46</div></div>
+        <div class="name">Martin</div>
+        <div class="who">maku</div>
+        <ul>
+          <li>The request behind the <b>strip modes</b></li>
+          <li>Exact versions, the problem, the modes to build</li>
+          <li>All of it shipped in 1.5.0</li>
+        </ul>
+      </div>
+
+      <div class="card req chamfer">
+        <div class="top"><div class="tag">ISSUE</div><div class="cnt">#26</div></div>
+        <div class="name">Eric Stegemann</div>
+        <div class="who">@EricStegemann</div>
+        <ul>
+          <li>Gave the <b>Muse</b> session file layout</li>
+          <li>Muse history, heatmap, resume and a USAGE &amp; LIMITS row</li>
+          <li>Tested it on his own machine</li>
+        </ul>
+      </div>
+
+      <div class="card req chamfer">
+        <div class="top"><div class="tag">REQUEST ON X</div><div class="cnt">1.5.0</div></div>
+        <div class="name">Maurice</div>
+        <div class="who">@KI_Vater</div>
+        <ul>
+          <li><b>HERMES HOSTS</b> card for remote hosts</li>
+          <li>Gateway state, current work, approvals pending</li>
+          <li>Read only, every row shows its data age</li>
+        </ul>
+      </div>
+    </div>
+
+    <div class="foot">
+      <div class="url"><b>omarchy.nixfred.com</b></div>
+      <div class="legend"><i>■</i> CODE MERGED &nbsp;&nbsp; <u>■</u> REQUEST THAT SHIPPED</div>
+      <div class="chips">
+        <div class="chip chamfer-s">MIT</div>
+        <div class="chip chamfer-s">BUILT ON OMARCHY</div>
+        <div class="chip chamfer-s">LOCAL FIRST</div>
+      </div>
+    </div>
+  </div>
+  <div class="scan"></div>
+</body>
+</html>
