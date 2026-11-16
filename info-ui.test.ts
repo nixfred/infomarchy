@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "fs";
+import { existsSync, readdirSync, readFileSync } from "fs";
 import { join } from "path";
 
 const settings = readFileSync(join(import.meta.dir, "InfoSettings.qml"), "utf8");
@@ -150,26 +150,16 @@ describe("overlay shows the real desktop", () => {
   });
 });
 
-describe("a video wallpaper plays instead of showing nothing", () => {
-  // An Image cannot decode a video: it logs "Unsupported image format" and
-  // leaves the desk on the flat theme colour, which is what selecting an
-  // Omarchy video background used to do.
+describe("a video wallpaper is OWE's, and the desk steps aside for it", () => {
+  // Omarchy 4.5 plays video in its own daemon (OWE) on its own background layer.
+  // Its BackgroundMedia is stills-only, so a player of ours would be dead code
+  // that logs a warning on every video. The desk goes see-through instead.
   const wallpaper = readFileSync(join(import.meta.dir, "Infomarchy.qml"), "utf8");
   const overlay = readFileSync(join(import.meta.dir, "Overlay.qml"), "utf8");
-  const player = readFileSync(join(import.meta.dir, "BackgroundWallpaper.qml"), "utf8");
 
   test("each surface is handed only its own kind of file", () => {
-    // The desk can also be handed a live stream URL, which is a video no
-    // matter what the wallpaper file is. The overlay has no stream of its
-    // own, so it still asks the path and only the path.
-    expect(wallpaper).toContain("readonly property bool videoBackground: root.streaming || root.isVideo(root.background)");
+    expect(wallpaper).toContain("readonly property bool videoBackground: root.isVideo(root.background)");
     expect(overlay).toContain("readonly property bool videoBackground: root.isVideo(root.background)");
-    for (const source of [wallpaper, overlay]) {
-      // Both the still and the player test the path itself. Deriving one from
-      // the other lets a URL evaluate against the stale flag and hand the
-      // wrong file over for a pass.
-      expect(source).toContain("when: videoWallpaper.item !== null && root.videoBackground");
-    }
     expect(wallpaper).toContain('source: root.videoBackground ? "" : root.imageUrl(root.background)');
     expect(overlay).toContain('source: root.videoBackground ? "" : Util.fileUrl(root.background)');
   });
@@ -200,49 +190,31 @@ describe("a video wallpaper plays instead of showing nothing", () => {
     }
   });
 
-  test("the player is reached by URL so an Omarchy without video support still loads", () => {
-    // Naming BackgroundMedia in Infomarchy.qml would fail the whole plugin to
-    // compile where the type does not exist; an unloaded file resolves nothing.
-    expect(player).toContain("BackgroundMedia {");
-    // Silence used to be hardcoded here. It moved to the host when the desk
-    // gained a sound switch, so the guarantee is now asserted per surface
-    // below rather than in the shared player.
-    expect(player).not.toContain("audioEnabled: true");
-    for (const source of [wallpaper, overlay]) {
-      expect(source).toContain('source: "BackgroundWallpaper.qml"');
-      expect(source).not.toContain("BackgroundMedia {");
+  test("the desk goes see-through for a video instead of painting a player", () => {
+    expect(wallpaper).toContain("readonly property bool passthrough: dashboardSettings.wallpaperPassthrough || root.videoBackground");
+    expect(wallpaper).toContain('color: root.passthrough ? "transparent" : infoModel.themeBackground');
+    expect(wallpaper).toContain("WlrLayershell.layer: root.passthrough ? WlrLayer.Bottom : WlrLayer.Background");
+    expect(wallpaper).toContain("visible: !root.passthrough");
+  });
+
+  test("no file carries a video player of its own, and the background IPC keeps the stock contract", () => {
+    for (const name of readdirSync(import.meta.dir).filter((n) => n.endsWith(".qml"))) {
+      const src = readFileSync(join(import.meta.dir, name), "utf8");
+      expect(src, name).not.toMatch(/BackgroundMedia|BackgroundWallpaper|playbackEnabled|audioEnabled|streamUrl|videoAudio/);
     }
+    expect(existsSync(join(import.meta.dir, "BackgroundWallpaper.qml"))).toBe(false);
+    for (const fn of ["stream", "stopStream", "streaming", "playback", "audio"])
+      expect(wallpaper).not.toContain(`function ${fn}(`);
   });
-
-  test("a wallpaper only makes sound where a switch says so", () => {
-    // BackgroundMedia lives in Omarchy, not here, so its default for
-    // audioEnabled is not observable from this repo. Neither surface may rely
-    // on it. The desk binds the user's switch and gives the sound track to one
-    // output; the overlay has no switch and must say false out loud.
-    expect(wallpaper).toContain('property: "audioEnabled"');
-    expect(wallpaper).toContain("value: dashboardSettings.videoAudio && panel.firstScreen && !panel.fullscreenHere");
-    expect(overlay).toContain('property: "audioEnabled"');
-    expect(overlay).toContain("value: false");
-  });
-
-  test("nothing decodes while nothing can see it", () => {
-    // Qt's FFmpeg engine drives its own clock, so a covered wallpaper keeps
-    // decoding until it is told to stop.
-    expect(wallpaper).toContain("readonly property bool fullscreenHere: visibleWorkspace ? visibleWorkspace.hasFullscreen : false");
-    expect(wallpaper).toContain("value: root.playbackWanted && !panel.fullscreenHere");
-    expect(overlay).toContain("active: root.videoBackground && root.opened");
-  });
-
 });
 
 describe("wallpaper passthrough is opt-in (#43)", () => {
   const wallpaper = readFileSync(join(import.meta.dir, "Infomarchy.qml"), "utf8");
   test("passthrough does not paint a wallpaper and sits above the background layer", () => {
-    expect(wallpaper).toContain("color: dashboardSettings.wallpaperPassthrough ? \"transparent\" : infoModel.themeBackground");
-    expect(wallpaper).toContain("WlrLayershell.layer: dashboardSettings.wallpaperPassthrough ? WlrLayer.Bottom : WlrLayer.Background");
-    expect(wallpaper).toContain("visible: !root.videoBackground && !dashboardSettings.wallpaperPassthrough");
-    expect(wallpaper).toContain("active: root.videoBackground && !dashboardSettings.wallpaperPassthrough");
-    expect(wallpaper).toContain("visible: dashboardSettings.ready && dashboardSettings.wallpaperPassthrough && dashboardSettings.dashboardVisible");
+    expect(wallpaper).toContain("color: root.passthrough ? \"transparent\" : infoModel.themeBackground");
+    expect(wallpaper).toContain("WlrLayershell.layer: root.passthrough ? WlrLayer.Bottom : WlrLayer.Background");
+    expect(wallpaper).toContain("visible: !root.passthrough");
+    expect(wallpaper).toContain("visible: dashboardSettings.ready && root.passthrough && dashboardSettings.dashboardVisible");
     expect(wallpaper).toContain("opacity: Math.max(0, Math.min(1, 1 - root.wallpaperOpacity))");
   });
 
@@ -252,7 +224,7 @@ describe("wallpaper passthrough is opt-in (#43)", () => {
     expect(settings).toMatch(/catch \(e\) \{[\s\S]*?wallpaperPassthrough = false/);
     // With the flag off, every branch pinned above reduces to the original value;
     // the surface only waits for settings so a saved flag picks the right layer.
-    expect(wallpaper).toContain("visible: dashboardSettings.ready && !remapGuard.remapping && !(dashboardSettings.wallpaperPassthrough && !dashboardSettings.dashboardVisible)");
+    expect(wallpaper).toContain("visible: dashboardSettings.ready && !remapGuard.remapping && !(root.passthrough && !dashboardSettings.dashboardVisible)");
   });
 });
 

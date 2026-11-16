@@ -28,7 +28,6 @@ import { join } from "path";
 // Usage (#16) adds the refresh chip and provider-block bindings.
 const CEILINGS: Record<string, number> = {
   "Apps.qml": 3,
-  "BackgroundWallpaper.qml": 0,
   // +4: each edge reads root.barEdgeInsets from inside the per-screen
   // PanelWindow. qmllint counts every outer-id read as unqualified, the
   // same false positive root.deskView already produces in this file.
@@ -125,8 +124,6 @@ const CEILINGS: Record<string, number> = {
 // unrelated missing member or unused import still counts.
 const VERSION_DEPENDENT: [RegExp, string | null][] = [
   [/Member "isVideoPath" not found on type "Util" \[missing-property\]$/, null],
-  [/BackgroundMedia was not found\..*\[import\]$/, "BackgroundWallpaper.qml"],
-  [/Unused import \[unused-imports\]$/, "BackgroundWallpaper.qml"],
   // Same shape for the monitor-move guard: ScreenMoveRemap is gone from qs.Ui on an
   // Omarchy built for Hyprland 0.57, and the Loader in RemapGuard.qml is what keeps
   // that survivable. Matched to the one file that names the type.

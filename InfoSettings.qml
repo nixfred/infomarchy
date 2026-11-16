@@ -85,9 +85,6 @@ Item {
   // Hyprland ids ordinary workspaces from 1 up with no documented ceiling;
   // 999 is well past any real desk and keeps a typo out of the config.
   readonly property int maxWorkspace: 999
-  // Sound for a video wallpaper. Off unless asked for: a wallpaper that
-  // starts talking the moment it is set is a bug, not a feature.
-  property bool videoAudio: false
   // Opt in: don't paint a wallpaper. Sit above whichever plugin owns Background.
   property bool wallpaperPassthrough: false
   property bool quietHoursEnabled: false
@@ -160,7 +157,6 @@ Item {
       sessionSort = parsed && sessionSorts.indexOf(String(parsed.sessionSort)) >= 0 ? String(parsed.sessionSort) : "recent"
       moduleStrip = parsed && moduleStrips.indexOf(String(parsed.moduleStrip)) >= 0 ? String(parsed.moduleStrip) : "always"
       deskWorkspace = parsed && Number.isInteger(parsed.deskWorkspace) ? Math.max(0, Math.min(maxWorkspace, parsed.deskWorkspace)) : 0
-      videoAudio = !!(parsed && parsed.videoAudio === true)
       wallpaperPassthrough = !!(parsed && parsed.wallpaperPassthrough === true)
       quietHoursEnabled = !!(parsed && parsed.quietHoursEnabled === true)
       quietStartHour = parsed && Number.isInteger(parsed.quietStartHour) ? Math.max(0, Math.min(23, parsed.quietStartHour)) : 22
@@ -203,7 +199,6 @@ Item {
       sessionSort = "recent"
       moduleStrip = "always"
       deskWorkspace = 0
-      videoAudio = false
       wallpaperPassthrough = false
       quietHoursEnabled = false
       quietStartHour = 22
@@ -434,8 +429,6 @@ Item {
   }
   function setNotificationsEnabled(enabled) { notificationsEnabled = !!enabled; persist({ notificationsEnabled: notificationsEnabled }) }
   function toggleNotificationsEnabled() { setNotificationsEnabled(!notificationsEnabled) }
-  function setVideoAudio(enabled) { videoAudio = !!enabled; persist({ videoAudio: videoAudio }) }
-  function toggleVideoAudio() { setVideoAudio(!videoAudio) }
   function setWallpaperPassthrough(enabled) { wallpaperPassthrough = !!enabled; persist({ wallpaperPassthrough: wallpaperPassthrough }) }
   function setQuietHoursEnabled(enabled) { quietHoursEnabled = !!enabled; persist({ quietHoursEnabled: quietHoursEnabled }) }
   function toggleQuietHoursEnabled() { setQuietHoursEnabled(!quietHoursEnabled) }

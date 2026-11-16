@@ -4,6 +4,12 @@ All notable changes to Infomarchy. The format follows [Keep a Changelog](https:/
 
 ## [Unreleased]
 
+### Changed
+- **Video wallpapers are OWE's, the desk steps aside.** Omarchy 4.5 plays video in its own daemon (OWE, the `owe` package) on its own background layer, and its `BackgroundMedia` now draws stills only. Infomarchy no longer loads a player of its own: when the wallpaper is a video, the desk goes see-through exactly as it does in passthrough (transparent, one layer down), the dim tint rides over OWE's layer, and the overlay keeps the theme colour behind a video. Before this, every video selected on 4.5 logged `Property 'playbackEnabled' does not exist` and `'audioEnabled' does not exist`, and an opaque desk could cover the video.
+
+### Removed
+- **The Qt-Multimedia video path and its extras.** `BackgroundWallpaper.qml`, the player Loader and Bindings on the desk and the overlay, the saved `videoAudio` setting, and the five Infomarchy-only `background` IPC functions (`stream`, `stopStream`, `streaming`, `playback`, `audio`). The `background` target keeps only the stock Omarchy contract (`refresh`, `set`, `setInstant`, `transition`, `themeTransition`, `selector`). Sound and pausing for a video belong to OWE now. Remote-URL streaming has no stock equivalent; download the clip and set the file. Requires Omarchy 4.5 with OWE for video wallpapers; stills are unchanged.
+
 ## [1.5.2] — 2026-11-12
 
 A small release with one addition: a Muse token-usage reader for machines where Omarchy has no Muse usage cache. Nothing else changed.

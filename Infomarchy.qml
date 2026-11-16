@@ -127,34 +127,17 @@ Scope {
   // Fall back to its current list on an Omarchy whose Util predates video
   // wallpapers — calling a function that is not there would take the plugin
   // down on the very desktops the fallback exists for.
-  // A live stream overrides the wallpaper file while it is set. It is kept
-  // separate from `background` so stopping restores whatever file was there
-  // without having to re-read the symlink or guess.
-  property string streamUrl: ""
-  property bool playbackWanted: true
-
-  readonly property bool streaming: root.streamUrl !== ""
-  // What the wallpaper surface is actually showing right now.
-  readonly property string wallpaperSource: root.streaming ? root.streamUrl : root.background
-  readonly property bool videoBackground: root.streaming || root.isVideo(root.background)
   function isVideo(path) {
     if (typeof Util.isVideoPath === "function") return Util.isVideoPath(path)
     return /\.(mp4|m4v|mov|webm|mkv|avi)$/i.test(String(path || ""))
   }
+  // A video wallpaper is OWE's. Omarchy plays video in its own daemon on its own
+  // background layer, so the desk steps aside for it the way it does in
+  // passthrough instead of painting a player of its own.
+  readonly property bool videoBackground: root.isVideo(root.background)
+  readonly property bool passthrough: dashboardSettings.wallpaperPassthrough || root.videoBackground
   function refreshBackground() { if (!readlinkProc.running) readlinkProc.running = true }
-  // Two callers, two meanings. An explicit set is a choice and ends a stream —
-  // leaving the stream on top would silently ignore the file the user picked.
-  // The 5s symlink poll is not a choice: it must keep the file wallpaper up to
-  // date underneath a stream without tearing the stream down on every tick.
-  function setBackground(path) {
-    var next = String(path || "").trim()
-    // Only a set that actually CHANGES the wallpaper counts as a choice.
-    // Other plugins re-assert the current wallpaper on their own schedules
-    // (auto-wallpaper does), and treating those as a choice tore a running
-    // stream down a few seconds after it started.
-    if (next !== root.background) root.streamUrl = ""
-    root.trackBackground(next)
-  }
+  function setBackground(path) { root.trackBackground(String(path || "").trim()) }
 
   function trackBackground(path) {
     root.background = String(path || "").trim()
@@ -244,40 +227,6 @@ Scope {
       root.themeTransition(fromPath, path, finalPath, colorsB64, shellB64)
     }
     function selector(): void { if (!bgSwitchProc.running) bgSwitchProc.running = true }
-    // Play a remote URL as the wallpaper without writing a file. Resolving the
-    // URL is the caller's job — it expires, so whoever owns it owns refreshing it.
-    function stream(url: string): string {
-      var next = String(url || "").trim()
-      if (!/^https?:\/\//i.test(next)) return "not a stream URL"
-      root.streamUrl = next
-      root.playbackWanted = true
-      return "streaming"
-    }
-    function stopStream(): string {
-      root.streamUrl = ""
-      root.refreshBackground()
-      return "stopped"
-    }
-    function streaming(): string { return root.streaming ? "on" : "off" }
-    // Pause decoding without changing the wallpaper.
-    function playback(state: string): string {
-      var want = String(state || "status").toLowerCase()
-      if (want === "on" || want === "play") root.playbackWanted = true
-      else if (want === "off" || want === "pause") root.playbackWanted = false
-      else if (want === "toggle") root.playbackWanted = !root.playbackWanted
-      else if (want !== "status") return "usage: playback on|off|toggle|status"
-      return root.playbackWanted ? "on" : "off"
-    }
-    // Infomarchy owns this target while the desk runs, so the sound switch for
-    // a video wallpaper has to live here too or the CLI has nowhere to call.
-    function audio(state: string): string {
-      var want = String(state || "status").toLowerCase()
-      if (want === "on" || want === "true") dashboardSettings.setVideoAudio(true)
-      else if (want === "off" || want === "false") dashboardSettings.setVideoAudio(false)
-      else if (want === "toggle") dashboardSettings.toggleVideoAudio()
-      else if (want !== "status") return "usage: audio on|off|toggle|status"
-      return dashboardSettings.videoAudio ? "on" : "off"
-    }
   }
   IpcHandler {
     target: "infomarchy"
@@ -359,11 +308,11 @@ Scope {
       // Passthrough unmaps while the desk is hidden so this surface does not
       // eat clicks meant for the wallpaper plugin underneath. Map only after
       // settings load, so the first map already uses the saved layer.
-      visible: dashboardSettings.ready && !remapGuard.remapping && !(dashboardSettings.wallpaperPassthrough && !dashboardSettings.dashboardVisible)
+      visible: dashboardSettings.ready && !remapGuard.remapping && !(root.passthrough && !dashboardSettings.dashboardVisible)
       anchors { top: true; bottom: true; left: true; right: true }
-      color: dashboardSettings.wallpaperPassthrough ? "transparent" : infoModel.themeBackground
+      color: root.passthrough ? "transparent" : infoModel.themeBackground
       WlrLayershell.namespace: "omarchy-background"
-      WlrLayershell.layer: dashboardSettings.wallpaperPassthrough ? WlrLayer.Bottom : WlrLayer.Background
+      WlrLayershell.layer: root.passthrough ? WlrLayer.Bottom : WlrLayer.Background
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
       exclusionMode: ExclusionMode.Ignore
       // A parked background layer has been seen to drop its buffer; keep rendering.
@@ -439,59 +388,20 @@ Scope {
         // Each surface is given a source only for its own kind of file.
         WaveWallpaper {
           anchors.fill: parent
-          visible: !root.videoBackground && !dashboardSettings.wallpaperPassthrough
+          visible: !root.passthrough
           source: root.videoBackground ? "" : root.imageUrl(root.background)
           fillMode: Image.PreserveAspectCrop
           asynchronous: true
           cache: true
           playing: !panel.fullscreenHere
         }
-
-        Loader {
-          id: videoWallpaper
-          anchors.fill: parent
-          active: root.videoBackground && !dashboardSettings.wallpaperPassthrough
-          source: "BackgroundWallpaper.qml"
-          onStatusChanged: {
-            if (status === Loader.Error)
-              console.warn("Infomarchy: this Omarchy has no video wallpaper support; " + root.background + " cannot be shown")
-          }
-        }
-
-        // The path is only ever pushed while it is a video: the two properties
-        // update in no fixed order, so a bound value can be evaluated against
-        // the stale flag and hand the player a still for one pass.
-        Binding {
-          target: videoWallpaper.item
-          property: "path"
-          value: root.wallpaperSource
-          when: videoWallpaper.item !== null && root.videoBackground
-          restoreMode: Binding.RestoreNone
-        }
-
-        // Qt's FFmpeg engine drives its own clock, so a wallpaper nothing can
-        // see keeps decoding until it is told not to.
-        Binding {
-          target: videoWallpaper.item
-          property: "playbackEnabled"
-          value: root.playbackWanted && !panel.fullscreenHere
-          when: videoWallpaper.item !== null
-        }
-
-        // Off unless the user asked for it, and never from a paused player:
-        // a wallpaper that starts talking the moment it is set is a bug.
-        Binding {
-          target: videoWallpaper.item
-          property: "audioEnabled"
-          value: dashboardSettings.videoAudio && panel.firstScreen && !panel.fullscreenHere
-          when: videoWallpaper.item !== null
-        }
       }
 
-      // Passthrough has no image to dim. Tint the wallpaper plugin showing through.
+      // Passthrough has no image to dim. Tint what shows through: the wallpaper
+      // plugin for a still, OWE's layer for a video.
       Rectangle {
         anchors.fill: parent
-        visible: dashboardSettings.ready && dashboardSettings.wallpaperPassthrough && dashboardSettings.dashboardVisible
+        visible: dashboardSettings.ready && root.passthrough && dashboardSettings.dashboardVisible
         color: infoModel.themeBackground
         opacity: Math.max(0, Math.min(1, 1 - root.wallpaperOpacity))
       }

@@ -92,8 +92,8 @@ Scope {
         anchors.fill: parent
         color: infoModel.themeBackground
         // The wallpaper may be a video, which an Image cannot decode; each
-        // surface is given a source only for its own kind of file. See
-        // BackgroundWallpaper.qml for why the player is loaded by URL.
+        // surface is given a source only for its own kind of file. A video is
+        // OWE's, so the overlay keeps the theme colour behind it.
         Item {
           anchors.fill: parent
           opacity: dashboardSettings.ready && dashboardSettings.dashboardVisible ? root.wallpaperOpacity : 1.0
@@ -107,34 +107,6 @@ Scope {
             asynchronous: true
             cache: true
             playing: root.opened
-          }
-
-          Loader {
-            id: videoWallpaper
-            anchors.fill: parent
-            // The overlay covers the desk's own player, so this one decodes
-            // only while it is on screen.
-            active: root.videoBackground && root.opened
-            source: "BackgroundWallpaper.qml"
-          }
-
-          Binding {
-            target: videoWallpaper.item
-            property: "path"
-            value: root.background
-            when: videoWallpaper.item !== null && root.videoBackground
-            restoreMode: Binding.RestoreNone
-          }
-
-          // The player stopped hardcoding silence when the desk gained a sound
-          // switch, and that switch is bound on the desk's surface only. This
-          // surface has no switch, so without an explicit binding the overlay
-          // would fall back to whatever BackgroundMedia defaults to. Say it.
-          Binding {
-            target: videoWallpaper.item
-            property: "audioEnabled"
-            value: false
-            when: videoWallpaper.item !== null
           }
         }
         focus: root.opened
