@@ -135,7 +135,19 @@ Scope {
   // background layer, so the desk steps aside for it the way it does in
   // passthrough instead of painting a player of its own.
   readonly property bool videoBackground: root.isVideo(root.background)
-  readonly property bool passthrough: dashboardSettings.wallpaperPassthrough || root.videoBackground
+  // OWE asks whichever plugin owns the `background` IPC target to stop drawing
+  // while it draws the wallpaper itself: for a theme intro, and for as long as a
+  // video wallpaper plays. Stock omarchy.background answers `setSuspended`.
+  // Without that function OWE falls back to `shell setPluginEnabled
+  // omarchy.background`, and enabling a first-party plugin makes the shell
+  // disable its active clone, which is this plugin.
+  property bool suspended: false
+  // Suspended with a still as the wallpaper is an intro. The desk does what it
+  // does for a video wallpaper: it stops painting a wallpaper and sits
+  // transparent one layer above OWE, so the cards stay on screen the way the bar
+  // and the dock do, with the same tint as over any other wallpaper.
+  readonly property bool introActive: root.suspended && !root.videoBackground
+  readonly property bool passthrough: dashboardSettings.wallpaperPassthrough || root.videoBackground || root.suspended
   function refreshBackground() { if (!readlinkProc.running) readlinkProc.running = true }
   function setBackground(path) { root.trackBackground(String(path || "").trim()) }
 
@@ -222,6 +234,7 @@ Scope {
     function refresh(): void { root.refreshBackground() }
     function set(path: string): void { root.setBackground(path) }
     function setInstant(path: string): void { root.setBackground(path) }
+    function setSuspended(value: string): void { root.suspended = value === "true" }
     function transition(fromPath: string, path: string): void { root.setBackground(path) }
     function themeTransition(fromPath: string, path: string, finalPath: string, colorsB64: string, shellB64: string): void {
       root.themeTransition(fromPath, path, finalPath, colorsB64, shellB64)

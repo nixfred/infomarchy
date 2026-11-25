@@ -228,6 +228,23 @@ describe("wallpaper passthrough is opt-in (#43)", () => {
   });
 });
 
+describe("OWE can suspend the desk instead of disabling the plugin", () => {
+  // OWE calls `background setSuspended` before it draws an intro or a video.
+  // When the owner of that IPC target has no such function, OWE falls back to
+  // `shell setPluginEnabled omarchy.background`, and enabling a first-party
+  // plugin makes the shell disable its active clone: this plugin.
+  const wallpaper = readFileSync(join(import.meta.dir, "Infomarchy.qml"), "utf8");
+  test("the background IPC target answers setSuspended", () => {
+    expect(wallpaper).toContain("property bool suspended: false");
+    expect(wallpaper).toMatch(/target: "background"[\s\S]*?function setSuspended\(value: string\): void \{ root\.suspended = value === "true" \}/);
+  });
+  test("an intro keeps the cards on screen: passthrough, with the usual tint", () => {
+    expect(wallpaper).toContain("readonly property bool introActive: root.suspended && !root.videoBackground");
+    expect(wallpaper).toContain("readonly property bool passthrough: dashboardSettings.wallpaperPassthrough || root.videoBackground || root.suspended");
+    expect(wallpaper).toContain("visible: dashboardSettings.ready && root.passthrough && dashboardSettings.dashboardVisible\n");
+  });
+});
+
 describe("background sessions are reachable", () => {
   test("a card with a background host attaches a terminal on click", () => {
     const model = readFileSync(join(import.meta.dir, "InfoModel.qml"), "utf8");
