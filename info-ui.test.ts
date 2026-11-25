@@ -193,7 +193,7 @@ describe("a video wallpaper is OWE's, and the desk steps aside for it", () => {
   test("the desk goes see-through for a video instead of painting a player", () => {
     expect(wallpaper).toContain("readonly property bool passthrough: dashboardSettings.wallpaperPassthrough || root.videoBackground");
     expect(wallpaper).toContain('color: root.passthrough ? "transparent" : infoModel.themeBackground');
-    expect(wallpaper).toContain("WlrLayershell.layer: root.passthrough ? WlrLayer.Bottom : WlrLayer.Background");
+    expect(wallpaper).toContain("WlrLayershell.layer: root.raised ? WlrLayer.Bottom : WlrLayer.Background");
     expect(wallpaper).toContain("visible: !root.passthrough");
   });
 
@@ -212,7 +212,7 @@ describe("wallpaper passthrough is opt-in (#43)", () => {
   const wallpaper = readFileSync(join(import.meta.dir, "Infomarchy.qml"), "utf8");
   test("passthrough does not paint a wallpaper and sits above the background layer", () => {
     expect(wallpaper).toContain("color: root.passthrough ? \"transparent\" : infoModel.themeBackground");
-    expect(wallpaper).toContain("WlrLayershell.layer: root.passthrough ? WlrLayer.Bottom : WlrLayer.Background");
+    expect(wallpaper).toContain("WlrLayershell.layer: root.raised ? WlrLayer.Bottom : WlrLayer.Background");
     expect(wallpaper).toContain("visible: !root.passthrough");
     expect(wallpaper).toContain("visible: dashboardSettings.ready && root.passthrough && dashboardSettings.dashboardVisible");
     expect(wallpaper).toContain("opacity: Math.max(0, Math.min(1, 1 - root.wallpaperOpacity))");
@@ -240,8 +240,22 @@ describe("OWE can suspend the desk instead of disabling the plugin", () => {
   });
   test("an intro keeps the cards on screen: passthrough, with the usual tint", () => {
     expect(wallpaper).toContain("readonly property bool introActive: root.suspended && !root.videoBackground");
-    expect(wallpaper).toContain("readonly property bool passthrough: dashboardSettings.wallpaperPassthrough || root.videoBackground || root.suspended");
+    expect(wallpaper).toContain("readonly property bool passthrough: dashboardSettings.wallpaperPassthrough || root.videoBackground || root.suspended || root.coverUp");
     expect(wallpaper).toContain("visible: dashboardSettings.ready && root.passthrough && dashboardSettings.dashboardVisible\n");
+  });
+  // The shell maps its intro cover above the desk about a second before it
+  // closes it again. Hyprland's layer events are the only notice a third-party
+  // plugin gets, and the plugin's own maps and unmaps raise the same events.
+  test("the desk goes up for the shell's intro cover and comes down when it closes", () => {
+    expect(wallpaper).toMatch(/function onRawEvent\(event\) \{\s*if \(event\.data !== "omarchy-background" \|\| ownMapGuard\.running\) return\s*if \(event\.name === "openlayer"\) \{\s*root\.coverUp = true\s*coverTimeout\.restart\(\)\s*\} else if \(event\.name === "closelayer" && root\.coverUp\) \{\s*root\.coverUp = false\s*coverTimeout\.stop\(\)/);
+    expect(wallpaper).toContain("onVisibleChanged: root.noteOwnMap()");
+    expect(wallpaper).toContain("Timer { id: coverTimeout; interval: 10000; onTriggered: root.coverUp = false }");
+    expect(wallpaper).toContain("Timer { id: ownMapGuard; interval: 5000; running: true }");
+  });
+  test("what the desk paints and which layer it sits on are decided separately", () => {
+    expect(wallpaper).toContain("readonly property bool raised: dashboardSettings.wallpaperPassthrough || root.videoBackground || root.coverUp || root.suspendedWithoutCover");
+    expect(wallpaper).toContain("WlrLayershell.layer: root.raised ? WlrLayer.Bottom : WlrLayer.Background");
+    expect(wallpaper).toContain("onSuspendedChanged: suspendedWithoutCover = suspended && !coverUp");
   });
 });
 

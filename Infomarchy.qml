@@ -147,7 +147,49 @@ Scope {
   // transparent one layer above OWE, so the cards stay on screen the way the bar
   // and the dock do, with the same tint as over any other wallpaper.
   readonly property bool introActive: root.suspended && !root.videoBackground
-  readonly property bool passthrough: dashboardSettings.wallpaperPassthrough || root.videoBackground || root.suspended
+  // Before OWE suspends this plugin, the shell maps its intro cover: a snapshot
+  // of the outgoing wallpaper on the Bottom layer, which is above this surface
+  // and hides the cards until it closes about a second later. Nothing on the
+  // `background` IPC target announces the cover, and a third-party plugin has
+  // no access to the shell's intro state, so the compositor's own events are
+  // used: a layer with the wallpaper namespace that this plugin did not just
+  // map or unmap itself is the cover.
+  //
+  // Hyprland restacks a surface last in its layer whenever its layer changes.
+  // The desk therefore goes up to the Bottom layer when a cover opens, which
+  // puts it above the cover, and comes back down to the Background layer when
+  // the cover closes, which puts it above OWE's surface there. A second theme
+  // switch during an intro maps a second cover, and the desk goes up again.
+  property bool coverUp: false
+  // The close event is the signal. This is only for a cover that never closes.
+  Timer { id: coverTimeout; interval: 10000; onTriggered: root.coverUp = false }
+  // This plugin's own maps and unmaps raise the same events. Shell start also
+  // maps a cover that no intro follows.
+  Timer { id: ownMapGuard; interval: 5000; running: true }
+  function noteOwnMap() { if (!ownMapGuard.running) ownMapGuard.interval = 500; ownMapGuard.restart() }
+  // A suspend call with no cover seen first, as at login while the guard above
+  // is running, leaves the desk wherever OWE's surface happens to stack. The
+  // Bottom layer is above it for certain.
+  property bool suspendedWithoutCover: false
+  onSuspendedChanged: suspendedWithoutCover = suspended && !coverUp
+  Connections {
+    target: Hyprland
+    function onRawEvent(event) {
+      if (event.data !== "omarchy-background" || ownMapGuard.running) return
+      if (event.name === "openlayer") {
+        root.coverUp = true
+        coverTimeout.restart()
+      } else if (event.name === "closelayer" && root.coverUp) {
+        root.coverUp = false
+        coverTimeout.stop()
+      }
+    }
+  }
+  // What the surface paints: nothing of its own while something else draws the
+  // wallpaper under it.
+  readonly property bool passthrough: dashboardSettings.wallpaperPassthrough || root.videoBackground || root.suspended || root.coverUp
+  // Where the surface sits.
+  readonly property bool raised: dashboardSettings.wallpaperPassthrough || root.videoBackground || root.coverUp || root.suspendedWithoutCover
   function refreshBackground() { if (!readlinkProc.running) readlinkProc.running = true }
   function setBackground(path) { root.trackBackground(String(path || "").trim()) }
 
@@ -324,8 +366,9 @@ Scope {
       visible: dashboardSettings.ready && !remapGuard.remapping && !(root.passthrough && !dashboardSettings.dashboardVisible)
       anchors { top: true; bottom: true; left: true; right: true }
       color: root.passthrough ? "transparent" : infoModel.themeBackground
+      onVisibleChanged: root.noteOwnMap()
       WlrLayershell.namespace: "omarchy-background"
-      WlrLayershell.layer: root.passthrough ? WlrLayer.Bottom : WlrLayer.Background
+      WlrLayershell.layer: root.raised ? WlrLayer.Bottom : WlrLayer.Background
       WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
       exclusionMode: ExclusionMode.Ignore
       // A parked background layer has been seen to drop its buffer; keep rendering.
