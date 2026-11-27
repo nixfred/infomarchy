@@ -889,7 +889,10 @@ const PROVIDERS: [string, RegExp][] = [
   // Cursor's agent ships as `cursor-agent`, both as a terminal CLI and as the
   // binary the IDE launches for its own worker.
   ["cursor", /(^|\/)cursor-agent$/],
-  ["opencode", /(^|\/)opencode$/],
+  // mise installs the OpenCode CLI under the npm package's own binary name,
+  // `opencode.exe`; the .exe suffix must not break detection, or every
+  // mise-run OpenCode session is invisible on the desk.
+  ["opencode", /(^|\/)opencode(\.exe)?$/],
   ["aider", /(^|\/)aider$/],
   ["copilot", /(^|\/)copilot$/],
   ["ollama", /(^|\/)ollama$/],
