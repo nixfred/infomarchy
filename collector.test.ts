@@ -220,6 +220,12 @@ describe("providerOf", () => {
     expect(providerOf(["opencode", "run", "inspect this"])).toBe("opencode");
   });
 
+  test("matches the .exe binary name mise installs OpenCode under", () => {
+    const exe = "/home/u/.local/share/mise/installs/opencode/latest/node_modules/@opencode/cli/bin/opencode.exe";
+    expect(providerOf([exe, "--auto"])).toBe("opencode");
+    expect(providerOf([exe, "serve", "--service"])).toBeNull();
+  });
+
   test("recognizes Hermes as an interactive agent provider", () => {
     expect(providerOf(["/home/user/.hermes/bin/hermes"])).toBe("hermes");
   });
